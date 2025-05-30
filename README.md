@@ -83,7 +83,7 @@ Entwickelt von **Twilight-Networks**, 2025.
 - **Fail2Ban** (optional für zusätzliche Sicherheit)
 
 ---
-🔗 Zur vollständigen Anleitung inkl. Screenshots, Reverse-Zonen & Delegationstests:
+🔗 **Zur vollständigen Anleitung inkl. Screenshots, Zonen & Delegationstests:**
 [Eigene Domain hosten mit DNS-Manager](https://www.twilight-networks.com/docs/domains_hosten_mit_dnsmanager/)
 
 ## Installation Webinterface (DNS-Manager-UI)
