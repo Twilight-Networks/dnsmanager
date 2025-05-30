@@ -1,0 +1,14 @@
+/* Open Sans – lokale Einbindung */
+@font-face {
+    font-family: 'Open Sans';
+    src: url('opensans/OpenSans-Regular.woff2') format('woff2'),
+         url('opensans/OpenSans-Regular.woff') format('woff');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* Anwendung auf gesamten Body */
+body {
+    font-family: 'Open Sans', sans-serif;
+}

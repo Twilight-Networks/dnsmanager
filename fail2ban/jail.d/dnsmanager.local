@@ -1,0 +1,9 @@
+[dnsmanager]
+enabled  = true
+filter   = dnsmanager
+port     = http,https
+logpath  = /var/log/syslog
+maxretry = 3
+bantime  = 3600
+findtime = 600
+backend  = auto

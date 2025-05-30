@@ -1,0 +1,15 @@
+# Ignore sensible Web-Config
+/web/config/ui_config.php
+/agent/config/api_config.php
+/agent/config/api_tokens.php
+
+# Ignore system-spezifische Dateien
+/web/config/config.local.php
+/web/config/*.bak
+/web/config/*.tmp
+
+# Ignore allgemeine temporäre Dateien
+*.log
+*.cache
+*.tmp
+*.swp

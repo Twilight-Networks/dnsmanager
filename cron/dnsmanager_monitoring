@@ -1,0 +1,23 @@
+# Datei: /etc/cron.d/dnsmanager_monitoring
+#
+# Zweck:
+# Diese Cron-Datei steuert die automatisierte Systemüberwachung im DNSManager.
+#
+# Enthaltene Aufgaben:
+# 1. `monitoring_run.php` (alle 5 Minuten):
+#    - Prüft alle aktiven DNS-Server (lokal und remote) auf Erreichbarkeit und BIND-Status
+#    - Validiert Konfigurationsdateien (named-checkconf) und Zonendateien (named-checkzone)
+#    - Speichert Prüfergebnisse in `diagnostics` und protokolliert Änderungen in `diagnostic_log`
+#
+# 2. `monitoring_log_cleanup.php` (täglich):
+#    - Bereinigt alte Einträge aus `diagnostic_log` gemäß der Konstante `MONITORING_LOG_RETENTION`
+#    - Diese Konstante wird in `ui_config.php` definiert (z. B. '30D' oder '6M')
+#
+# Ausführungskontext:
+# - Beide Skripte werden vom Benutzer „www-data“ ausgeführt, passend zum Webserver-Kontext
+# - Wichtig: Dieser Benutzer benötigt ggf. sudo-Rechte für rndc/named-Befehle
+#
+# Format: <Min> <Std> <Tag> <Monat> <Wochentag> <Benutzer> <Befehl>
+
+*/5 * * * * www-data /usr/bin/php /usr/share/dnsmanager/web/scripts/monitoring_run-cli.php
+@daily www-data /usr/bin/php /usr/share/dnsmanager/web/scripts/monitoring_log_cleanup-cli.php

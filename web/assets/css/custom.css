@@ -1,0 +1,264 @@
+/* ==========================================================================
+   GRUNDLAYOUT UND AUFTEILUNG
+   ========================================================================== */
+
+body {
+    display: flex;
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+.sidebar {
+    width: 220px;
+    background: #E9ECEF;
+    color: #444444;
+    flex-shrink: 0;
+}
+
+.sidebar a,
+.sidebar a:hover,
+.sidebar a:focus,
+.sidebar a:active {
+    color: #444444 !important;
+    text-decoration: none !important;
+    padding: 10px;
+    display: block;
+}
+
+.sidebar a:hover,
+.sidebar .active {
+    background: #BABDBF;
+}
+
+.content {
+    flex-grow: 1;
+    padding: 20px;
+    max-width: 1600px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+/* ==========================================================================
+   TYPOGRAFIE UND FARBEN
+   ========================================================================== */
+
+h1, h2, h3, h4, h5, h6 {
+    color: #444444;
+}
+
+a {
+    color: #4caf50;
+    text-decoration: none;
+}
+
+a,
+a:hover,
+a:focus,
+a:active {
+    color: #4caf50;
+    text-decoration: none !important;
+}
+
+/* ==========================================================================
+   BUTTONS
+   ========================================================================== */
+
+/* Standard-Grün für btn-success */
+.btn-success {
+    background-color: #4caf50 !important;
+    border-color: #4caf50 !important;
+    color: #ffffff !important;
+    text-decoration: none !important;
+}
+
+.btn-success:hover,
+.btn-success:focus,
+.btn-success:active {
+    background-color: #43a047 !important;
+    border-color: #388e3c !important;
+    color: #ffffff !important;
+    text-decoration: none !important;
+}
+
+/* Veröffentlichen-Button (seitlich) */
+#publishButton {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+    color: white;
+    text-decoration: none;
+    background-color: transparent;
+    border: none;
+    text-align: left;
+}
+
+#publishButton:hover {
+    background-color: #495057;
+}
+
+#publishButton.dirty {
+    background-color: #F2B707;
+    color: black;
+    border-radius: 0;
+}
+
+#publishButton.dirty:hover {
+    background-color: #ffc107;
+    color: black;
+}
+
+#system_healthButton.has-errors {
+    background-color: #F8D7DA !important;
+    color: black;
+}
+
+/* ==========================================================================
+   BUTTONS – OUTLINE-VARIANTEN
+   ========================================================================== */
+
+/* Outline-Primary (z. B. statt Bootstrap-Blau → CI-Grün) */
+.btn-outline-primary {
+    color: #4caf50 !important;
+    border-color: #4caf50 !important;
+}
+
+.btn-outline-primary:hover,
+.btn-outline-primary:focus,
+.btn-outline-primary:active {
+    background-color: #4caf50 !important;
+    color: #ffffff !important;
+    border-color: #4caf50 !important;
+}
+
+/* Outline-Warning (z. B. etwas dunkleres Gelb) */
+.btn-outline-warning {
+    color: #6c757d !important;
+    border-color: #6c757d !important;
+}
+
+.btn-outline-warning:hover,
+.btn-outline-warning:focus,
+.btn-outline-warning:active {
+    background-color: #6c757d !important;
+    color: #ffffff !important;
+    border-color: #6c757d !important;
+}
+
+/* ==========================================================================
+   HILFSKLASSEN: FARBSYSTEM-ANPASSUNGEN (bg-*, text-*)
+   ========================================================================== */
+
+/* Hintergrundfarben */
+.bg-primary {
+    background-color: #4caf50 !important; /* Dunkelgrün statt Bootstrap-Blau */
+    color: #ffffff !important;            /* Weiße Schrift z. B. für Badges */
+}
+
+.bg-secondary {
+    background-color: #6c757d !important; /* Hellgrau */
+    color: #ffffff !important;            /* Dunkler Text */
+}
+
+/* ==========================================================================
+   TOASTS
+   ========================================================================== */
+
+.toast.text-bg-success .toast-body,
+.toast.text-bg-danger .toast-body,
+.toast.text-bg-warning .toast-body {
+    color: black;
+}
+
+.toast .toast-body code {
+    background-color: #f8f9fa;
+    color: black;
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+/* ==========================================================================
+   FORMULARE – BREITENVORGABEN FÜR RECORD-FORMULARE
+   ========================================================================== */
+
+.colform-mx       { flex: 0 0 28%; max-width: 28%; }
+.colform-mail     { flex: 0 0 18%; max-width: 18%; }
+.colform-name     { flex: 0 0 28%; max-width: 28%; }
+.colform-type     { flex: 0 0 10%; max-width: 10%; }
+.colform-content  { flex: 0 0 28%; max-width: 28%; }
+.colform-ttl      { flex: 0 0 10%; max-width: 10%; }
+.colform-priority { flex: 0 0 8%; max-width: 8%; }
+.colform-weight   { flex: 0 0 8%; max-width: 8%; }
+.colform-port     { flex: 0 0 8%; max-width: 8%; }
+.colform-protocol { flex: 0 0 8%; max-width: 8%; }
+.colform-target   { flex: 0 0 16%; max-width: 16%; }
+.colform-service  { flex: 0 0 8%; max-width: 8%; }
+.colform-domain   { flex: 0 0 8%; max-width: 8%; }
+.colform-ip       { flex: 0 0 15%; max-width: 15%; }
+.colform-key      { flex: 0 0 58%; max-width: 58%; }
+
+/* DKIM-spezifische Felder */
+.colform-dkim-selector  { flex: 0 0 11%; max-width: 11%; }
+.colform-dkim-domain    { flex: 0 0 17%; max-width: 17%; }
+.colform-dkim-keytype   { flex: 0 0 10%; max-width: 10%; }
+.colform-dkim-hash      { flex: 0 0 10%; max-width: 10%; }
+.colform-dkim-flags     { flex: 0 0 10%; max-width: 10%; }
+.colform-dkim-keyblock  { flex: 0 0 58%; max-width: 58%; }
+
+/* Upload-Button (DKIM) */
+.dkim-file-upload {
+    max-width: 350px;
+    width: 100%;
+    margin-top: 10px;
+}
+
+/* NAPTR-spezifische Felder */
+.colform-order        { flex: 0 0 8%; max-width: 8%; }
+.colform-preference   { flex: 0 0 8%; max-width: 8%; }
+.colform-flags        { flex: 0 0 8%; max-width: 8%; }
+.colform-regex        { flex: 0 0 18%; max-width: 18%; }
+.colform-replacement  { flex: 0 0 8%; max-width: 8%; }
+
+
+/* ==========================================================================
+   TABELLEN – LAYOUT UND SPALTEN
+   ========================================================================== */
+
+/* Einheitliche Schriftfarbe für alle Tabelleninhalte */
+table,
+table th,
+table td {
+    color: #444444;
+}
+
+/* Tabellenstruktur fixieren */
+.table-fixed {
+    table-layout: fixed;
+    width: auto !important;
+}
+
+/* === Allgemeine Tabellenspaltenbreiten === */
+.coltbl-assign   { width: 5%; text-align: center; }
+.coltbl-master   { width: 5%; text-align: center; }
+.coltbl-select   { width: 3%;  text-align: center; padding-left: 0; padding-right: 0; }
+.coltbl-name     { width: 30%; }
+.coltbl-name-dns { width: 20%; }
+.coltbl-ip       { width: 15%; }
+.coltbl-ip-dns   { width: 50%; }
+.coltbl-type     { width: 10%; white-space: nowrap; }
+.coltbl-content  {width: 25%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coltbl-prio     { width: 8%;  white-space: nowrap; }
+.coltbl-prefix   { width: 7%;  white-space: nowrap; }
+.coltbl-dnssrv   { width: 12%; white-space: nowrap; }
+.coltbl-ttl      { width: 8%;  white-space: nowrap; }
+.coltbl-desc     { width: 30%; }
+.coltbl-actions  { width: 20%; }
+
+/* Benutzerverwaltungstabellen */
+.coltbl-users-name    { width: 20%; white-space: nowrap; }
+.coltbl-users-role    { width: 20%; white-space: nowrap; }
+.coltbl-users-zones   { width: 40%; }
+
+/* Serververwaltungstabellen */
+.coltbl-server-local  { width: 8%;  white-space: nowrap; }
+.coltbl-server-activ  { width: 8%;  white-space: nowrap; }

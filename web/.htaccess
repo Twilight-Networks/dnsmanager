@@ -1,0 +1,42 @@
+# ===============================================
+# Datei: .htaccess
+# Zweck: Schutzmechanismen und Standardkonfigurationen
+# Einsatz: Wurzelverzeichnis des DNSManager-Webverzeichnisses
+# ===============================================
+
+# -----------------------------------------------
+# Standard-Dokument setzen (z. B. beim Aufruf von /)
+
+DirectoryIndex login.php
+
+
+# -----------------------------------------------
+# Sicherheit: Zugriff auf sensible Konfigurationsdateien unterbinden
+# Blockiert u. a. .htaccess, .htpasswd, .ini, .log, .sh, *.bak, und spezifische PHP-Dateien
+
+<FilesMatch "\.(htaccess|htpasswd|ini|phps|fla|psd|log|sh|bak|config\.php|version\.php)$">
+    Require all denied
+</FilesMatch>
+
+
+# -----------------------------------------------
+# Sicherheit: Alle versteckten Dateien (dotfiles) blockieren
+# Beispiel: .env, .git, .DS_Store
+
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+
+# -----------------------------------------------
+# Sicherheit: Verzeichnisinhalte nicht auflisten, selbst wenn keine index-Datei existiert
+
+Options -Indexes
+
+
+# -----------------------------------------------
+# Korrekte Auslieferung von Schriftarten bei manchen Servern
+# Besonders wichtig bei self-hosted Fonts (z. B. Bootstrap Icons)
+
+AddType font/woff2 .woff2
+AddType font/woff .woff

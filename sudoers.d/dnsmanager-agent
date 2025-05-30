@@ -1,0 +1,6 @@
+# Sudo-Rechte für den DNSManager-Agent (API-Zugriff, Benutzer www-data)
+# Erlaubt vollständigen Zugriff auf benötigte BIND-Kommandos
+
+www-data ALL=(ALL) NOPASSWD: /usr/sbin/rndc
+www-data ALL=(ALL) NOPASSWD: /usr/bin/named-checkconf
+www-data ALL=(ALL) NOPASSWD: /usr/bin/named-checkzone
