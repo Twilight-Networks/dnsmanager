@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_log (
     changed_at DATETIME NOT NULL,
     message TEXT,
     server_id INT DEFAULT NULL,
+    notified BOOLEAN NOT NULL DEFAULT 0,
     FOREIGN KEY (diagnostic_id) REFERENCES diagnostics(id) ON DELETE CASCADE
 );
 

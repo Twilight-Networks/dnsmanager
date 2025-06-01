@@ -68,7 +68,6 @@ Entwickelt von **Twilight-Networks**, 2025.
 - REST-konforme API-Struktur (interner Einsatz für Agentenkommunikation)
 
 ### Geplant
-- Mail-Benachrichtigungen bei Fehlern
 - DNSSEC-Unterstützung
 
 ---
@@ -83,10 +82,21 @@ Entwickelt von **Twilight-Networks**, 2025.
 - **Fail2Ban** (optional für zusätzliche Sicherheit)
 
 ---
-🔗 **Zur vollständigen Anleitung inkl. Screenshots, Zonen & Delegationstests:**
+
+## Changelog
+
+Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## Installation
+
+🔗 **Zur vollständigen Anleitung inkl. Screenshots, Zonen & Delegationstests:**<br>
 [Eigene Domain hosten mit DNS-Manager](https://www.twilight-networks.com/docs/domains_hosten_mit_dnsmanager/)
 
-## Installation Webinterface (DNS-Manager-UI)
+<br>
+
+### Installation Webinterface (DNS-Manager-UI)
 
 1. **Benötigte Software installieren:**
 
@@ -185,7 +195,7 @@ Entwickelt von **Twilight-Networks**, 2025.
 
 ---
 
-## Installation Agent (DNS-Manager-API)
+### Installation Agent (DNS-Manager-API)
 
 1. **Benötigte Software installieren:**
 
@@ -271,6 +281,22 @@ Entwickelt von **Twilight-Networks**, 2025.
 
 Dieses Projekt steht unter der [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html).
 Details siehe [LICENSE](LICENSE).
+
+> Hinweis: Dieses Projekt verwendet zusätzlich Drittanbieter-Komponenten mit abweichenden Lizenzen. Siehe Abschnitt „Drittanbieter-Komponenten“.
+
+---
+
+## Drittanbieter-Komponenten
+
+Diese Software verwendet folgende Drittanbieter-Komponenten:
+
+- **PHPMailer**
+  E-Mail-Versand-Bibliothek für Monitoring-Benachrichtigungen
+  © 2001–2024 The PHPMailer Authors
+  Lizenz: [GNU Lesser General Public License v2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html)
+  Quelle: [https://github.com/PHPMailer/PHPMailer](https://github.com/PHPMailer/PHPMailer)
+
+Die PHPMailer-Komponenten befinden sich unter `vendor/phpmailer/` und wurden manuell eingebunden.
 
 ---
 

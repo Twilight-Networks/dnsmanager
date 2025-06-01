@@ -83,6 +83,28 @@ define('CURL_SSL_VERIFYHOST', 0);
 date_default_timezone_set('Europe/Berlin'); // Standard-Zeitzone der Anwendung
 
 /** ---------------------------------------
+ *  Mail-Benachrichtigungen (Monitoring)
+ * --------------------------------------- */
+
+// Aktiviert den Mailversand bei Monitoring-Statusänderungen
+define('MAILER_ENABLED', false);
+
+// SMTP verwenden (true) oder systemweiten Mailversand via sendmail/mail() (false)
+define('MAILER_USE_SMTP', true);
+
+// SMTP-Serverdetails (nur bei MAILER_USE_SMTP = true relevant)
+define('MAILER_SMTP_HOST', 'smtp.example.com');
+define('MAILER_SMTP_PORT', 587);
+define('MAILER_SMTP_USER', 'monitor@example.com');
+define('MAILER_SMTP_PASS', 'dein_passwort');
+define('MAILER_SMTP_SECURE', 'tls'); // 'tls' oder 'ssl'
+
+// Absender- und Empfängerdaten
+define('MAILER_FROM_ADDRESS', 'monitor@example.com');
+define('MAILER_FROM_NAME', 'DNSManager Monitoring');
+define('MAILER_TO_ADDRESS', 'admin@example.com');
+
+/** ---------------------------------------
  *  Behaltedauer für Monitoringdaten im Log
  * --------------------------------------- */
 define('MONITORING_LOG_RETENTION', '30D'); // gültig: z. B. 1H, 3D, 2W, 6M, 1Y

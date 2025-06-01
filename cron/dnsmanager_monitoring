@@ -19,5 +19,5 @@
 #
 # Format: <Min> <Std> <Tag> <Monat> <Wochentag> <Benutzer> <Befehl>
 
-*/5 * * * * www-data /usr/bin/php /usr/share/dnsmanager/web/scripts/monitoring_run-cli.php
-@daily www-data /usr/bin/php /usr/share/dnsmanager/web/scripts/monitoring_log_cleanup-cli.php
+*/5 * * * * www-data /usr/bin/php /usr/share/dnsmanager/web/scripts/monitoring_run-cli.php > /dev/null 2>&1
+@daily www-data /usr/bin/php /usr/share/dnsmanager/web/scripts/monitoring_log_cleanup-cli.php > /dev/null 2>&1

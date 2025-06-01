@@ -19,6 +19,7 @@
 require_once __DIR__ . '/../config/ui_config.php';
 require_once __DIR__ . '/../inc/db.php';
 require_once __DIR__ . '/../inc/monitoring.php';
+require_once __DIR__ . '/../inc/monitoring_mailer.php';
 require_once __DIR__ . '/../inc/logging.php';
 
 date_default_timezone_set('UTC');
@@ -89,6 +90,16 @@ foreach ($rows as $row) {
 // Verwaiste Diagnostics bereinigen
 cleanupOrphanedZoneDiagnostics($db);
 
-appLog('info', 'Monitoring-Run erfolgreich beendet');
+// E-Mail-Benachrichtigungen verschicken
+$result = sendDiagnosticAlerts($db);
 
+if ($result['status'] !== 'ok') {
+    foreach ($result['errors'] as $error) {
+        appLog('error', "Fehler beim Mailversand: $error");
+    }
+    appLog('error', 'Monitoring-Run beendet – aber E-Mail-Versand fehlerhaft');
+    exit(1);
+}
+
+appLog('info', 'Monitoring-Run erfolgreich beendet');
 exit(0);

@@ -12,7 +12,7 @@ require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../config/version.php';
 
 // Remote-URL zur JSON-Datei mit Versionsinformationen
-$update_url = 'https://www.twilight-networks.com/dnsmanager/latest.json';
+$update_url = 'https://www.twilight-networks.com/dnsmanager-update/latest.json';
 
 // Lokale installierte Version
 $current_version = DNSMANAGER_VERSION;
@@ -44,6 +44,7 @@ if ($response === false) {
     } else {
         $remote_version = $data['version'];
         $release_date = $data['release_date'] ?? 'unbekannt';
+        $download_url = $data['download_url'] ?? null;
         $changelog_url = $data['changelog_url'] ?? null;
     }
 }
@@ -65,10 +66,15 @@ include __DIR__ . '/../templates/layout.php';
     </div>
 <?php elseif (version_compare($remote_version, $current_version, '>')): ?>
     <div class="alert alert-warning">
-        ⚠️ Eine neue Version ist verfügbar:<br>
+        ⚠️ Eine neue Version ist verfügbar:<br><br>
         <strong>Version <?= htmlspecialchars($remote_version) ?></strong>
         (veröffentlicht am <?= htmlspecialchars($release_date) ?>)
         <br><br>
+        <?php if ($download_url): ?>
+            <a href="<?= htmlspecialchars($download_url) ?>" class="btn btn-sm btn-outline-primary" target="_blank">
+                Zum Download
+            </a>
+        <?php endif; ?>
         <?php if ($changelog_url): ?>
             <a href="<?= htmlspecialchars($changelog_url) ?>" class="btn btn-sm btn-outline-primary" target="_blank">
                 Zum Changelog

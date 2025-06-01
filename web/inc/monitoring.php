@@ -7,6 +7,8 @@
  * Diese Datei enthält Funktionen zur Prüfung der Konfiguration und Zonendateien von BIND-Servern,
  * sowohl lokal als auch über eine REST-API bei entfernten Servern. Zusätzlich wird der allgemeine
  * Systemstatus von Remote-Servern ermittelt.
+ * Diese Datei ruft u. a. sendDiagnosticAlerts() aus monitoring_mailer.php auf,
+ * um bei Statuswechseln E-Mail-Benachrichtigungen auszulösen.
  *
  * Abhängigkeiten:
  * - Konstanten: NAMED_CHECKCONF, NAMED_CHECKZONE, REMOTE_API_BASE
@@ -201,6 +203,7 @@ function check_server_status(array $server): array {
 function saveDiagnostic(PDO $db, string $type, int $id, string $check, string $status, string $message, ?int $serverId = null): void
 {
     $now = date('Y-m-d H:i:s');
+    $notified = defined('MAILER_ENABLED') && MAILER_ENABLED === true ? 0 : 1;
 
     // Korrekte Auswahl basierend auf NULL oder Wert
     if ($serverId === null) {
@@ -231,10 +234,10 @@ function saveDiagnostic(PDO $db, string $type, int $id, string $check, string $s
 
         if ($oldStatus !== $status) {
             $log = $db->prepare("
-                INSERT INTO diagnostic_log (diagnostic_id, old_status, new_status, changed_at, message, server_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO diagnostic_log (diagnostic_id, old_status, new_status, changed_at, message, server_id, notified)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ");
-            $log->execute([$diagnosticId, $oldStatus, $status, $now, $message, $serverId]);
+            $log->execute([$diagnosticId, $oldStatus, $status, $now, $message, $serverId, $notified]);
         }
     } else {
         $insert = $db->prepare("
@@ -245,10 +248,10 @@ function saveDiagnostic(PDO $db, string $type, int $id, string $check, string $s
 
         $diagnosticId = $db->lastInsertId();
         $log = $db->prepare("
-            INSERT INTO diagnostic_log (diagnostic_id, old_status, new_status, changed_at, message, server_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO diagnostic_log (diagnostic_id, old_status, new_status, changed_at, message, server_id, notified)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ");
-        $log->execute([$diagnosticId, 'ok', $status, $now, $message, $serverId]);
+        $log->execute([$diagnosticId, 'ok', $status, $now, $message, $serverId, $notified]);
     }
 }
 

@@ -28,6 +28,41 @@ $file_issues = check_all_file_permissions(dirname(__DIR__));
 $config_issues = check_config_validity();
 $php_version_supported = version_compare($php_version, '8.1', '>=');
 
+// Wenn "Status jetzt aktualisieren" gedrückt wurde, Monitoring-Skript direkt ausführen
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['force_update'])) {
+    $script = __DIR__ . '/../scripts/monitoring_run-cli.php';
+
+    if (is_file($script) && is_readable($script)) {
+        // Monitoring synchron aufrufen – so ist die Datenbank danach garantiert aktuell
+        $cmd = "php " . escapeshellarg($script);
+        exec($cmd, $outputLines, $exitCode);
+
+        // Fehlerlog + Toast anzeigen
+        if ($exitCode !== 0) {
+            toastError(
+                "Monitoring-Statusprüfung fehlgeschlagen.",
+                "Fehler beim Monitoring-Aufruf: Exit-Code $exitCode"
+            );
+        } else {
+            toastSuccess(
+                "Systemstatus erfolgreich aktualisiert.",
+                "Alle Prüfungen wurden ausgeführt. Die Ergebnisse sind jetzt aktuell."
+            );
+        }
+
+        // Sofortige Umleitung, damit Toast auch greift
+        header("Location: " . $_SERVER['REQUEST_URI']);
+        exit;
+    } else {
+        toastError(
+            "Monitoring-Skript nicht auffindbar.",
+            "Pfad: <code>{$script}</code>"
+        );
+        header("Location: " . $_SERVER['REQUEST_URI']);
+        exit;
+    }
+}
+
 // Diagnosedaten aus der Datenbank laden
 $diagnostics = getDiagnosticResults($pdo);
 
@@ -100,6 +135,13 @@ foreach ($conf_results as $entry) {
 <br>
 <br>
 <h2 class="mb-4">Systemstatus</h2>
+
+<form method="post" action="pages/system_health.php" class="mb-3">
+    <input type="hidden" name="force_update" value="1">
+    <button type="submit" class="btn btn-sm btn-outline-primary">
+        🔄 Status jetzt aktualisieren
+    </button>
+</form>
 
 <div class="card mb-4">
     <div class="card-body">
