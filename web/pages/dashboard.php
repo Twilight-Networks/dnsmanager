@@ -19,7 +19,7 @@ include __DIR__ . '/../templates/layout.php';
 
 <br>
 <br>
-<h2 class="mb-4">Willkommen, <?= htmlspecialchars($_SESSION['role']) ?></h2>
+<h2 class="mb-4">Willkommen, <?= htmlspecialchars($_SESSION['username']) ?></h2>
 
 <?php if ($_SESSION['role'] === 'admin'): ?>
     <?php

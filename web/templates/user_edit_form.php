@@ -15,7 +15,9 @@
     <td colspan="7">
         <form method="post"
               action="actions/user_update.php"
-              class="d-flex flex-column gap-3">
+              class="d-flex flex-column gap-3"
+              id="editForm_<?= $u['id'] ?>">
+
 
             <?= $csrf_token ?>
             <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">

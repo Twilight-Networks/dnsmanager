@@ -304,7 +304,7 @@ Diese Software verwendet folgende Drittanbieter-Komponenten:
   Lizenz: [GNU Lesser General Public License v2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html)
   Quelle: [https://github.com/PHPMailer/PHPMailer](https://github.com/PHPMailer/PHPMailer)
 
-Die PHPMailer-Komponenten befinden sich unter `vendor/phpmailer/` und wurden manuell eingebunden.
+Die PHPMailer-Komponenten befinden sich unter `/web/vendor/phpmailer` und wurden manuell eingebunden.
 
 ---
 

@@ -90,3 +90,14 @@ CREATE TABLE dyndns_accounts (
     INDEX idx_zone_hostname (zone_id, hostname)
 );
 ```
+
+<br>
+<br>
+
+## [1.2.1] – 2025-06-03
+
+### Fixed
+- **Benutzer bearbeiten**: Änderungen wurden nicht gespeichert
+  - Ursache: fehlende `id="editForm_<id>"` im Formular (`user_edit_form.php`)
+  - Folge: Klick auf „Speichern“ hatte keine Wirkung
+  - Lösung: Korrektes `form`-Ziel gesetzt
