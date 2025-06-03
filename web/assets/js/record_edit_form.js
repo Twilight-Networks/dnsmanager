@@ -25,16 +25,29 @@
 
 (function () {
     /**
-     * Zeigt ein Element.
-     * @param {HTMLElement|null} el - Das DOM-Element
+     * Blendet ein HTML-Element ein, indem die Klasse 'd-none' entfernt wird.
+     *
+     * @function show
+     * @param {HTMLElement|null} el - Das DOM-Element, das eingeblendet werden soll.
      */
     const show = (el) => el?.classList.remove('d-none');
 
     /**
-     * Versteckt ein Element.
-     * @param {HTMLElement|null} el - Das DOM-Element
+     * Blendet ein HTML-Element aus, indem die Klasse 'd-none' hinzugefügt wird.
+     *
+     * @function hide
+     * @param {HTMLElement|null} el - Das DOM-Element, das ausgeblendet werden soll.
      */
     const hide = (el) => el?.classList.add('d-none');
+
+    /**
+     * Macht ein HTML-Element unsichtbar, ohne es aus dem Layoutfluss zu entfernen,
+     * indem die Klasse 'invisible' hinzugefügt wird.
+     *
+     * @function invisible
+     * @param {HTMLElement|null} el - Das DOM-Element, das unsichtbar gemacht werden soll.
+     */
+    const invisible = (el) => el?.classList.add('invisible');
 
     const isDKIM = document.getElementById('is_dkim_record')?.value === '1';
     const type = document.getElementById('edit_record_type')?.value;
@@ -77,13 +90,9 @@
             break;
         case 'NAPTR':
             show(naptrFields);
-            hide(contentWrapper);
+            invisible(contentWrapper);
             show(wrapperCAA);
             hide(inputFullName);
-            break;
-        case 'DKIM':
-            show(dkimFields);
-            hide(contentWrapper);
             break;
         case 'URI':
             hide(contentWrapper);
@@ -97,11 +106,11 @@
             break;
     }
 
-// DKIM separat behandeln
-if (isDKIM) {
-    show(dkimFields);
-    hide(contentWrapper);
-}
+    // DKIM separat behandeln
+    if (isDKIM) {
+        show(dkimFields);
+        invisible(contentWrapper);
+    }
 
     // SRV: beim Absenden zusammensetzen
     if (type === 'SRV' && form) {

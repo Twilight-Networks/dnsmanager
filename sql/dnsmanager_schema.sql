@@ -28,10 +28,13 @@ CREATE TABLE zones (
     soa_minimum INT NOT NULL DEFAULT 86400,
     soa_serial INT NOT NULL DEFAULT 2025010101,
 
--- Änderungs Flag
+    -- Änderungs Flag
     changed TINYINT(1) NOT NULL DEFAULT 0,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- DynDNS-Option
+    allow_dyndns TINYINT(1) NOT NULL DEFAULT 0
 );
 
 -- Tabelle: servers
@@ -86,6 +89,23 @@ CREATE TABLE IF NOT EXISTS zone_servers (
     FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
     UNIQUE(zone_id, server_id),
     CHECK (is_master IN (0,1))
+);
+
+-- DynDNS-Accounts
+CREATE TABLE dyndns_accounts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(64) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    zone_id INT NOT NULL,
+    hostname VARCHAR(255) NOT NULL,
+    current_ipv4 VARCHAR(45) DEFAULT NULL,
+    current_ipv6 VARCHAR(45) DEFAULT NULL,
+    last_update DATETIME DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_dyndns_zone FOREIGN KEY (zone_id) REFERENCES zones(id) ON DELETE CASCADE,
+    INDEX idx_zone_hostname (zone_id, hostname)
 );
 
 -- Optionales Logging von Deployments

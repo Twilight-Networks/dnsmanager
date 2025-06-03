@@ -170,7 +170,7 @@ $overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
 
 <!-- Forward Lookup Zonen -->
 <h4>Forward Lookup Zonen</h4>
-<table class="table table-bordered table-hover align-middle">
+<table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
             <th>Name</th>
@@ -237,7 +237,7 @@ $overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
 <br>
 <br>
 <h4>Reverse Lookup Zonen</h4>
-<table class="table table-bordered table-hover align-middle">
+<table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
             <th>Name</th>

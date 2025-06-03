@@ -70,7 +70,7 @@ if (!defined('IN_APP')) {
                        value="<?= htmlspecialchars($_POST['soa_domain'] ?? '') ?>">
             </div>
 
-            <div class="col-md-6 colform-mail">
+            <div class="col-md-6 colform-zones-mail">
                 <label class="form-label">SOA Mail</label>
                 <input type="text" name="soa_mail" id="soa_mail" class="form-control" required placeholder="z. B. hostmaster.example.com.">
             </div>
@@ -138,6 +138,18 @@ if (!defined('IN_APP')) {
                 </tbody>
             </table>
         <small class="text-muted">Bitte mindestens einen Server auswählen. Genau einer muss als Master definiert sein.</small>
+    </div>
+
+    <div class="col-md-9 colform-dyndns">
+        <label class="form-label d-block">DynDNS erlaubt</label>
+        <div class="form-check form-switch">
+            <input class="form-check-input"
+                   type="checkbox" role="switch"
+                   id="allow_dyndns"
+                   name="allow_dyndns" value="1"
+                   <?= !empty($_POST['allow_dyndns']) ? 'checked' : '' ?>>
+            <label class="form-check-label" for="allow_dyndns">Zone darf über DynDNS aktualisiert werden</label>
+        </div>
     </div>
 
     <div class="col-md-9 coltbl-desc">

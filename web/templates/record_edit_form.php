@@ -66,8 +66,15 @@ if ($r['type'] === 'SRV') {
     }
 }
 
+// DKIM: Variablen initialisieren – auch wenn kein DKIM-Eintrag bearbeitet wird
+$dkim_key_type = 'rsa';
+$dkim_hash_algos = '';
+$dkim_flags = '';
+$dkim_selector = '';
+$dkim_subdomain = '';
+$dkim_key = '';
+
 // DKIM Parsing aus TXT-Record
-$dkim_selector = $dkim_subdomain = $dkim_key = '';
 if (!empty($r['is_dkim'])) {
     // Extrahiere Selector und optionale Subdomain aus dem Namen
     if (preg_match(
@@ -162,7 +169,12 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
 
 
 <tr class="table-warning table-edit-form">
-    <td colspan="6">
+    <td class="coltbl-select" aria-hidden="true">
+        <div style="visibility: hidden;">
+            <input type="checkbox" class="form-check-input" disabled>
+        </div>
+    </td>
+    <td colspan="5">
         <form method="post"
             action="actions/record_update.php"
             class="row g-3 d-flex flex-wrap align-items-start"
@@ -212,6 +224,16 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
             </div>
             <?php endif; ?>
 
+            <div class="d-flex flex-column colform-content <?= in_array($r['type'], ['SRV', 'NAPTR']) || !empty($r['is_dkim']) ? 'invisible' : '' ?>" id="edit_content_wrapper">
+                <label class="form-label">Inhalt</label>
+                <input
+                    name="content"
+                    id="edit_input_content"
+                    class="form-control <?= ($is_glue || $is_ns_glue) ? 'bg-light text-muted' : '' ?>"
+                    <?= ($is_glue || $is_ns_glue) ? 'readonly' : '' ?>
+                    value="<?= htmlspecialchars($r['content']) ?>">
+            </div>
+
             <!-- Gültigkeitsdauer (TTL) -->
             <div class="d-flex flex-column colform-ttl">
                 <label class="form-label" for="edit_ttl_select">TTL</label>
@@ -241,7 +263,7 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
             </div>
 
             <!-- MX-spezifische Felder: Priorität und Ziel-Mailserver (FQDN) -->
-            <div class="d-flex flex-column colform-mx <?= $r['type'] === 'MX' ? '' : 'd-none' ?>" id="edit_mx_fields">
+            <div class="d-flex flex-column colform-priority <?= $r['type'] === 'MX' ? '' : 'd-none' ?>" id="edit_mx_fields">
                 <label class="form-label">Priorität</label>
                 <input name="mx_priority" id="edit_input_mx_priority" class="form-control" type="number" value="<?= htmlspecialchars($mx_priority) ?>">
             </div>
@@ -303,16 +325,6 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
                         <input name="naptr_replacement" class="form-control" value="<?= htmlspecialchars($naptr_replace) ?>">
                     </div>
                 </div>
-            </div>
-
-            <div class="d-flex flex-column colform-content <?= in_array($r['type'], ['SRV', 'NAPTR']) || !empty($r['is_dkim']) ? 'd-none' : '' ?>" id="edit_content_wrapper">
-                <label class="form-label">Inhalt</label>
-                <input
-                    name="content"
-                    id="edit_input_content"
-                    class="form-control <?= ($is_glue || $is_ns_glue) ? 'bg-light text-muted' : '' ?>"
-                    <?= ($is_glue || $is_ns_glue) ? 'readonly' : '' ?>
-                    value="<?= htmlspecialchars($r['content']) ?>">
             </div>
 
             <!-- URI: Dienstname, Protokoll, Priorität, Gewicht, Ziel -->

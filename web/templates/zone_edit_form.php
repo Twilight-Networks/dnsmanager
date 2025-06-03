@@ -44,10 +44,10 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                         id="soa_ns"
                         class="form-control"
                         value="<?= htmlspecialchars($zone['soa_ns']) ?>"
-                        <?= $zone['type'] === 'forward' ? 'disabled readonly' : '' ?>>
+                        <?= $zone['type'] === 'forward' ? 'readonly' : '' ?>>
                 </div>
 
-                <div class="col-md-4 d-flex flex-column colform-mail">
+                <div class="col-md-4 d-flex flex-column colform-zones-mail">
                     <label class="form-label">SOA Mail</label>
                     <input name="soa_mail" class="form-control" value="<?= htmlspecialchars($zone['soa_mail']) ?>">
                 </div>
@@ -116,7 +116,8 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                                             <?php if (!empty($srv['dns_ip6'])): ?>
                                                 <br><?= htmlspecialchars($srv['dns_ip6']) ?>
                                             <?php endif; ?>
-                                        </td>                                    </tr>
+                                        </td>
+                                    </tr>
                                 <?php endforeach; ?>
                             </tbody>
                         </table>
@@ -124,9 +125,24 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                     <small class="text-muted">Bitte mindestens einen Server auswählen. Genau einer muss als Master definiert sein.</small>
                 </div>
 
+                <div class="col-md-9 d-flex flex-column mt-2">
+                    <label class="form-label">DynDNS erlaubt</label>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input"
+                               type="checkbox" role="switch"
+                               name="allow_dyndns"
+                               id="allow_dyndns_<?= $zone['id'] ?>"
+                               value="1"
+                               <?= $zone['allow_dyndns'] ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="allow_dyndns_<?= $zone['id'] ?>">
+                            DynDNS-Updates für diese Zone zulassen
+                        </label>
+                    </div>
+                </div>
+
                 <div class="col-md-4 d-flex flex-column coltbl-desc">
                     <label class="form-label">Beschreibung (optional)</label>
-                    <textarea name="description" type="text" class="form-control" rows="2" value="<?= htmlspecialchars((string)($zone['description'] ?? '')) ?>"></textarea>
+                    <textarea name="description" class="form-control" rows="2"><?= htmlspecialchars((string)($zone['description'] ?? '')) ?></textarea>
                 </div>
             </div>
         </form>

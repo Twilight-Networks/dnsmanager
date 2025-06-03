@@ -76,6 +76,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->execute([$id, $zone_id]);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
 
+    // Änderungen vergleichen: Wenn sich nichts geändert hat, abbrechen
+    $hasChanged = false;
+    $hasChanged |= trim($existing['name']) !== trim($name);
+    $hasChanged |= trim($existing['type']) !== trim($type);
+    $hasChanged |= trim($existing['content']) !== trim($content);
+    $hasChanged |= (int)$existing['ttl'] !== (int)$ttl;
+
+    if (!$hasChanged) {
+        toastSuccess('Keine Änderungen vorgenommen.', 'Der DNS-Record ist unverändert.');
+        header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
+        exit;
+    }
+
     if (!$existing) {
         http_response_code(404);
         exit('Fehler: Record nicht gefunden.');

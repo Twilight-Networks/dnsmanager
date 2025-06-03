@@ -54,6 +54,35 @@ if ((int)$stmt->fetchColumn() === 0) {
     exit;
 }
 
+// Vorherige Daten laden
+$stmt = $pdo->prepare("SELECT username, role FROM users WHERE id = ?");
+$stmt->execute([$id]);
+$old = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$old) {
+    toastError("Benutzer konnte nicht geladen werden.");
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
+    exit;
+}
+
+// Aktuelle Zonenzuweisung holen (nur IDs)
+$stmt = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
+$stmt->execute([$id]);
+$existing_zone_ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+$new_zone_ids = array_map('intval', $zones);
+
+$usernameChanged = $old['username'] !== $username;
+$roleChanged     = $old['role'] !== $role;
+$zonesChanged    = ($role === 'zoneadmin') &&
+                   (array_diff($existing_zone_ids, $new_zone_ids) ||
+                    array_diff($new_zone_ids, $existing_zone_ids));
+
+if (!$usernameChanged && !$roleChanged && !$zonesChanged) {
+    toastSuccess("Keine Änderungen vorgenommen.", "Benutzerdaten sind unverändert.");
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
+    exit;
+}
+
 // Benutzername und Rolle aktualisieren
 try {
     $pdo->beginTransaction();

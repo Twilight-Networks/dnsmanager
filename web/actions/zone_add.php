@@ -58,6 +58,7 @@ $soa_refresh  = (int)$_POST['soa_refresh'];
 $soa_retry    = (int)$_POST['soa_retry'];
 $soa_expire   = (int)$_POST['soa_expire'];
 $soa_minimum  = (int)$_POST['soa_minimum'];
+$allow_dyndns = isset($_POST['allow_dyndns']) && $_POST['allow_dyndns'] === '1' ? 1 : 0;
 
 // Serverzuweisung vorbereiten
 $server_ids = $_POST['server_ids'] ?? [];
@@ -120,8 +121,8 @@ try {
     $stmt = $pdo->prepare("
         INSERT INTO zones
             (name, type, ttl, prefix_length, description,
-             soa_ns, soa_mail, soa_refresh, soa_retry, soa_expire, soa_minimum, soa_serial, changed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             soa_ns, soa_mail, soa_refresh, soa_retry, soa_expire, soa_minimum, soa_serial, changed, allow_dyndns)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     ");
     $stmt->execute([
         $name,
@@ -135,7 +136,8 @@ try {
         $soa_retry,
         $soa_expire,
         $soa_minimum,
-        $soa_serial
+        $soa_serial,
+        $allow_dyndns
     ]);
 
     $zone_id = (int)$pdo->lastInsertId();

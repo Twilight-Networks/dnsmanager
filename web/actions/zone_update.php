@@ -1,14 +1,20 @@
 <?php
 /**
  * Datei: zone_update.php
- * Zweck: Aktualisiert eine bestehende DNS-Zone.
+ * Zweck: Aktualisiert eine bestehende DNS-Zone (Metadaten und Serverzuweisung).
  *
  * Funktionen:
- * - Validiert Rechte des Benutzers (admin oder zugewiesener zoneadmin).
- * - Aktualisiert TTL, Beschreibung, SOA-Werte und ggf. Prefix-Länge.
- * - Übernimmt die zugewiesenen DNS-Server inklusive Master-Zuweisung.
- * - Führt Zonendatei-Rebuild und Validierung durch.
- * - Gibt Rückmeldung über Toast-Nachricht und leitet zur Übersicht zurück.
+ * - Validiert Benutzerrechte (admin oder zugewiesener zoneadmin).
+ * - Erkennt gezielt, ob überhaupt relevante Änderungen vorgenommen wurden.
+ * - Unterscheidet zwischen:
+ *      - Zonen-relevanten Änderungen (z. B. TTL, SOA → führt zu Rebuild)
+ *      - nicht kritischen Änderungen (Beschreibung, DynDNS → nur Speichern)
+ *      - Änderungen an DNS-Servern (→ führt zu NS/Glue-Rebuild)
+ * - Verhindert unnötige Verarbeitung bei unveränderten Daten.
+ * - Nutzt gezielte Rebuilds:
+ *      - rebuild_ns_and_glue_for_zone_and_flag_if_valid()
+ *      - rebuild_zone_and_flag_if_valid()
+ * - Gibt Rückmeldung über Toasts und leitet zurück zur Zonenübersicht.
  */
 
 require_once __DIR__ . '/../common.php';
@@ -38,6 +44,16 @@ $stmt = $pdo->prepare("SELECT name, type FROM zones WHERE id = ?");
 $stmt->execute([$id]);
 $zone = $stmt->fetch(PDO::FETCH_ASSOC);
 
+// Vorherige Zonenwerte laden für Vergleich
+$stmt = $pdo->prepare("
+    SELECT ttl, prefix_length, description, allow_dyndns, soa_ns, soa_mail,
+           soa_refresh, soa_retry, soa_expire, soa_minimum
+    FROM zones
+    WHERE id = ?
+");
+$stmt->execute([$id]);
+$old = $stmt->fetch(PDO::FETCH_ASSOC);
+
 if (!$zone) {
     toastError(
         "Zone nicht gefunden.",
@@ -54,6 +70,7 @@ $type = $zone['type'];
 $ttl           = (int)($_POST['ttl'] ?? 3600);
 $prefix_length = isset($_POST['prefix_length']) ? (int)$_POST['prefix_length'] : null;
 $description   = trim($_POST['description'] ?? '') ?: null;
+$allow_dyndns = isset($_POST['allow_dyndns']) ? 1 : 0;
 
 $soa_mail    = rtrim(trim($_POST['soa_mail'] ?? ''), '.') . '.';
 $soa_refresh = (int)($_POST['soa_refresh'] ?? 3600);
@@ -94,68 +111,116 @@ if ($_SESSION['role'] === 'admin') {
         exit;
     }
 
-    try {
-        // Alte Server-Zuweisung sichern
-        $stmt = $pdo->prepare("SELECT server_id FROM zone_servers WHERE zone_id = ?");
-        $stmt->execute([$id]);
-        $old_server_ids = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'server_id');
+    // Alte Server-Zuweisung laden: ID + Master-Flag
+    $stmt = $pdo->prepare("SELECT server_id, is_master FROM zone_servers WHERE zone_id = ?");
+    $stmt->execute([$id]);
+    $old_servers = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
-        // Server-Zuweisungen aktualisieren
-        $pdo->prepare("DELETE FROM zone_servers WHERE zone_id = ?")->execute([$id]);
-        $stmt = $pdo->prepare("INSERT INTO zone_servers (zone_id, server_id, is_master) VALUES (?, ?, ?)");
+    // Alte Serverzuweisung als [server_id => is_master] geladen
+    $old_server_ids = array_keys($old_servers);
+    $old_master_id = array_search(1, $old_servers, true); // erster mit is_master = 1
 
-        foreach ($server_ids as $sid) {
-            $stmt->execute([$id, $sid, ((int)$sid === (int)$master_id) ? 1 : 0]);
-        }
+    $new_server_ids = array_map('intval', $server_ids);
+    $new_master_id = (int)$master_id;
 
-        // Gelöschte Server identifizieren
-        $removed_servers = array_diff($old_server_ids, $server_ids);
-        if (!empty($removed_servers)) {
-            $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
-        }
+    // Vergleich: Hat sich die Serverauswahl oder der Master geändert?
+    $serverListChanged = array_diff($old_server_ids, $new_server_ids) ||
+                         array_diff($new_server_ids, $old_server_ids);
 
-        // Zonenstruktur auf Basis der neuen Server rekonstruieren
-        $result = rebuild_ns_and_glue_for_zone_and_flag_if_valid($pdo, $id);
+    $masterChanged = (int)$old_master_id !== $new_master_id;
 
-        if ($result['status'] === 'error') {
+    // Wenn keine Änderungen bei der Serverzuweisung → keine Aktion, SOA-NS unverändert übernehmen
+    if (!$serverListChanged && !$masterChanged) {
+        // keine Änderung – skippe RebuildNS + Serverupdate
+        $soa_ns = $zone['type'] === 'forward' ? $old['soa_ns'] : trim($_POST['soa_ns'] ?? '');
+    } else {
+        // Server-Zuweisung hat sich geändert → neu schreiben + rebuild
+        try {
+            // Alte Zuweisungen löschen
+            $pdo->prepare("DELETE FROM zone_servers WHERE zone_id = ?")->execute([$id]);
+
+            // Neue setzen
+            $stmt = $pdo->prepare("INSERT INTO zone_servers (zone_id, server_id, is_master) VALUES (?, ?, ?)");
+            foreach ($server_ids as $sid) {
+                $stmt->execute([$id, $sid, ((int)$sid === $new_master_id) ? 1 : 0]);
+            }
+
+            // Rebuild NS + Glue (nur wenn Änderung)
+            $result = rebuild_ns_and_glue_for_zone_and_flag_if_valid($pdo, $id);
+
+            if ($result['status'] === 'error') {
+                toastError(
+                    "Zonenstruktur konnte nicht neu aufgebaut werden.",
+                    $result['output']
+                );
+                header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
+                exit;
+            }
+
+            if ($result['status'] === 'warning') {
+                toastWarning(
+                    "Zone wurde aktualisiert – Warnung beim Zonen-Rebuild.",
+                    $result['output']
+                );
+            }
+
+            // neuen SOA-NS setzen (nach Rebuild)
+            $stmt = $pdo->prepare("SELECT soa_ns FROM zones WHERE id = ?");
+            $stmt->execute([$id]);
+            $soa_ns = $stmt->fetchColumn();
+        } catch (Exception $e) {
             toastError(
-                "Zonenstruktur konnte nicht neu aufgebaut werden.",
-                $result['output']
+                "Fehler beim Aktualisieren der Server-Zuweisungen.",
+                "Fehler beim Aktualisieren von Zone-ID {$id}: " . $e->getMessage()
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
             exit;
         }
-
-        if ($result['status'] === 'warning') {
-            toastWarning(
-                "Zone wurde aktualisiert – Warnung beim Zonen-Rebuild.",
-                $result['output']
-            );
-        }
-
-        // SOA-NS übernehmen (für UPDATE unten)
-        $stmt = $pdo->prepare("SELECT soa_ns FROM zones WHERE id = ?");
-        $stmt->execute([$id]);
-        $soa_ns = $stmt->fetchColumn();
-    } catch (Exception $e) {
-        toastError(
-            "Fehler beim Aktualisieren der Server-Zuweisungen.",
-            "Fehler beim Aktualisieren von Zone-ID {$id}: " . $e->getMessage()
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-        exit;
     }
-} else {
-    // Kein Admin → SOA-NS übernehmen
-    $soa_ns = trim($_POST['soa_ns'] ?? '');
 }
 
-// Zonen-Metadaten aktualisieren mit Transaktion
+if (!$old) {
+    toastError(
+        "Zone konnte nicht geprüft werden.",
+        "Zone-ID {$id} existiert nicht mehr."
+    );
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
+    exit;
+}
+
+// --- Änderungserkennung: Aufteilung in kritisch (führt zu Rebuild) und unkritisch (nur speichern) ---
+
+// Rebuild der Zonendatei nur bei relevanten Änderungen (TTL, SOA, etc.)
+$hasZoneRelevantChanges =
+    (int)$old['ttl'] !== $ttl ||
+    ($type === 'reverse' && (int)$old['prefix_length'] !== $prefix_length) ||
+    rtrim($old['soa_ns'], '.') !== rtrim($soa_ns, '.') ||
+    rtrim($old['soa_mail'], '.') !== rtrim($soa_mail, '.') ||
+    (int)$old['soa_refresh'] !== $soa_refresh ||
+    (int)$old['soa_retry'] !== $soa_retry ||
+    (int)$old['soa_expire'] !== $soa_expire ||
+    (int)$old['soa_minimum'] !== $soa_minimum;
+
+// Nur fürs Speichern relevant (kein Trigger für Rebuild)
+$hasNonCriticalChanges =
+    trim((string)($old['description'] ?? '')) !== trim((string)($description ?? '')) ||
+    (int)$old['allow_dyndns'] !== $allow_dyndns;
+
+// Wenn keine Änderungen → keine Aktion
+if (!$hasZoneRelevantChanges && !$serverListChanged && !$masterChanged && !$hasNonCriticalChanges) {
+    toastSuccess("Keine Änderungen vorgenommen.", "Die Zonendaten sind unverändert.");
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
+    exit;
+}
+
+// --- Nur wenn Änderungen vorhanden: Metadaten-Update + Rebuild ---
+
 $pdo->beginTransaction();
 try {
     $stmt = $pdo->prepare("
         UPDATE zones SET
             ttl = ?, prefix_length = ?, description = ?,
+            allow_dyndns = ?,
             soa_ns = ?, soa_mail = ?,
             soa_refresh = ?, soa_retry = ?, soa_expire = ?, soa_minimum = ?
         WHERE id = ?
@@ -164,6 +229,7 @@ try {
         $ttl,
         $type === 'reverse' ? $prefix_length : null,
         $description,
+        $allow_dyndns,
         $soa_ns,
         $soa_mail,
         $soa_refresh,
@@ -173,23 +239,25 @@ try {
         $id
     ]);
 
-    $rebuild = rebuild_zone_and_flag_if_valid($id);
+    if ($hasZoneRelevantChanges) {
+        $rebuild = rebuild_zone_and_flag_if_valid($id);
 
-    if ($rebuild['status'] === 'error') {
-        $pdo->rollBack();
-        toastError(
-            "Zone konnte nicht gespeichert werden, da die Zonendatei ungültig wäre.",
-            $rebuild['output']
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-        exit;
-    }
+        if ($rebuild['status'] === 'error') {
+            $pdo->rollBack();
+            toastError(
+                "Zone konnte nicht gespeichert werden, da die Zonendatei ungültig wäre.",
+                $rebuild['output']
+            );
+            header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
+            exit;
+        }
 
-    if ($rebuild['status'] === 'warning') {
-        toastWarning(
-            "Zone gespeichert – Warnung beim Zonendatei-Check.",
-            $rebuild['output']
-        );
+        if ($rebuild['status'] === 'warning') {
+            toastWarning(
+                "Zone gespeichert – Warnung beim Zonendatei-Check.",
+                $rebuild['output']
+            );
+        }
     }
 
     $pdo->commit();

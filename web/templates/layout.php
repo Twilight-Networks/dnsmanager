@@ -68,7 +68,7 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <title>DNS Manager</title>
+    <title>DNS-Manager</title>
     <base href="<?= rtrim(BASE_URL, '/') ?>/">
     <link rel="icon" href="<?= rtrim(BASE_URL, '/') ?>/assets/branding/favicon.ico" type="image/x-icon">
 
@@ -93,7 +93,10 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
 <div class="sidebar d-flex flex-column p-3">
     <div class="text-center mb-2">
         <img src="<?= rtrim(BASE_URL, '/') ?>/assets/branding/twl_net_logo_small.png" alt="Logo" style="max-width: 70px; height: auto;">
-        <h4 class="mt-2 mb-0">DNS Manager</h4>
+        <h4 class="mt-2 mb-0">DNS-Manager</h4>
+        <small class="text-muted d-block" style="font-size: 0.8rem;">
+            <a href="https://www.twilight-networks.com" target="_blank" rel="noopener noreferrer" class="text-muted text-decoration-none">by Twilight-Networks</a>
+        </small>
     </div>
     <div class="text-center" style="font-size: 0.8rem; padding-right: 8px;">
         v<?= htmlspecialchars(DNSMANAGER_VERSION) ?>
@@ -104,6 +107,9 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
         <a href="pages/servers.php" class="<?= isActive('servers.php') ?>">🖥️ Server</a>
     <?php endif; ?>
     <a href="pages/zones.php" class="<?= isActive('zones.php') ?>">🌐 Zonen</a>
+    <?php if ($_SESSION['role'] === 'admin'): ?>
+        <a href="pages/dyndns.php" class="<?= isActive('dyndns.php') ?>">🌐 DynDNS</a>
+    <?php endif; ?>
     <a href="pages/users.php" class="<?= isActive('users.php') ?>">👥 Benutzer</a>
     <?php if ($_SESSION['role'] === 'admin'): ?>
         <a id="system_healthButton"

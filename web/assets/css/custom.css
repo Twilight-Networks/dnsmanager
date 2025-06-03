@@ -181,12 +181,10 @@ a:active {
    FORMULARE – BREITENVORGABEN FÜR RECORD-FORMULARE
    ========================================================================== */
 
-.colform-mx       { flex: 0 0 28%; max-width: 28%; }
-.colform-mail     { flex: 0 0 18%; max-width: 18%; }
-.colform-name     { flex: 0 0 28%; max-width: 28%; }
-.colform-type     { flex: 0 0 10%; max-width: 10%; }
-.colform-content  { flex: 0 0 28%; max-width: 28%; }
-.colform-ttl      { flex: 0 0 10%; max-width: 10%; }
+.colform-name     { flex: 0 0 32%; max-width: 32%; }
+.colform-type     { flex: 0 0 11%; max-width: 11%; }
+.colform-content  { flex: 0 0 27%; max-width: 27%; }
+.colform-ttl      { flex: 0 0 9%; max-width: 9%; }
 .colform-priority { flex: 0 0 8%; max-width: 8%; }
 .colform-weight   { flex: 0 0 8%; max-width: 8%; }
 .colform-port     { flex: 0 0 8%; max-width: 8%; }
@@ -197,13 +195,16 @@ a:active {
 .colform-ip       { flex: 0 0 15%; max-width: 15%; }
 .colform-key      { flex: 0 0 58%; max-width: 58%; }
 
+/* Zonen-spezifische Felder */
+.colform-zones-mail     { flex: 0 0 18%; max-width: 18%; }
+
 /* DKIM-spezifische Felder */
-.colform-dkim-selector  { flex: 0 0 11%; max-width: 11%; }
+.colform-dkim-selector  { flex: 0 0 15%; max-width: 15%; }
 .colform-dkim-domain    { flex: 0 0 17%; max-width: 17%; }
-.colform-dkim-keytype   { flex: 0 0 10%; max-width: 10%; }
-.colform-dkim-hash      { flex: 0 0 10%; max-width: 10%; }
-.colform-dkim-flags     { flex: 0 0 10%; max-width: 10%; }
-.colform-dkim-keyblock  { flex: 0 0 58%; max-width: 58%; }
+.colform-dkim-keytype   { flex: 0 0 8%; max-width: 8%; }
+.colform-dkim-hash      { flex: 0 0 8%; max-width: 8%; }
+.colform-dkim-flags     { flex: 0 0 8%; max-width: 8%; }
+.colform-dkim-keyblock  { flex: 0 0 56%; max-width: 56%; }
 
 /* Upload-Button (DKIM) */
 .dkim-file-upload {
@@ -262,3 +263,8 @@ table td {
 /* Serververwaltungstabellen */
 .coltbl-server-local  { width: 8%;  white-space: nowrap; }
 .coltbl-server-activ  { width: 8%;  white-space: nowrap; }
+
+/* DynDNS-Verwaltungstabellen */
+.coltbl-dyndns-hostname { width: 10%;  white-space: nowrap; }
+.coltbl-dyndns-zone     { width: 10%;  white-space: nowrap; }
+.coltbl-dyndns-update   { width: 12%;  white-space: nowrap; }

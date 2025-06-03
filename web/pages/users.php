@@ -58,16 +58,24 @@ $csrf_token = csrf_input();
     <?php foreach ($users as $u): ?>
         <?php if ($edit_id === (int)$u['id']): ?>
             <!-- Bearbeitungszeile -->
-            <tr>
-                <td colspan="4">
+            <tr class="table-warning">
+                <td><?= htmlspecialchars($u['username']) ?></td>
+                <td><?= htmlspecialchars($u['role']) ?></td>
+                <td>
                     <?php
                     $user_zone_ids = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
                     $user_zone_ids->execute([$u['id']]);
                     $selected = array_column($user_zone_ids->fetchAll(PDO::FETCH_ASSOC), 'zone_id');
-                    include __DIR__ . '/../templates/user_edit_form.php';
                     ?>
                 </td>
+                <td>
+                    <div class="d-flex flex-wrap gap-1">
+                        <button type="submit" form="editForm_<?= $u['id'] ?>" class="btn btn-sm btn-success">Speichern</button>
+                        <a href="pages/users.php" class="btn btn-sm btn-secondary">Abbrechen</a>
+                    </div>
+                </td>
             </tr>
+            <?php include __DIR__ . '/../templates/user_edit_form.php'; ?>
         <?php else: ?>
             <!-- Normale Benutzeranzeige -->
             <tr>
@@ -126,8 +134,8 @@ $csrf_token = csrf_input();
                             <?php endif; ?>
                         </div>
                         <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
-                            <button type="submit" class="btn btn-primary">Speichern</button>
+                            <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                            <button type="submit" class="btn btn-sm btn-success">Speichern</button>
                         </div>
                     </form>
                 </div>

@@ -51,6 +51,14 @@ Entwickelt von **Twilight-Networks**, 2025.
 - Verteilung der Zonendateien an alle Nameserver ausschließlich über REST-API (kein lokales Shell-Handling)
 - BIND-Reload mit Rückmeldung direkt aus dem Interface
 
+### DynDNS-Support
+- Unterstützung für dynamische DNS-Updates über einen eigenen API-Endpunkt (`/api/v1/dyndns/update.php`)
+- Kompatibel mit gängigen Routern wie AVM FRITZ!Box, DD-WRT, OpenWRT u. a.
+- Verwaltung von DynDNS-Accounts inklusive Subdomain- und IP-Version-Restriktion (IPv4/IPv6)
+- Automatische Aktualisierung existierender A- und AAAA-Records oder Neuanlage bei Bedarf
+- Zugriff durch Basic Auth mit passwortgeschütztem DynDNS-Benutzer
+- Pro Zone separat aktivierbar (Checkbox „DynDNS erlaubt“)
+
 ### Sicherheit & Integrität
 - Alle schreibenden Operationen erfolgen transaktionssicher (ACID)
 - Es können keine ungültigen oder nicht RFC-konformen Zonen geschrieben werden

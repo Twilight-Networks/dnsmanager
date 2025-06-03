@@ -104,7 +104,7 @@ $overall_server_message = $has_server_errors ? '❌ Fehlerhafte Server erkannt' 
     <?php include __DIR__ . '/../templates/server_add_form.php'; ?>
 <?php endif; ?>
 
-<table class="table table-bordered table-hover align-middle">
+<table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
             <th class="coltbl-name">Name</th>

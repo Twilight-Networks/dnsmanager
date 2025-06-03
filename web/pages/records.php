@@ -85,7 +85,7 @@ function render_records_table(array $records, string $title, int $zone_id, ?int 
 
     echo "<h4 class='mt-4'>$title</h4>";
     echo "<div class='table-responsive'>
-            <table class='table table-striped table-bordered table-hover align-middle' style='table-layout: fixed; width: 100%;'>";
+            <table class='table table-striped table-bordered align-middle' style='table-layout: fixed; width: 100%;'>";
     echo "<thead class='table-light'><tr>";
     echo "<th class='coltbl-select'><input type='checkbox' class='form-check-input select-all' data-table-id='" . md5($title) . "'></th>";
 

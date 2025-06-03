@@ -82,8 +82,11 @@ if (!empty($errors)) {
 }
 
 // Bestehende Daten abrufen
-$stmt = $pdo->prepare("SELECT name, dns_ip4, dns_ip6 FROM servers WHERE id = ?");
-$stmt->execute([$id]);
+$stmt = $pdo->prepare("
+    SELECT name, dns_ip4, dns_ip6, api_ip, api_token, is_local, active
+    FROM servers
+    WHERE id = ?
+");$stmt->execute([$id]);
 $existing = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$existing) {
@@ -109,6 +112,20 @@ $server_data_changed = (
     $existing['dns_ip4'] !== $update_data['dns_ip4'] ||
     $existing['dns_ip6'] !== $update_data['dns_ip6']
 );
+
+// Prüfen, ob sich etwas geändert hat (inkl. API, Status etc.)
+$nonCriticalChanged =
+    $existing['active'] !== $update_data['active'] ||
+    $existing['is_local'] !== $update_data['is_local'] ||
+    $existing['api_ip'] !== $update_data['api_ip'] ||
+    $existing['api_token'] !== $update_data['api_token'];
+
+// Wenn gar nichts verändert wurde → sofortiger Abbruch
+if (!$server_data_changed && !$nonCriticalChanged) {
+    toastSuccess("Keine Änderungen vorgenommen.", "Die Serverdaten sind unverändert.");
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
+    exit;
+}
 
 // Verhindern, dass ein aktiver Master-Server deaktiviert wird
 if ($active === 0) {
