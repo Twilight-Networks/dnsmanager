@@ -71,7 +71,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <title>Login - DNS Manager</title>
-    <link href="assets/bootstrap/bootstrap.min.css" rel="stylesheet">
+    <link href="assets/bootstrap/bootstrap.min.css?v=<?= filemtime(__DIR__ . '/../assets/bootstrap/bootstrap.min.css') ?>" rel="stylesheet">
+    <link href="assets/fonts/fonts.css?v=<?= filemtime(__DIR__ . '/../assets/fonts/fonts.css') ?>" rel="stylesheet">
     <link rel="icon" href="<?= rtrim(BASE_URL, '/') ?>/assets/branding/favicon.ico" type="image/x-icon">
 </head>
 <body class="bg-light">

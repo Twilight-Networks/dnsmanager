@@ -23,7 +23,6 @@
  */
 
 declare(strict_types=1);
-define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 

@@ -13,6 +13,7 @@
  * - Der API-Key kann clientseitig per Button als 256-Bit Hexstring generiert werden.
  */
 
+// Zugriffsschutz bei direktem Aufruf
 if (!defined('IN_APP')) {
     http_response_code(403);
     exit('Direkter Zugriff verboten.');

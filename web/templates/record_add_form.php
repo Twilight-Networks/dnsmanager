@@ -18,6 +18,7 @@
  */
 require_once __DIR__ . '/../inc/dkim_helpers.php';
 
+// Zugriffsschutz bei direktem Aufruf
 if (!defined('IN_APP')) {
     http_response_code(403);
     exit('Direkter Zugriff verboten.');

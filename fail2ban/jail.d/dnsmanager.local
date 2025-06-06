@@ -2,7 +2,7 @@
 enabled  = true
 filter   = dnsmanager
 port     = http,https
-logpath  = /var/log/syslog
+logpath  = /var/log/auth.log
 maxretry = 3
 bantime  = 3600
 findtime = 600

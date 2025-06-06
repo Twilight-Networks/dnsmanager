@@ -7,8 +7,20 @@
  * - $zones: Liste aller verfügbaren Zonen
  * - $selected: Array mit IDs der dem Benutzer zugewiesenen Zonen
  * - $admin_count: Anzahl der Admins im System
- * - $csrf_token: CSRF-Eingabefeld
+ * - $csrf_input: CSRF-Eingabefeld
  */
+
+// Zugriffsschutz bei direktem Aufruf
+if (!defined('IN_APP')) {
+    http_response_code(403);
+    exit('Direkter Zugriff verboten.');
+}
+
+// Prüfen auf erforderliche Datenbasis
+if (!isset($u) || !isset($zones) || !isset($selected)) {
+    echo "<div class='alert alert-danger'>Fehlende Daten für das Bearbeitungsformular.</div>";
+    return;
+}
 ?>
 
 <tr class="table-warning table-edit-form">
@@ -19,7 +31,7 @@
               id="editForm_<?= $u['id'] ?>">
 
 
-            <?= $csrf_token ?>
+            <?= csrf_input() ?>
             <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
 
             <div class="row g-3">

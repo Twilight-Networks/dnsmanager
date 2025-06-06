@@ -101,3 +101,45 @@ CREATE TABLE dyndns_accounts (
   - Ursache: fehlende `id="editForm_<id>"` im Formular (`user_edit_form.php`)
   - Folge: Klick auf „Speichern“ hatte keine Wirkung
   - Lösung: Korrektes `form`-Ziel gesetzt
+
+<br>
+<br>
+
+## [1.2.2] – 2025-06-05
+
+### Added
+- **Login-Layout**: Einheitliche Schriftart jetzt auch auf der Login-Seite eingebunden
+  - `fonts.css` wird im Login-Template manuell mit Cache-Busting (`filemtime()`) geladen
+  - Vermeidet Session-Abhängigkeit und sorgt für konsistente Typografie im gesamten Interface
+
+### Changed
+- **DynDNS-Update-Logik erweitert**
+  - Bei Änderung von `hostname` oder `zone` wird jetzt automatisch:
+    - der alte A-/AAAA-Record gelöscht
+    - ein neuer Record mit der gespeicherten IP-Adresse erzeugt (sofern vorhanden)
+    - die betroffenen Zonen per `rebuild_zone_and_flag_if_valid()` neu aufgebaut
+  - Kein Rebuild mehr, wenn weder IPv4 noch IPv6 hinterlegt ist
+  - Rückmeldung im UI differenziert je nach Rebuild-Status
+  - Führt zu höherer Konsistenz zwischen DynDNS-Datenbank und DNS-Zonen
+  - **API-Endpunkt `/api/v1/dyndns/update.php` überarbeitet:**
+    - Authentifizierung nun ausschließlich über Benutzername & Passwort
+    - Hostname und Zone werden vollständig aus dem Account geladen
+    - `hostname`-Parameter ist nicht mehr erforderlich (wird ignoriert)
+
+### Fixed
+- **Fail2Ban Jail**: Falscher `logpath` im Jail `dnsmanager.local` korrigiert
+  - Ursprünglich: `/var/log/syslog`
+  - Neu: `logpath = /var/log/auth.log`
+  - Folge: Jail war ggf. wirkungslos, da keine Logdateien überwacht wurden
+
+- **Benutzerverwaltung**: Bearbeiten und Anlegen von Benutzern konnte zu Fehlern führen
+  - Beim Bearbeiten: PHP-Fehler durch versehentlich überschriebenes `$zones`-Array
+  - Beim Anlegen: Dropdown für Zonen blieb leer bei Auswahl von `zoneadmin`
+  - Ursache: uneinheitliche Nutzung von `$zones` vs. `$allZones` im Template-Kontext
+  - Beides wurde vereinheitlicht durch globale Verwendung von `$zones`
+  - Resultat: Stabile Anzeige & Funktion der Zonenlisten bei Benutzerverwaltung
+
+### Security
+- **CLI-Zugriffsschutz** für interne Skripte `monitoring_run-cli.php` und `monitoring_log_cleanup.php` implementiert
+  - Direkter Aufruf über den Browser (HTTP) ist nun vollständig blockiert (HTTP 403)
+  - Skripte reagieren nur noch auf legitime Ausführung über die Kommandozeile (z. B. per Cron)

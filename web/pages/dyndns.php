@@ -66,27 +66,28 @@ $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <div class="collapse mt-2" id="dyndnsInfoBox">
         <div class="alert alert-info mb-0" role="alert">
             <strong>Hinweis zur DynDNS-Integration:</strong><br><br>
-            Um DynDNS z.&nbsp;B. in einer FRITZ!Box oder einem anderen Router zu nutzen, verwenden Sie folgende Update-URL:<br><br>
-            <div class="input-group input-group-sm mt-2" style="max-width: 820px;">
+            Um DynDNS z.&nbsp;B. in einer <strong>FRITZ!Box</strong> oder einem anderen Router zu nutzen, verwenden Sie folgende Update-URL:<br><br>
+            <div class="input-group input-group-sm mt-2" style="max-width: 700px;">
                 <input type="text"
                        id="dyndnsUrl"
                        class="form-control form-control-sm"
                        readonly
-                       value="https://example.com<?= rtrim(BASE_URL, '/') ?>/api/v1/dyndns/update.php?hostname=&lt;domain&gt;&amp;myip=&lt;ipaddr&gt;&amp;myip6=&lt;ip6addr&gt;">
+                       value="https://example.com<?= rtrim(BASE_URL, '/') ?>/api/v1/dyndns/update.php?myip=&lt;ipaddr&gt;&amp;myip6=&lt;ip6addr&gt;">
                 <button class="btn btn-outline-secondary btn-sm" type="button" onclick="copyDynDnsUrl()" title="In Zwischenablage kopieren">
                     📋
                 </button>
             </div>
             <br>
-            <strong>Erforderliche Parameter:</strong>
+            <strong>Unterstützte Parameter:</strong>
             <ul class="mb-2">
-                <li><code>hostname</code> – Der vollständige Hostname (z. B. <code>meinhost.example.com</code>)</li>
                 <li><code>myip</code> – IPv4-Adresse</li>
                 <li><code>myip6</code> – IPv6-Adresse</li>
             </ul>
+            <br>
             <small class="text-muted">
-                <strong>Hinweis:</strong> Benutzername und Kennwort werden über HTTP Basic Auth übermittelt und müssen im Router entsprechend eingetragen werden.<br>
-                Die Parameter in spitzen Klammern (<code>&lt;…&gt;</code>) werden vom Router automatisch ersetzt – die genaue Bezeichnung kann je nach Gerät variieren.
+                <strong>Wichtig:</strong> Die Authentifizierung erfolgt per HTTP Basic Auth.<br>
+                Benutzername und Kennwort müssen im Router eingetragen werden (z.&nbsp;B. unter <em>Dynamic DNS</em>).<br>
+                Die Platzhalter <code>&lt;ipaddr&gt;</code> und <code>&lt;ip6addr&gt;</code> werden vom Gerät automatisch ersetzt.
             </small>
         </div>
     </div>

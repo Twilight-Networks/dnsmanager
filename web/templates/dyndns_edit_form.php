@@ -19,7 +19,16 @@
  * - POST an `actions/dyndns_update.php`
  */
 
-if (!defined('IN_APP') || !isset($edit_account)) exit;
+// Zugriffsschutz bei direktem Aufruf
+if (!defined('IN_APP')) {
+    http_response_code(403);
+    exit('Direkter Zugriff verboten.');
+}
+
+if (!isset($edit_account)) {
+    echo "<div class='alert alert-danger'>Fehlende Daten für das Bearbeitungsformular (edit_account).</div>";
+    return;
+}
 
 $stmt = $pdo->query("SELECT id, name FROM zones WHERE allow_dyndns = 1 ORDER BY name");
 $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);

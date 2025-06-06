@@ -4,8 +4,8 @@
  * Zweck: Benutzerverwaltung mit Passwort-Modalfunktion
  */
 
+define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
-verify_csrf_token();
 include __DIR__ . '/../templates/layout.php';
 
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
@@ -21,19 +21,18 @@ if ($_SESSION['role'] === 'admin') {
     $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// Liste aller verfügbaren Zonen laden
 $stmt = $pdo->prepare("SELECT id, name FROM zones ORDER BY name");
 $stmt->execute();
 $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Anzahl der Admins (für Löschsperre)
 $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE role = :role");
 $stmt->execute(['role' => 'admin']);
 $admin_count = $stmt->fetchColumn();
-
-$csrf_token = csrf_input();
 ?>
 
-<br>
-<br>
+<br><br>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2>Benutzerverwaltung</h2>
     <?php if ($_SESSION['role'] === 'admin'): ?>
@@ -57,17 +56,16 @@ $csrf_token = csrf_input();
     <tbody>
     <?php foreach ($users as $u): ?>
         <?php if ($edit_id === (int)$u['id']): ?>
-            <!-- Bearbeitungszeile -->
+            <?php
+            // Lade die zugewiesenen Zonen-IDs für das Bearbeitungsformular
+            $user_zone_ids = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
+            $user_zone_ids->execute([$u['id']]);
+            $selected = array_column($user_zone_ids->fetchAll(PDO::FETCH_ASSOC), 'zone_id');
+            ?>
             <tr class="table-warning">
                 <td><?= htmlspecialchars($u['username']) ?></td>
                 <td><?= htmlspecialchars($u['role']) ?></td>
-                <td>
-                    <?php
-                    $user_zone_ids = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
-                    $user_zone_ids->execute([$u['id']]);
-                    $selected = array_column($user_zone_ids->fetchAll(PDO::FETCH_ASSOC), 'zone_id');
-                    ?>
-                </td>
+                <td><em>Bearbeitungsmodus</em></td>
                 <td>
                     <div class="d-flex flex-wrap gap-1">
                         <button type="submit" form="editForm_<?= $u['id'] ?>" class="btn btn-sm btn-success">Speichern</button>
@@ -75,9 +73,10 @@ $csrf_token = csrf_input();
                     </div>
                 </td>
             </tr>
-            <?php include __DIR__ . '/../templates/user_edit_form.php'; ?>
+            <?php
+            include __DIR__ . '/../templates/user_edit_form.php';
+            ?>
         <?php else: ?>
-            <!-- Normale Benutzeranzeige -->
             <tr>
                 <td><?= htmlspecialchars($u['username']) ?></td>
                 <td><?= htmlspecialchars($u['role']) ?></td>
@@ -88,8 +87,8 @@ $csrf_token = csrf_input();
                         <?php
                         $zstmt = $pdo->prepare("SELECT z.name FROM zones z JOIN user_zones uz ON uz.zone_id = z.id WHERE uz.user_id = ?");
                         $zstmt->execute([$u['id']]);
-                        $zones = $zstmt->fetchAll(PDO::FETCH_COLUMN);
-                        foreach ($zones as $zname): ?>
+                        $userZoneNames = $zstmt->fetchAll(PDO::FETCH_COLUMN);
+                        foreach ($userZoneNames as $zname): ?>
                             <span class="badge bg-primary"><?= htmlspecialchars($zname) ?></span>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -101,7 +100,7 @@ $csrf_token = csrf_input();
                     <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $u['id'] ?>">Passwort</button>
                     <?php if ($_SESSION['role'] === 'admin' && !($u['role'] === 'admin' && $admin_count <= 1)): ?>
                         <form method="post" action="actions/user_delete.php" class="d-inline confirm-delete">
-                            <?= $csrf_token ?>
+                            <?= csrf_input() ?>
                             <input type="hidden" name="id" value="<?= $u['id'] ?>">
                             <button class="btn btn-sm btn-outline-danger">Löschen</button>
                         </form>
@@ -110,12 +109,12 @@ $csrf_token = csrf_input();
             </tr>
         <?php endif; ?>
 
-        <!-- Passwort Modal (immer anzeigen, unabhängig vom Bearbeiten-Zustand) -->
+        <!-- Passwort-Modal -->
         <div class="modal fade" id="pwModal<?= $u['id'] ?>" tabindex="-1" aria-labelledby="pwModalLabel<?= $u['id'] ?>" aria-hidden="true">
             <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content">
                     <form method="post" action="actions/user_password.php">
-                        <?= $csrf_token ?>
+                        <?= csrf_input() ?>
                         <input type="hidden" name="id" value="<?= $u['id'] ?>">
                         <div class="modal-header">
                             <h5 class="modal-title" id="pwModalLabel<?= $u['id'] ?>">Passwort ändern für <?= htmlspecialchars($u['username']) ?></h5>

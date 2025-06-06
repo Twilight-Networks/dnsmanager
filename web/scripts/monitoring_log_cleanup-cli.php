@@ -16,15 +16,11 @@
 
 require_once __DIR__ . '/../config/ui_config.php';
 require_once __DIR__ . '/../inc/db.php';
+require_once __DIR__ . '/../inc/helpers_cli.php';
+cliGuard();
 require_once __DIR__ . '/../inc/logging.php';
 
 date_default_timezone_set('UTC');
-
-// Nur CLI erlauben
-if (php_sapi_name() !== 'cli') {
-    http_response_code(403);
-    exit("Nur CLI-Zugriff erlaubt.\n");
-}
 
 appLog('info', 'Monitoring-Log-Cleanup gestartet');
 

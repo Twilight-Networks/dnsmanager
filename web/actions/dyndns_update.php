@@ -22,7 +22,6 @@
  */
 
 declare(strict_types=1);
-define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 
@@ -53,7 +52,7 @@ if (!$stmt->fetch()) {
 }
 
 // Bestehende Werte laden
-$stmt = $pdo->prepare("SELECT zone_id, hostname, username FROM dyndns_accounts WHERE id = ?");
+$stmt = $pdo->prepare("SELECT zone_id, hostname, username, current_ipv4, current_ipv6 FROM dyndns_accounts WHERE id = ?");
 $stmt->execute([$id]);
 $existing = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -62,6 +61,9 @@ if (!$existing) {
     header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');
     exit;
 }
+
+$current_ipv4 = $existing['current_ipv4'] ?? null;
+$current_ipv6 = $existing['current_ipv6'] ?? null;
 
 // Vergleich: Nur dann speichern, wenn sich wirklich etwas geändert hat
 $usernameChanged = trim((string)$existing['username']) !== trim($username);
@@ -75,6 +77,7 @@ if (!$hostnameChanged && !$zoneChanged && !$usernameChanged && !$passwordChanged
     exit;
 }
 
+$pdo->beginTransaction();
 try {
     if ($passwordChanged) {
         $hash = password_hash($password, PASSWORD_BCRYPT);
@@ -92,8 +95,70 @@ try {
         ");
         $stmt->execute([$hostname, $zone_id, $username, $id]);
     }
-    toastSuccess('DynDNS-Account aktualisiert.');
-} catch (PDOException $e) {
+
+    $affected_zones = [];
+
+    // Wenn Hostname oder Zone geändert wurde, DNS-Records entsprechend anpassen
+    if ($hostnameChanged || $zoneChanged) {
+        // A/AAAA Records in alter Zone löschen
+        $stmt = $pdo->prepare("
+            DELETE FROM records WHERE zone_id = ? AND name = ? AND type IN ('A', 'AAAA')
+        ");
+        $stmt->execute([$existing['zone_id'], $existing['hostname']]);
+        $affected_zones[] = $existing['zone_id'];
+
+        // Neue A/AAAA-Records in neuer Zone anlegen – mit bestehenden IPs
+        $hasInsertedAny = false;
+
+        if (!empty($current_ipv4)) {
+            $stmt = $pdo->prepare("
+                INSERT INTO records (zone_id, name, type, content, ttl)
+                VALUES (?, ?, 'A', ?, 300)
+            ");
+            $stmt->execute([$zone_id, $hostname, $current_ipv4]);
+            $hasInsertedAny = true;
+        }
+
+        if (!empty($current_ipv6)) {
+            $stmt = $pdo->prepare("
+                INSERT INTO records (zone_id, name, type, content, ttl)
+                VALUES (?, ?, 'AAAA', ?, 300)
+            ");
+            $stmt->execute([$zone_id, $hostname, $current_ipv6]);
+            $hasInsertedAny = true;
+        }
+
+        if (!$hasInsertedAny) {
+            toastWarning('Keine IP übernommen.', 'Es wurden keine A-/AAAA-Records gesetzt, da keine aktuelle IP vorliegt.');
+        }
+
+        $affected_zones[] = $zone_id;
+    }
+
+    // Zonen neu bauen – aber nur, wenn mindestens ein Record geschrieben wurde
+    if (!empty($affected_zones) && $hasInsertedAny) {
+        $affected_zones = array_unique($affected_zones);
+        foreach ($affected_zones as $zid) {
+            $result = rebuild_zone_and_flag_if_valid((int)$zid);
+            if ($result['status'] === 'error') {
+                $pdo->rollBack();
+                toastError("Zonen-Rebuild fehlgeschlagen für Zone-ID {$zid}.", $result['output']);
+                header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?edit_id=' . $id);
+                exit;
+            } elseif ($result['status'] === 'warning') {
+                toastWarning("Warnung beim Zonen-Rebuild für Zone-ID {$zid}.", $result['output']);
+            }
+        }
+    }
+
+    $pdo->commit();
+    if (!empty($affected_zones) && $hasInsertedAny) {
+        toastSuccess('DynDNS-Account aktualisiert.', 'Änderungen gespeichert und betroffene Zonen rebuildet.');
+    } else {
+        toastSuccess('DynDNS-Account aktualisiert.', 'Änderungen gespeichert – kein Zonen-Rebuild notwendig.');
+    }
+} catch (Throwable $e) {
+    $pdo->rollBack();
     toastError('Fehler beim Speichern: ' . $e->getMessage());
 }
 

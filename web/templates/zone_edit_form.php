@@ -13,6 +13,11 @@ if (!defined('IN_APP')) {
     exit('Direkter Zugriff verboten.');
 }
 
+if (!isset($zone)) {
+    echo "<div class='alert alert-danger'>Fehlende Zoneninformationen für das Bearbeitungsformular.</div>";
+    return;
+}
+
 $stmt_all = $pdo->prepare("SELECT id, name, dns_ip4, dns_ip6 FROM servers WHERE active = 1 ORDER BY name");
 $stmt_all->execute();
 $all_servers = $stmt_all->fetchAll(PDO::FETCH_ASSOC);

@@ -14,12 +14,15 @@
  * - Das Formular sendet die Daten an `server_update.php`.
  */
 
-if (!isset($edit_server))
-    exit;
-
+// Zugriffsschutz bei direktem Aufruf
 if (!defined('IN_APP')) {
     http_response_code(403);
     exit('Direkter Zugriff verboten.');
+}
+
+if (!isset($edit_server)) {
+    echo "<div class='alert alert-danger'>Fehlende Daten für das Bearbeitungsformular (edit_account).</div>";
+    return;
 }
 ?>
 

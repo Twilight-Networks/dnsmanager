@@ -4,15 +4,21 @@
  * Zweck: Formular zur Anlage eines neuen Benutzers.
  * Voraussetzungen:
  * - $zones: Liste aller verfügbaren Zonen (id, name)
- * - $csrf_token: CSRF-Eingabefeld (vorberechnet, z. B. über csrf_input())
+ * - $csrf_input: CSRF-Eingabefeld
  */
+
+// Zugriffsschutz bei direktem Aufruf
+if (!defined('IN_APP')) {
+    http_response_code(403);
+    exit('Direkter Zugriff verboten.');
+}
 ?>
 
 <hr class="my-4">
 <h4 class="mt-4">Neuen Benutzer anlegen</h4>
 
 <form method="post" action="actions/user_add.php" class="row g-3">
-    <?= $csrf_token ?>
+    <?= csrf_input() ?>
 
     <div class="col-md-3">
         <label>Benutzername</label>
