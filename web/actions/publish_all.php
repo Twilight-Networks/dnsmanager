@@ -77,16 +77,16 @@ try {
         if ($dist_result['status'] === 'error') {
             foreach ($dist_result['errors'] as $e) {
                 $errors[] = "Zone $zone_name: $e";
-                error_log("[publish] $e");
+                appLog('error', "[publish] $e");
             }
         } elseif ($dist_result['status'] === 'warning') {
             foreach ($dist_result['errors'] as $e) {
                 $warnings[] = "Zone $zone_name: $e";
-                error_log("[publish] WARNUNG: $e");
+                appLog('warning', "[publish] $e");
             }
         }
         if (!empty($dist_result['output'])) {
-            error_log("[publish] $dist_result[output]");
+            appLog('info', "[publish] $dist_result[output]");
         }
 
          // Konfigurationsdatei (.conf) für Zone erstellen und verteilen
@@ -94,11 +94,19 @@ try {
         if (!empty($conf_result['errors'])) {
             foreach ($conf_result['errors'] as $e) {
                 $warnings[] = "Zone $zone_name (conf): $e";
-                error_log("[publish] WARNUNG: $e");
+                appLog('warning', "[publish] $e");
             }
         }
         if (!empty($conf_result['output'])) {
-            error_log("[publish] $conf_result[output]");
+            if (($conf_result['status'] ?? '') === 'warning') {
+                $warnings[] = "Zone $zone_name (conf): " . $conf_result['output'];
+                appLog('warning', "[publish] " . $conf_result['output']);
+            } elseif (($conf_result['status'] ?? '') === 'error') {
+                $errors[] = "Zone $zone_name (conf): " . $conf_result['output'];
+                appLog('error', "[publish] " . $conf_result['output']);
+            } else {
+                appLog('info', "[publish] " . $conf_result['output']);
+            }
         }
     }
 
@@ -111,13 +119,13 @@ try {
         // Ergebnis anzeigen
         if (empty($warnings)) {
             toastSuccess(
-                "Alle Zonen erfolgreich veröffentlicht.",
+                $LANG['publish_all_success'],
                 "Alle Zonendateien wurden erfolgreich verteilt und BIND wurde neu geladen."
             );
         } else {
             foreach ($warnings as $w) {
                 toastWarning(
-                    "Warnung bei Veröffentlichung: $w",
+                    $LANG['publish_all_warning'],
                     "Veröffentlichung abgeschlossen mit Warnung: $w"
                 );
             }
@@ -125,14 +133,14 @@ try {
     } else {
         foreach ($errors as $e) {
             toastError(
-                "Fehler bei Veröffentlichung: $e",
+                $LANG['publish_all_error'],
                 "Veröffentlichung fehlgeschlagen: $e"
             );
         }
     }
 } catch (Throwable $e) {
     toastError(
-        "Veröffentlichung fehlgeschlagen.",
+        $LANG['publish_all_exception'],
         "Systemfehler beim Publish: " . $e->getMessage()
     );
 }

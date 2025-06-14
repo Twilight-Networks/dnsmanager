@@ -19,7 +19,7 @@ include __DIR__ . '/../templates/layout.php';
 
 <br>
 <br>
-<h2 class="mb-4">Willkommen, <?= htmlspecialchars($_SESSION['username']) ?></h2>
+<h2 class="mb-4"><?= $LANG['welcome'] ?>, <?= htmlspecialchars($_SESSION['username']) ?></h2>
 
 <?php if ($_SESSION['role'] === 'admin'): ?>
     <?php
@@ -98,18 +98,18 @@ include __DIR__ . '/../templates/layout.php';
 
     <div class="card mb-4">
         <div class="card-body">
-            <h5>Systemstatus</h5>
+            <h5><?= $LANG['system_status'] ?></h5>
             <?php if ($system_has_errors): ?>
                 <div class="alert alert-danger mb-0">
-                    ❌ Es wurden Probleme erkannt. Details unter <a href="pages/system_health.php">Systemstatus</a>.
+                    ❌ <?= $LANG['system_error'] ?><a href="pages/system_health.php"><?= $LANG['system_status'] ?></a>.
                 </div>
             <?php elseif ($system_has_warnings): ?>
                 <div class="alert alert-warning mb-0">
-                    ⚠️ Es wurden Warnungen erkannt. Details unter <a href="pages/system_health.php">Systemstatus</a>.
+                    ⚠️ <?= $LANG['system_warning'] ?><a href="pages/system_health.php"><?= $LANG['system_status'] ?></a>.
                 </div>
             <?php else: ?>
                 <div class="alert alert-success mb-0">
-                    ✅ Systemstatus fehlerfrei.
+                    ✅ <?= $LANG['system_ok'] ?>
                 </div>
             <?php endif; ?>
         </div>
@@ -117,9 +117,9 @@ include __DIR__ . '/../templates/layout.php';
     <br>
 
     <div class="row mb-4">
-        <div class="col"><div class="card text-bg-light mb-3"><div class="card-body">👥 Benutzer: <strong><?= $users ?></strong></div></div></div>
-        <div class="col"><div class="card text-bg-light mb-3"><div class="card-body">🌐 Zonen: <strong><?= $zones ?></strong></div></div></div>
-        <div class="col"><div class="card text-bg-light mb-3"><div class="card-body">📄 Records: <strong><?= $records ?></strong></div></div></div>
+        <div class="col"><div class="card text-bg-light mb-3"><div class="card-body">👥 <?= $LANG['users'] ?>: <strong><?= $users ?></strong></div></div></div>
+        <div class="col"><div class="card text-bg-light mb-3"><div class="card-body">🌐 <?= $LANG['zones'] ?>: <strong><?= $zones ?></strong></div></div></div>
+        <div class="col"><div class="card text-bg-light mb-3"><div class="card-body">📄 <?= $LANG['records'] ?>: <strong><?= $records ?></strong></div></div></div>
     </div>
 <?php endif; ?>
 
@@ -130,7 +130,7 @@ include __DIR__ . '/../templates/layout.php';
     $stmt->execute([$_SESSION['user_id']]);
     $zones = $stmt->fetchAll();
     ?>
-    <h4>Meine Zonen</h4>
+    <h4><?= $LANG['my_zones'] ?></h4>
     <ul>
         <?php foreach ($zones as $z): ?>
             <li><a href="pages/records.php?zone_id=<?= $z['id'] ?>"><?= htmlspecialchars($z['name']) ?></a></li>

@@ -54,40 +54,42 @@ $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 <br><br>
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2>DynDNS-Accounts</h2>
-    <a href="pages/dyndns.php?add_new=1" class="btn btn-success">+ Neuer DynDNS-Account</a>
+    <h2><?= $LANG['dyndns_accounts'] ?></h2>
+    <a href="pages/dyndns.php?add_new=1" class="btn btn-success">+ <?= $LANG['add_dyndns_account'] ?></a>
 </div>
 
 <!-- Ausklappbare Info-Box zur DynDNS-Integration -->
 <div class="mb-3">
     <button class="btn btn-outline-info btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#dyndnsInfoBox">
-        ℹ️ Informationen zur DynDNS-Integration anzeigen
+        ℹ️ <?= $LANG['dyndns_info_toggle'] ?>
     </button>
     <div class="collapse mt-2" id="dyndnsInfoBox">
         <div class="alert alert-info mb-0" role="alert">
-            <strong>Hinweis zur DynDNS-Integration:</strong><br><br>
-            Um DynDNS z.&nbsp;B. in einer <strong>FRITZ!Box</strong> oder einem anderen Router zu nutzen, verwenden Sie folgende Update-URL:<br><br>
+            <strong><?= $LANG['dyndns_info_title'] ?></strong><br><br>
+
+            <?= $LANG['dyndns_info_text_1'] ?><br><br>
+
             <div class="input-group input-group-sm mt-2" style="max-width: 700px;">
                 <input type="text"
                        id="dyndnsUrl"
                        class="form-control form-control-sm"
                        readonly
                        value="https://example.com<?= rtrim(BASE_URL, '/') ?>/api/v1/dyndns/update.php?myip=&lt;ipaddr&gt;&amp;myip6=&lt;ip6addr&gt;">
-                <button class="btn btn-outline-secondary btn-sm" type="button" onclick="copyDynDnsUrl()" title="In Zwischenablage kopieren">
+                <button class="btn btn-outline-secondary btn-sm" type="button" onclick="copyDynDnsUrl()" title="<?= $LANG['dyndns_copy_title'] ?>">
                     📋
                 </button>
             </div>
+
             <br>
-            <strong>Unterstützte Parameter:</strong>
+            <strong><?= $LANG['dyndns_supported_parameters'] ?></strong>
             <ul class="mb-2">
-                <li><code>myip</code> – IPv4-Adresse</li>
-                <li><code>myip6</code> – IPv6-Adresse</li>
+                <li><code>myip</code> – <?= $LANG['ipv4_address'] ?></li>
+                <li><code>myip6</code> – <?= $LANG['ipv6_address'] ?></li>
             </ul>
+
             <br>
             <small class="text-muted">
-                <strong>Wichtig:</strong> Die Authentifizierung erfolgt per HTTP Basic Auth.<br>
-                Benutzername und Kennwort müssen im Router eingetragen werden (z.&nbsp;B. unter <em>Dynamic DNS</em>).<br>
-                Die Platzhalter <code>&lt;ipaddr&gt;</code> und <code>&lt;ip6addr&gt;</code> werden vom Gerät automatisch ersetzt.
+                <strong><?= $LANG['important'] ?></strong> <?= $LANG['dyndns_info_auth'] ?>
             </small>
         </div>
     </div>
@@ -100,13 +102,13 @@ $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
-            <th class="coltbl-users-name">Benutzername</th>
-            <th class="coltbl-dyndns-hostname">Hostname</th>
-            <th class="coltbl-dyndns-zone">Zone</th>
-            <th class="coltbl-ip">IPv4</th>
-            <th class="coltbl-ip">IPv6</th>
-            <th class="coltbl-dyndns-update">Letztes Update</th>
-            <th class="coltbl-actions">Aktionen</th>
+            <th><?= $LANG['username'] ?></th>
+            <th><?= $LANG['hostname'] ?></th>
+            <th><?= $LANG['zone'] ?></th>
+            <th>IPv4</th>
+            <th>IPv6</th>
+            <th><?= $LANG['last_update'] ?></th>
+            <th><?= $LANG['actions'] ?></th>
         </tr>
     </thead>
     <tbody>
@@ -121,8 +123,8 @@ $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <td><?= $acc['last_update'] ? htmlspecialchars($acc['last_update']) : '-' ?></td>
                     <td>
                         <div class="d-flex flex-wrap gap-1">
-                            <button type="submit" form="editForm_<?= $acc['id'] ?>" class="btn btn-sm btn-success">Speichern</button>
-                            <a href="pages/dyndns.php" class="btn btn-sm btn-secondary">Abbrechen</a>
+                            <button type="submit" form="editForm_<?= $acc['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                            <a href="pages/dyndns.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
                         </div>
                     </td>
                 </tr>
@@ -137,12 +139,12 @@ $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <td><?= $acc['last_update'] ? htmlspecialchars($acc['last_update']) : '-' ?></td>
                     <td>
                         <div class="d-flex flex-wrap gap-1">
-                            <a href="pages/dyndns.php?edit_id=<?= $acc['id'] ?>" class="btn btn-sm btn-outline-primary">Bearbeiten</a>
-                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $acc['id'] ?>">Passwort</button>
+                            <a href="pages/dyndns.php?edit_id=<?= $acc['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
+                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $acc['id'] ?>"><?= $LANG['password'] ?></button>
                             <form method="post" action="actions/dyndns_delete.php" class="d-inline confirm-delete">
                                 <?= csrf_input() ?>
                                 <input type="hidden" name="id" value="<?= $acc['id'] ?>">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">Löschen</button>
+                                <button type="submit" class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
                             </form>
                         </div>
                     </td>
@@ -157,18 +159,20 @@ $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
                             <?= csrf_input() ?>
                             <input type="hidden" name="id" value="<?= $acc['id'] ?>">
                             <div class="modal-header">
-                                <h5 class="modal-title" id="pwModalLabel<?= $acc['id'] ?>">Passwort ändern für <?= htmlspecialchars($acc['username']) ?></h5>
+                                <h5 class="modal-title" id="pwModalLabel<?= $acc['id'] ?>">
+                                    <?= sprintf($LANG['change_password_for'], htmlspecialchars($acc['username'])) ?>
+                                </h5>
                                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
                             </div>
                             <div class="modal-body">
                                 <div class="mb-3">
-                                    <label class="form-label">Neues Passwort</label>
+                                    <label class="form-label"><?= $LANG['new_password'] ?></label>
                                     <input type="password" name="password" class="form-control" required>
                                 </div>
                             </div>
                             <div class="modal-footer">
-                                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
-                                <button type="submit" class="btn btn-sm btn-success">Speichern</button>
+                                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
+                                <button type="submit" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
                             </div>
                         </form>
                     </div>

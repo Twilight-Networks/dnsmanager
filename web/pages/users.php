@@ -34,9 +34,9 @@ $admin_count = $stmt->fetchColumn();
 
 <br><br>
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2>Benutzerverwaltung</h2>
+    <h2><?= $LANG['user_management'] ?></h2>
     <?php if ($_SESSION['role'] === 'admin'): ?>
-        <a href="pages/users.php?add_new=1" class="btn btn-success">+ Neuer Benutzer</a>
+        <a href="pages/users.php?add_new=1" class="btn btn-success">+ <?= $LANG['add_user'] ?></a>
     <?php endif; ?>
 </div>
 
@@ -47,10 +47,10 @@ $admin_count = $stmt->fetchColumn();
 <table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
-            <th class="coltbl-users-name">Benutzername</th>
+            <th class="coltbl-users-name"><?= $LANG['username'] ?></th>
             <th class="coltbl-users-role">Rolle</th>
-            <th class="coltbl-users-zones">Zonen</th>
-            <th class="coltbl-actions">Aktionen</th>
+            <th class="coltbl-users-zones"><?= $LANG['zones'] ?></th>
+            <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
         </tr>
     </thead>
     <tbody>
@@ -65,11 +65,11 @@ $admin_count = $stmt->fetchColumn();
             <tr class="table-warning">
                 <td><?= htmlspecialchars($u['username']) ?></td>
                 <td><?= htmlspecialchars($u['role']) ?></td>
-                <td><em>Bearbeitungsmodus</em></td>
+                <td><em><?= $LANG['edit_mode'] ?></em></td>
                 <td>
                     <div class="d-flex flex-wrap gap-1">
-                        <button type="submit" form="editForm_<?= $u['id'] ?>" class="btn btn-sm btn-success">Speichern</button>
-                        <a href="pages/users.php" class="btn btn-sm btn-secondary">Abbrechen</a>
+                        <button type="submit" form="editForm_<?= $u['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                        <a href="pages/users.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
                     </div>
                 </td>
             </tr>
@@ -82,7 +82,7 @@ $admin_count = $stmt->fetchColumn();
                 <td><?= htmlspecialchars($u['role']) ?></td>
                 <td>
                     <?php if ($u['role'] === 'admin'): ?>
-                        <em>Alle Zonen</em>
+                        <em><?= $LANG['all_zones'] ?></em>
                     <?php else: ?>
                         <?php
                         $zstmt = $pdo->prepare("SELECT z.name FROM zones z JOIN user_zones uz ON uz.zone_id = z.id WHERE uz.user_id = ?");
@@ -95,14 +95,14 @@ $admin_count = $stmt->fetchColumn();
                 </td>
                 <td class="d-flex flex-wrap gap-1">
                     <?php if ($_SESSION['role'] === 'admin'): ?>
-                        <a href="pages/users.php?edit_id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-primary">Bearbeiten</a>
+                        <a href="pages/users.php?edit_id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
                     <?php endif; ?>
-                    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $u['id'] ?>">Passwort</button>
+                    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $u['id'] ?>"><?= $LANG['password'] ?></button>
                     <?php if ($_SESSION['role'] === 'admin' && !($u['role'] === 'admin' && $admin_count <= 1)): ?>
                         <form method="post" action="actions/user_delete.php" class="d-inline confirm-delete">
                             <?= csrf_input() ?>
                             <input type="hidden" name="id" value="<?= $u['id'] ?>">
-                            <button class="btn btn-sm btn-outline-danger">Löschen</button>
+                            <button class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
                         </form>
                     <?php endif; ?>
                 </td>
@@ -117,24 +117,26 @@ $admin_count = $stmt->fetchColumn();
                         <?= csrf_input() ?>
                         <input type="hidden" name="id" value="<?= $u['id'] ?>">
                         <div class="modal-header">
-                            <h5 class="modal-title" id="pwModalLabel<?= $u['id'] ?>">Passwort ändern für <?= htmlspecialchars($u['username']) ?></h5>
+                            <h5 class="modal-title" id="pwModalLabel<?= $u['id'] ?>">
+                                <?= sprintf($LANG['change_password_for'], htmlspecialchars($u['username'])) ?>
+                            </h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
                         </div>
                         <div class="modal-body">
                             <div class="mb-3">
-                                <label class="form-label">Neues Passwort</label>
+                                <label class="form-label"><?= $LANG['new_password'] ?></label>
                                 <input type="password" name="password" class="form-control" required>
                             </div>
                             <?php if ($_SESSION['user_id'] === $u['id']): ?>
                                 <div class="mb-3">
-                                    <label class="form-label">Passwort wiederholen</label>
+                                    <label class="form-label"><?= $LANG['repeat_password'] ?></label>
                                     <input type="password" name="password_repeat" class="form-control" required>
                                 </div>
                             <?php endif; ?>
                         </div>
                         <div class="modal-footer">
-                            <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
-                            <button type="submit" class="btn btn-sm btn-success">Speichern</button>
+                            <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
+                            <button type="submit" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
                         </div>
                     </form>
                 </div>

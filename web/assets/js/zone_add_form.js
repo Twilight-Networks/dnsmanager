@@ -67,11 +67,11 @@ function updateZonePrefixPlaceholder() {
 
     const type = zoneType.value;
     if (type === 'forward') {
-        prefixField.placeholder = 'z. B. example.com';
+        prefixField.placeholder = lang('for_example') + ' example.com';
     } else if (type === 'reverse_ipv4') {
-        prefixField.placeholder = 'z. B. 1.168.192';
+        prefixField.placeholder = lang('for_example') + ' 1.168.192';
     } else if (type === 'reverse_ipv6') {
-        prefixField.placeholder = 'z. B. b.a.9.8.7';
+        prefixField.placeholder = lang('for_example') + ' b.a.9.8.7';
     }
 }
 
@@ -143,20 +143,20 @@ window.addEventListener('DOMContentLoaded', function () {
         const masterRadio = document.querySelector('input[name="master_server_id"]:checked');
 
         if (serverCheckboxes.length === 0) {
-            alert("Bitte mindestens einen DNS-Server auswählen.");
+            alert(lang('zone_form_no_server_selected'));
             e.preventDefault();
             return;
         }
 
         if (!masterRadio) {
-            alert("Bitte einen Master-Server auswählen.");
+            alert(lang('zone_form_no_master_selected'));
             e.preventDefault();
             return;
         }
 
         const selectedServerIds = Array.from(serverCheckboxes).map(cb => cb.value);
         if (!selectedServerIds.includes(masterRadio.value)) {
-            alert("Der gewählte Master-Server muss auch bei den ausgewählten DNS-Servern markiert sein.");
+            alert(lang('zone_form_master_not_among_selected'));
             e.preventDefault();
         }
     });

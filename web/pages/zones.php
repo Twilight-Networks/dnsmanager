@@ -34,7 +34,7 @@ if ($_SESSION['role'] === 'admin') {
 $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // Server-Zuweisungen pro Zone laden (für Master/Secondary-Anzeige)
 $stmt_links = $pdo->prepare("
-    SELECT zs.zone_id, s.name, zs.is_master
+    SELECT zs.zone_id, s.name, zs.is_master, s.active
     FROM zone_servers zs
     JOIN servers s ON s.id = zs.server_id
     ORDER BY s.name
@@ -44,7 +44,7 @@ $stmt_links->execute();
 $server_links = [];
 while ($row = $stmt_links->fetch(PDO::FETCH_ASSOC)) {
     $server_links[$row['zone_id']][] = [
-        'name' => $row['name'],
+        'name' => $row['active'] ? $row['name'] : $row['name'] . ' (' . $LANG['inactive'] . ')',
         'is_master' => (bool)$row['is_master']
     ];
 }
@@ -112,9 +112,9 @@ $reverse_zones = array_filter($zones, fn($z) => $z['type'] === 'reverse');
 <br>
 <br>
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2>DNS-Zonen</h2>
+    <h2><?= $LANG['dns_zones'] ?></h2>
     <?php if ($_SESSION['role'] === 'admin'): ?>
-        <a href="pages/zones.php?add_new=1" class="btn btn-success">+ Neue Zone</a>
+        <a href="pages/zones.php?add_new=1" class="btn btn-success">+ <?= $LANG['add_zone'] ?></a>
     <?php endif; ?>
 </div>
 
@@ -148,14 +148,15 @@ foreach ($zone_results as $entry) {
 
 // Zusammenfassung für Statusanzeige oben
 $overall_zone_class = $has_zone_errors ? 'danger' : ($has_zone_warnings ? 'warning' : 'success');
-$overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
-    ($has_zone_warnings ? '⚠️ Warnungen bei der Zonenprüfung' : '✅ Alle Zonen gültig');
+$overall_zone_message = $has_zone_errors
+    ? '❌ ' . $LANG['zone_errors']
+    : ($has_zone_warnings ? '⚠️ ' . $LANG['zone_warnings'] : '✅ ' . $LANG['zone_ok']);
 ?>
 
 <!-- Visualisierung: Zonenstatus-Box mit optional ausklappbaren Details -->
 <div class="card mb-4"<?= $overall_zone_class !== 'success' ? ' onclick="toggleZoneDiagnostics()" style="cursor: pointer;"' : '' ?>>
     <div class="card-body">
-        <h5>Zonenstatus</h5>
+        <h5><?= $LANG['zone_status'] ?></h5>
         <div class="alert alert-<?= $overall_zone_class ?> mb-0">
             <?= $overall_zone_message ?>
         </div>
@@ -169,15 +170,15 @@ $overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
 <br>
 
 <!-- Forward Lookup Zonen -->
-<h4>Forward Lookup Zonen</h4>
+<h4>Forward Lookup <?= $LANG['zones'] ?></h4>
 <table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
-            <th>Name</th>
+            <th><?= $LANG['name'] ?></th>
             <th class="coltbl-ttl">TTL</th>
-            <th class="coltbl-desc">Beschreibung</th>
-            <th class="coltbl-dnssrv">DNS-Server</th>
-            <th class="coltbl-actions">Aktionen</th>
+            <th class="coltbl-desc"><?= $LANG['description'] ?></th>
+            <th class="coltbl-dnssrv"><?= $LANG['dns_servers'] ?></th>
+            <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
         </tr>
     </thead>
     <tbody>
@@ -186,13 +187,13 @@ $overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
             <tr class="<?= ($edit_id === (int)$zone['id']) ? 'table-warning' : '' ?>">
                 <td>
                     <?php if ($zone['status'] === 'error'): ?>
-                        <span title="Fehlerhafte Zonendatei">❌</span>
+                        <span title="<?= $LANG['zone_icon_error'] ?>">❌</span>
                     <?php elseif ($zone['status'] === 'warning'): ?>
-                        <span title="Warnung bei named-checkzone">⚠️</span>
+                        <span title="<?= $LANG['zone_icon_warning'] ?>">⚠️</span>
                     <?php elseif ($zone['status'] === 'changed'): ?>
-                        <span title="Änderung noch nicht veröffentlicht">⏳</span>
+                        <span title="<?= $LANG['zone_icon_changed'] ?>">⏳</span>
                     <?php elseif ($zone['status'] === 'ok'): ?>
-                        <span title="Zonendatei gültig">✅</span>
+                        <span title="<?= $LANG['zone_icon_ok'] ?>">✅</span>
                     <?php endif; ?>
                     <?= htmlspecialchars($zone['name']) ?>
                 </td>
@@ -200,26 +201,33 @@ $overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
                 <td><?= htmlspecialchars($zone['description'] ?? '') ?></td>
                 <td>
                     <?php foreach ($zone['servers'] as $srv): ?>
-                        <span class="badge <?= $srv['is_master'] ? 'bg-primary' : 'bg-secondary' ?>">
-                            <?= $srv['is_master'] ? 'Master' : 'Slave' ?>: <?= htmlspecialchars($srv['name']) ?>
-                        </span><br>
+                        <?php
+                        $is_inactive = stripos($srv['name'], ' (' . $LANG['inactive'] . ')') !== false;
+                        $badge_class = $srv['is_master'] ? 'bg-primary' : 'bg-secondary';
+                        $badge_style = $is_inactive ? 'opacity: 0.5;' : '';
+                        ?>
+                        <span class="badge <?= $badge_class ?>" style="<?= $badge_style ?>"
+                              title="<?= $is_inactive ? $LANG['server_inactive'] : '' ?>">
+                            <?= $srv['is_master'] ? 'Master' : 'Slave' ?>:
+                            <?= htmlspecialchars($srv['name']) ?>
+                        </span>
                     <?php endforeach; ?>
                 </td>
                 <td class="coltbl-actions">
                     <div class="d-flex flex-wrap gap-1">
                         <?php if ($edit_id === (int)$zone['id']): ?>
-                            <button type="submit" form="editForm_<?= $zone['id'] ?>" class="btn btn-sm btn-success">Speichern</button>
-                            <a href="pages/zones.php" class="btn btn-sm btn-secondary">Abbrechen</a>
+                            <button type="submit" form="editForm_<?= $zone['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                            <a href="pages/zones.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
                         <?php else: ?>
                             <?php if (in_array($_SESSION['role'], ['admin', 'zoneadmin'])): ?>
-                                <a href="pages/zones.php?edit_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-primary">Bearbeiten</a>
+                                <a href="pages/zones.php?edit_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
                             <?php endif; ?>
-                            <a href="pages/records.php?zone_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-warning">Einträge</a>
+                            <a href="pages/records.php?zone_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-warning"><?= $LANG['records'] ?></a>
                             <?php if ($_SESSION['role'] === 'admin'): ?>
                                 <form method="post" action="actions/zone_delete.php" class="d-inline confirm-delete">
                                     <?= csrf_input() ?>
                                     <input type="hidden" name="id" value="<?= $zone['id'] ?>">
-                                    <button class="btn btn-sm btn-outline-danger">Löschen</button>
+                                    <button class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
                                 </form>
                             <?php endif; ?>
                         <?php endif; ?>
@@ -236,16 +244,16 @@ $overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
 </table>
 <br>
 <br>
-<h4>Reverse Lookup Zonen</h4>
+<h4>Reverse Lookup <?= $LANG['zones'] ?></h4>
 <table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
-            <th>Name</th>
+            <th><?= $LANG['name'] ?></th>
             <th class="prefix">Prefix</th>
             <th class="coltbl-ttl">TTL</th>
-            <th class="coltbl-desc">Beschreibung</th>
-            <th class="coltbl-dnssrv">DNS-Server</th>
-            <th class="coltbl-actions">Aktionen</th>
+            <?= $LANG['description'] ?>
+            <th class="coltbl-dnssrv"><?= $LANG['dns_servers'] ?></th>
+            <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
         </tr>
     </thead>
     <tbody>
@@ -268,26 +276,33 @@ $overall_zone_message = $has_zone_errors ? '❌ Fehlerhafte Zonen vorhanden' :
                 <td class="coltbl-desc"><?= htmlspecialchars((string)($zone['description'] ?? '')) ?></td>
                 <td>
                     <?php foreach ($zone['servers'] as $srv): ?>
-                        <span class="badge <?= $srv['is_master'] ? 'bg-primary' : 'bg-secondary' ?>">
-                            <?= $srv['is_master'] ? 'Master' : 'Slave' ?>: <?= htmlspecialchars($srv['name']) ?>
+                        <?php
+                        $is_inactive = stripos($srv['name'], ' (' . $LANG['inactive'] . ')') !== false;
+                        $badge_class = $srv['is_master'] ? 'bg-primary' : 'bg-secondary';
+                        $badge_style = $is_inactive ? 'opacity: 0.5;' : '';
+                        ?>
+                        <span class="badge <?= $badge_class ?>" style="<?= $badge_style ?>"
+                              title="<?= $is_inactive ? 'Dieser Server ist derzeit deaktiviert.' : '' ?>">
+                            <?= $srv['is_master'] ? 'Master' : 'Slave' ?>:
+                            <?= htmlspecialchars($srv['name']) ?>
                         </span><br>
                     <?php endforeach; ?>
                 </td>
                 <td class="coltbl-actions">
                     <div class="d-flex flex-wrap gap-1">
                         <?php if ($edit_id === (int)$zone['id']): ?>
-                            <button type="submit" form="editForm_<?= $zone['id'] ?>" class="btn btn-sm btn-success">Speichern</button>
-                            <a href="pages/zones.php" class="btn btn-sm btn-secondary">Abbrechen</a>
+                            <button type="submit" form="editForm_<?= $zone['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                            <a href="pages/zones.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
                         <?php else: ?>
                             <?php if (in_array($_SESSION['role'], ['admin', 'zoneadmin'])): ?>
-                                <a href="pages/zones.php?edit_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-primary">Bearbeiten</a>
+                                <a href="pages/zones.php?edit_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
                             <?php endif; ?>
-                            <a href="pages/records.php?zone_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-warning">Einträge</a>
+                            <a href="pages/records.php?zone_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-warning"><?= $LANG['records'] ?></a>
                             <?php if ($_SESSION['role'] === 'admin'): ?>
                                 <form method="post" action="actions/zone_delete.php" class="d-inline confirm-delete">
                                     <?= csrf_input() ?>
                                     <input type="hidden" name="id" value="<?= $zone['id'] ?>">
-                                    <button class="btn btn-sm btn-outline-danger">Löschen</button>
+                                    <button class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
                                 </form>
                             <?php endif; ?>
                         <?php endif; ?>

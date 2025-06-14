@@ -28,7 +28,7 @@ verify_csrf_token();
 
 if ($_SESSION['role'] !== 'admin') {
     toastError(
-        "Zugriff verweigert.",
+        $LANG['dyndns_error_unauthorized'],
         "Nicht-Admin versucht DynDNS-Passwort zu ändern."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/dyndns.php");
@@ -40,7 +40,7 @@ $password = trim($_POST['password'] ?? '');
 
 if (!validatePassword($password)) {
     toastError(
-        "Das Passwort muss mindestens " . PASSWORD_MIN_LENGTH . " Zeichen lang sein.",
+        sprintf($LANG['error_password_too_short'], PASSWORD_MIN_LENGTH),
         "Passwort-Änderung für DynDNS-ID {$account_id} abgelehnt: Passwort zu kurz."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/dyndns.php");
@@ -50,7 +50,7 @@ if (!validatePassword($password)) {
 $hash = password_hash($password, PASSWORD_DEFAULT);
 if ($hash === false) {
     toastError(
-        "Fehler beim Verarbeiten des Passworts.",
+        $LANG['error_password_processing'],
         "Passwort-Hashing fehlgeschlagen für DynDNS-ID {$account_id}."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/dyndns.php");
@@ -66,14 +66,14 @@ try {
     $pdo->commit();
 
     toastSuccess(
-        "Passwort erfolgreich geändert.",
+        $LANG['password_changed'],
         "DynDNS-Passwort aktualisiert für ID {$account_id}."
     );
 
 } catch (Throwable $e) {
     $pdo->rollBack();
     toastError(
-        "Fehler beim Speichern des Passworts.",
+        $LANG['error_password_save'],
         "Fehler beim Ändern des DynDNS-Passworts für ID {$account_id}: " . $e->getMessage()
     );
 }

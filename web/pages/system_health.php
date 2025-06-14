@@ -40,12 +40,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['force_update'])) {
         // Fehlerlog + Toast anzeigen
         if ($exitCode !== 0) {
             toastError(
-                "Monitoring-Statusprüfung fehlgeschlagen.",
+                $LANG['toast_monitoring_failed'],
                 "Fehler beim Monitoring-Aufruf: Exit-Code $exitCode"
             );
         } else {
             toastSuccess(
-                "Systemstatus erfolgreich aktualisiert.",
+                $LANG['toast_monitoring_success'],
                 "Alle Prüfungen wurden ausgeführt. Die Ergebnisse sind jetzt aktuell."
             );
         }
@@ -55,7 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['force_update'])) {
         exit;
     } else {
         toastError(
-            "Monitoring-Skript nicht auffindbar.",
+            $LANG['toast_monitoring_missing'],
             "Pfad: <code>{$script}</code>"
         );
         header("Location: " . $_SERVER['REQUEST_URI']);
@@ -134,12 +134,12 @@ foreach ($conf_results as $entry) {
 
 <br>
 <br>
-<h2 class="mb-4">Systemstatus</h2>
+<h2 class="mb-4"><?= $LANG['system_status'] ?></h2>
 
 <form method="post" action="pages/system_health.php" class="mb-3">
     <input type="hidden" name="force_update" value="1">
     <button type="submit" class="btn btn-sm btn-outline-primary">
-        🔄 Status jetzt aktualisieren
+        🔄 <?= $LANG['system_update_now'] ?>
     </button>
 </form>
 
@@ -149,17 +149,21 @@ foreach ($conf_results as $entry) {
             <tbody>
                 <!-- Konfigurationsprüfung -->
                 <tr style="cursor: <?= empty($config_issues) ? 'default' : 'pointer' ?>;" <?= empty($config_issues) ? '' : 'onclick="toggleConfigIssues()"' ?>>
-                    <th>Konfiguration (lokal)</th>
-                    <td><?= empty($config_issues) ? 'Alle Konfigurationen korrekt' : count($config_issues) . ' Fehler gefunden' ?></td>
-                    <td class="text-<?= empty($config_issues) ? 'success' : 'danger' ?>">
-                        <?= empty($config_issues) ? '✅ OK' : '❌ Fehler' ?>
-                    </td>
+                    <th><?= $LANG['config_check'] ?></th>
+                    <td><?= empty($config_issues)
+                        ? $LANG['config_ok']
+                        : sprintf($LANG['config_errors_found'], count($config_issues)) ?></td>
+                        <td class="text-<?= empty($config_issues) ? 'success' : 'danger' ?>">
+                            <?= empty($config_issues)
+                                ? '✅ ' . $LANG['status_ok']
+                                : '❌ ' . $LANG['status_error'] ?>
+                        </td>
                 </tr>
                 <?php if (!empty($config_issues)): ?>
                 <tr id="config-issues-row" style="display:none;">
                     <td colspan="3">
                     <div class="alert alert-danger small mb-3">
-                        <strong>⚠️ Hinweis:</strong> Überprüfen Sie Ihre Konfigurationsdatei <code>ui_config.php</code>.<br><br>
+                        <strong>⚠️ <?= $LANG['hint'] ?>:</strong> <?= $LANG['config_hint'] ?> <code>ui_config.php</code>.<br><br>
                         <ul class="mb-0">
                             <?php foreach ($config_issues as $issue): ?>
                                 <li><?= htmlspecialchars($issue) ?></li>
@@ -172,16 +176,18 @@ foreach ($conf_results as $entry) {
 
                 <!-- PHP-Version -->
                 <tr>
-                    <th style="width: 20%;">PHP-Version (lokal)</th>
+                    <th><?= $LANG['php_version_local'] ?></th>
                     <td style="width: 20%;"><?= htmlspecialchars($php_version) ?></td>
                     <td class="text-<?= $php_version_supported ? 'success' : 'danger' ?>">
-                        <?= $php_version_supported ? '✅ OK' : '❌ Veraltet' ?>
+                        <?= $php_version_supported
+                            ? '✅ ' . $LANG['status_ok']
+                            : '❌ ' . $LANG['status_outdated'] ?>
                     </td>
                 </tr>
 
                 <!-- PHP-Module -->
                 <tr>
-                    <th>PHP-Module (lokal)</th>
+                    <th><?= $LANG['php_modules_local'] ?></th>
                     <td>
                         <?php foreach ($php_modules as $module => $loaded): ?>
                             <?= htmlspecialchars($module) ?><br>
@@ -190,7 +196,9 @@ foreach ($conf_results as $entry) {
                     <td>
                         <?php foreach ($php_modules as $loaded): ?>
                             <div class="text-<?= $loaded ? 'success' : 'danger' ?>">
-                                <?= $loaded ? '✅ OK' : '❌ Fehlt' ?>
+                                <?= $loaded
+                                    ? '✅ ' . $LANG['status_ok']
+                                    : '❌ ' . $LANG['status_missing'] ?>
                             </div>
                         <?php endforeach; ?>
                     </td>
@@ -198,17 +206,21 @@ foreach ($conf_results as $entry) {
 
                 <!-- Dateiberechtigungen -->
                 <tr style="cursor: <?= empty($file_issues) ? 'default' : 'pointer' ?>;" <?= empty($file_issues) ? '' : 'onclick="toggleFileIssues()"' ?>>
-                    <th>Dateiberechtigungen (lokal)</th>
-                    <td><?= empty($file_issues) ? 'Alle Berechtigungen korrekt' : count($file_issues) . ' Fehler gefunden' ?></td>
+                    <th><?= $LANG['file_permissions_local'] ?></th>
+                    <td><?= empty($file_issues)
+                        ? $LANG['file_permissions_ok']
+                        : sprintf($LANG['file_permissions_errors'], count($file_issues)) ?></td>
                     <td class="text-<?= empty($file_issues) ? 'success' : 'danger' ?>">
-                        <?= empty($file_issues) ? '✅ OK' : '❌ Fehler' ?>
+                        <?= empty($file_issues)
+                            ? '✅ ' . $LANG['status_ok']
+                            : '❌ ' . $LANG['status_error'] ?>
                     </td>
                 </tr>
                 <?php if (!empty($file_issues)): ?>
                 <tr id="file-issues-row" style="display:none;">
                     <td colspan="3">
                         <div class="alert alert-danger small mb-3">
-                            <strong>⚠️ Hinweis:</strong> Führen Sie das Skript <code>fix_perms.sh</code> aus, um die Berechtigungen automatisch zu korrigieren.<br><br>
+                            <strong>⚠️ <?= $LANG['hint'] ?>:</strong> <?= $LANG['file_permissions_hint'] ?><br><br>
                                 <table class="table table-sm table-bordered mb-0">
                                 <thead class="table-light">
                                     <tr>
@@ -238,10 +250,14 @@ foreach ($conf_results as $entry) {
 
                 <!-- Serverstatus -->
                 <tr style="cursor: <?= empty($remote_outputs) ? 'default' : 'pointer' ?>;" <?= empty($remote_outputs) ? '' : 'onclick="toggleRemoteCheck()"' ?>>
-                    <th>Server-Status</th>
-                    <td><?= empty($remote_outputs) ? 'keine Fehler' : count($remote_outputs) . ' Fehler erkannt' ?></td>
+                    <th><?= $LANG['server_status'] ?></th>
+                    <td><?= empty($remote_outputs)
+                        ? $LANG['server_ok']
+                        : sprintf($LANG['server_errors'], count($remote_outputs)) ?></td>
                     <td class="text-<?= !empty($remote_errors) ? 'danger' : 'success' ?>">
-                        <?= !empty($remote_errors) ? '❌ Fehler' : '✅ OK' ?>
+                        <?= !empty($remote_errors)
+                            ? '❌ ' . $LANG['status_error']
+                            : '✅ ' . $LANG['status_ok'] ?>
                     </td>
                 </tr>
                 <?php if (!empty($remote_outputs)): ?>
@@ -256,10 +272,16 @@ foreach ($conf_results as $entry) {
 
                 <!-- named-checkconf -->
                 <tr style="cursor: <?= empty($conf_outputs) ? 'default' : 'pointer' ?>;" <?= empty($conf_outputs) ? '' : 'onclick="toggleConfCheck()"' ?>>
-                    <th>named-checkconf</th>
-                    <td><?= empty($conf_outputs) ? 'keine Fehler' : count($conf_outputs) . ' betroffene Server' ?></td>
+                    <th><?= $LANG['named_checkconf'] ?></th>
+                    <td><?= empty($conf_outputs)
+                        ? $LANG['named_checkconf_ok']
+                        : sprintf($LANG['named_checkconf_issues'], count($conf_outputs)) ?></td>
                     <td class="text-<?= !empty($conf_errors) ? 'danger' : (!empty($conf_warnings) ? 'warning' : 'success') ?>">
-                        <?= !empty($conf_errors) ? '❌ Fehler' : (!empty($conf_warnings) ? '⚠️ Warnungen' : '✅ OK') ?>
+                        <?= !empty($conf_errors)
+                            ? '❌ ' . $LANG['status_error']
+                            : (!empty($conf_warnings)
+                                ? '⚠️ ' . $LANG['status_warning']
+                                : '✅ ' . $LANG['status_ok']) ?>
                     </td>
                 </tr>
                 <?php if (!empty($conf_outputs)): ?>
@@ -276,10 +298,14 @@ foreach ($conf_results as $entry) {
 
                 <!-- named-checkzone -->
                 <tr style="cursor: <?= empty($outputs) ? 'default' : 'pointer' ?>;" <?= empty($outputs) ? '' : 'onclick="toggleZoneCheck()"' ?>>
-                    <th>named-checkzone</th>
-                    <td><?= empty($outputs) ? 'keine Fehler' : count($outputs) . ' betroffene Zonen' ?></td>
+                    <th><?= $LANG['named_checkzone'] ?></th>
+                    <td><?= empty($outputs)
+                        ? $LANG['named_checkzone_ok']
+                        : sprintf($LANG['named_checkzone_issues'], count($outputs)) ?></td>
                     <td class="text-<?= $has_errors ? 'danger' : ($has_warnings ? 'warning' : 'success') ?>">
-                        <?= $has_errors ? '❌ Fehler' : ($has_warnings ? '⚠️ Warnungen' : '✅ OK') ?>
+                        <?= $has_errors
+                            ? '❌ ' . $LANG['status_error']
+                            : ($has_warnings ? '⚠️ ' . $LANG['status_warning'] : '✅ ' . $LANG['status_ok']) ?>
                     </td>
                 </tr>
                 <?php if (!empty($outputs)): ?>

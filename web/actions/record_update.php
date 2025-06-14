@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!empty($errors)) {
         foreach ($errors as $error) {
             toastError(
-                $error,
+                $LANG[$error] ?? $LANG['generic_validation_error'],
                 "Validierungsfehler beim Update von {$type} {$name} in Zone {$zone_name}: {$error}"
             );
         }
@@ -84,7 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $hasChanged |= (int)$existing['ttl'] !== (int)$ttl;
 
     if (!$hasChanged) {
-        toastSuccess('Keine Änderungen vorgenommen.', 'Der DNS-Record ist unverändert.');
+        toastSuccess($LANG['no_changes'], 'Der DNS-Record ist unverändert.');
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
         exit;
     }
@@ -98,13 +98,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isGlueRecord($existing, getAllZoneRecords($pdo, $zone_id), getZoneName($pdo, $zone_id))) {
         if ($existing['name'] !== $name) {
             toastError(
-                "Namensänderung bei Glue-Records ist nicht erlaubt.",
+                $LANG['record_error_glue_name_change'],
                 "Glue-Record darf nicht umbenannt werden: {$existing['name']} (Zone: {$zone_name})"
             );
         }
         if ($existing['type'] !== $type) {
             toastError(
-                "Typänderung bei Glue-Records ist nicht erlaubt.",
+                $LANG['record_error_glue_type_change'],
                 "Glue-Record-Typänderung blockiert: {$existing['type']} (Zone: {$zone_name})"
             );
         }
@@ -121,13 +121,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ) {
         if ($existing['name'] !== $name) {
             toastError(
-                "Namensänderung bei geschütztem NS-Record ist nicht erlaubt.",
+                $LANG['record_error_ns_name_change'],
                 "NS-Record darf nicht umbenannt werden: {$existing['name']} (Zone: {$zone_name})"
             );
         }
         if ($existing['content'] !== $content) {
             toastError(
-                "Zieländerung bei geschütztem NS-Record ist nicht erlaubt.",
+                $LANG['record_error_ns_content_change'],
                 "NS-Record darf nicht geändert werden: {$existing['content']} (Zone: {$zone_name})"
             );
         }
@@ -156,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($rebuild['status'] === 'error') {
             $pdo->rollBack();
             toastError(
-                "Der Record konnte nicht aktualisiert werden, da die Zonendatei anschließend ungültig wäre.",
+                $LANG['record_error_zonefile_invalid'],
                 $rebuild['output']
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
@@ -165,7 +165,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($rebuild['status'] === 'warning') {
             toastWarning(
-                "Record aktualisiert – Warnung beim Zonendatei-Check.",
+                $LANG['record_warning_zonefile_check'],
                 $rebuild['output']
             );
         }
@@ -174,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (Throwable $e) {
         $pdo->rollBack();
         toastError(
-            "Beim Aktualisieren des Records ist ein Fehler aufgetreten.",
+            $LANG['record_error_db_save_failed'],
             "Systemfehler beim Update von {$type} {$name} in Zone {$zone_name} (ID {$id}): " . $e->getMessage()
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
@@ -182,7 +182,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     toastSuccess(
-        "Record <strong>" . htmlspecialchars($type) . " {$name}</strong> erfolgreich in <strong>" . htmlspecialchars($zone_name) . "</strong> aktualisiert.",
+        sprintf($LANG['record_updated'], htmlspecialchars($type), htmlspecialchars($name), htmlspecialchars($zone_name)),
         "DNS-Record {$type} {$name} erfolgreich geändert in Zone {$zone_name} (ID {$id})"
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");

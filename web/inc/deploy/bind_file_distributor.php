@@ -165,18 +165,11 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
             $details = trim($json['check_output'] ?? '');
             $combined = "HTTP-$http_code bei {$srv['name']} ({$srv['api_ip']}): $msg" . ($details ? " – $details" : '');
             $errors[] = $combined;
-        } else {
-            $outputs[] = "[{$srv['name']}] Zonendatei erfolgreich übertragen.";
         }
     }
 
     // Zusammenfassung und Logging
-    $status = empty($errors) ? 'ok' : 'error';
-    $output = "[distribute_zone_file][$zone_name] " . implode("\n", $outputs);
-
-    if (!empty($outputs)) {
-        error_log($output);
-    }
+    $output = implode("\n", $outputs);
 
     // Wenn temporäre Datei verwendet wurde: löschen
     if (str_starts_with($zone_path, '/tmp/') && file_exists($zone_path)) {
@@ -302,12 +295,11 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
     // Zusammenfassendes Logging
     $status = empty($errors) ? 'ok' : 'error';
 
-    $log_output = "[distribute_zone_conf_file][$zone_name] " . implode("\n", $outputs);
-    error_log($log_output); // oder logMessage('dns', $log_output); falls vorhanden
+    $output = implode("\n", $outputs);
 
     return [
         'status' => $status,
         'errors' => $errors,
-        'output' => $log_output
+        'output' => $output
     ];
 }

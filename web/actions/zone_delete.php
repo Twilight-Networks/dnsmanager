@@ -21,7 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
     // Früher Ausstieg bei ungültiger ID
     if ($id <= 0) {
         toastError(
-            "Ungültige Zonen-ID.",
+            $LANG['zone_error_invalid_id'],
             "Zone konnte nicht gelöscht werden: Ungültige ID übergeben."
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
 
     if (!$zone) {
         toastError(
-            "Zone nicht gefunden.",
+            $LANG['zone_error_not_found'],
             "Zone mit ID {$id} existiert nicht oder wurde bereits gelöscht."
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
@@ -57,14 +57,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
         $pdo->commit();
 
         toastSuccess(
-            "Zone <strong>" . htmlspecialchars($name) . "</strong> wurde gelöscht.",
+            sprintf($LANG['zone_deleted'], htmlspecialchars($name)),
             "Zone '{$name}' (ID {$id}) erfolgreich gelöscht."
         );
 
     } catch (Exception $e) {
         $pdo->rollBack();
         toastError(
-            "Fehler beim Löschen der Zone.",
+            $LANG['zone_error_delete_failed'],
             "Fehler beim Löschen von Zone '{$name}' (ID {$id}): " . $e->getMessage()
         );
     }

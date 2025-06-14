@@ -26,7 +26,7 @@ $server = $stmt->fetch(PDO::FETCH_ASSOC);
 // === Fehler bei unbekanntem Server ===
 if (!$server) {
     toastError(
-        "Server nicht gefunden.",
+        $LANG['error_server_not_found'],
         "Bind-Reload abgebrochen: Server-ID {$serverId} existiert nicht in der Datenbank."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
@@ -42,12 +42,12 @@ $response = apiPostJson($url, ['action' => 'reload-bind'], $token);
 
 if ($response['status'] === 'ok') {
     toastSuccess(
-        "BIND Reload auf <strong>{$name}</strong> erfolgreich:<br><code>" . htmlspecialchars($response['message']) . "</code>",
+        sprintf($LANG['bind_reload_success'], $name, htmlspecialchars($response['message'])),
         "BIND-Reload auf Server '{$name}' erfolgreich durchgeführt."
     );
 } else {
     toastError(
-        "BIND Reload auf <strong>{$name}</strong> fehlgeschlagen:<br><code>" . htmlspecialchars($response['message']) . "</code>",
+        sprintf($LANG['bind_reload_failed'], $name, htmlspecialchars($response['message'])),
         "BIND-Reload auf Server '{$name}' fehlgeschlagen. Antwort: {$response['message']}"
     );
 }

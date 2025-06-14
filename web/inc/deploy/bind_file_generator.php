@@ -379,7 +379,7 @@ function writeZoneConfFile(
     $type = 'master';
     $masters_block = '';
     $status = 'written';
-    $output = "Konfigurationsdatei für Zone $zone_name geschrieben.";
+    $output = '';
 
     if ($enable_slave_mode && $is_slave) {
         $type = 'slave';
@@ -387,7 +387,7 @@ function writeZoneConfFile(
         if (!empty($masters)) {
             $masters_block = "masters { " . implode('; ', $masters) . "; };";
         } else {
-            error_log("[conf-generate] Warnung: Kein Master für Zone $zone_name gefunden.");
+            $status = 'warning';
             $output = "Warnung: Kein Master definiert für Zone $zone_name.";
         }
     }

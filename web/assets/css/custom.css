@@ -201,9 +201,9 @@ a:active {
 /* DKIM-spezifische Felder */
 .colform-dkim-selector  { flex: 0 0 15%; max-width: 15%; }
 .colform-dkim-domain    { flex: 0 0 17%; max-width: 17%; }
-.colform-dkim-keytype   { flex: 0 0 8%; max-width: 8%; }
-.colform-dkim-hash      { flex: 0 0 8%; max-width: 8%; }
-.colform-dkim-flags     { flex: 0 0 8%; max-width: 8%; }
+.colform-dkim-keytype   { flex: 0 0 11%; max-width: 11%; }
+.colform-dkim-hash      { flex: 0 0 9%; max-width: 9%; }
+.colform-dkim-flags     { flex: 0 0 9%; max-width: 9%; }
 .colform-dkim-keyblock  { flex: 0 0 56%; max-width: 56%; }
 
 /* Upload-Button (DKIM) */

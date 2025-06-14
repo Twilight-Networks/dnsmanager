@@ -19,7 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
 
     if ($id <= 0) {
         toastError(
-            "Ungültige Benutzer-ID.",
+            $LANG['user_error_invalid_id'],
             "Löschvorgang abgebrochen: Ungültige Benutzer-ID übergeben ({$id})."
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -36,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
 
         if (!$role) {
             toastError(
-                "Benutzer existiert nicht.",
+                $LANG['user_error_not_found'],
                 "Benutzer-Delete fehlgeschlagen: Benutzer-ID {$id} nicht gefunden."
             );
             $pdo->rollBack();
@@ -51,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
 
             if ($admin_count <= 1) {
                 toastError(
-                    "Der letzte Admin darf nicht gelöscht werden.",
+                    $LANG['user_error_last_admin'],
                     "Benutzer-ID {$id} war letzter Administrator – Löschung abgebrochen."
                 );
                 $pdo->rollBack();
@@ -67,13 +67,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
         $pdo->commit();
 
         toastSuccess(
-            "Benutzer erfolgreich gelöscht.",
+            $LANG['user_deleted'],
             "Benutzer-ID {$id} wurde erfolgreich entfernt, inklusive aller Zonen-Zuweisungen."
         );
     } catch (Throwable $e) {
         $pdo->rollBack();
         toastError(
-            "Fehler beim Löschen des Benutzers.",
+            $LANG['user_error_delete'],
             "Systemfehler beim Löschen von Benutzer-ID {$id}: " . $e->getMessage()
         );
     }

@@ -14,43 +14,54 @@
  *   - data-zone-name (FQDN der Zone)
  */
 
-const recordTypeDescriptionsForward = {
-    A: "<strong>A-Record:</strong><br><br>Verweist auf eine IPv4-Adresse (z. B. 192.0.2.1).",
-    AAAA: "<strong>AAAA-Record:</strong><br><br>Verweist auf eine IPv6-Adresse (z. B. 2001:db8::1).",
-    CNAME: "<strong>CNAME-Record:</strong><br><br>Alias für einen anderen Hostnamen.<br>Wichtig: Nicht mit anderen Record-Typen kombinieren.",
-    MX: "<strong>MX-Record:</strong><br><br>Definiert Mailserver für die Domain.<br>Der Wert ist ein Hostname (FQDN), keine IP.",
-    NS: "<strong>NS-Record:</strong><br><br>Autoritativer Nameserver der Zone.<br>Wird meist automatisch gesetzt.",
-    PTR: "<strong>PTR-Record:</strong><br><br>Zeigt auf den Hostnamen einer IP-Adresse.<br>Erforderlich: vollständiger FQDN mit Punkt.",
-    TXT: "<strong>TXT-Record:</strong><br><br>Freitext oder strukturierte Daten.<br>Beispiel: \"v=verify123\"",
-    SPF: "<strong>SPF-Record:</strong><br><br>Definiert erlaubte Mailserver (Teil der TXT-Records).",
-    DKIM: "<strong>DKIM:</strong><br><br>Erzeugt automatisch einen TXT-Record mit öffentlichem Schlüssel.",
-    LOC: "<strong>LOC-Record:</strong><br><br>Speichert geographische Koordinaten.<br>Format: \"52 31 0.000 N 13 24 0.000 E 34.0m 1m 10000m 10m\"",
-    CAA: "<strong>CAA-Record:</strong><br><br>Legt fest, welche Zertifizierungsstellen Zertifikate ausstellen dürfen.<br>Beispiel: 0 issue \"letsencrypt.org\"",
-    SRV: "<strong>SRV-Record:</strong><br><br>Definiert Services mit Priorität, Gewichtung, Port und Ziel.<br>Beispiel: 0 5 5060 sipserver.example.com",
-    NAPTR: "<strong>NAPTR-Record:</strong><br><br>Mapping-Mechanismus für Dienste (z. B. SIP, ENUM).<br>Format: Order Preference \"Flags\" \"Service\" \"Regexp\" Replacement<br>Beispiel: 100 10 \"U\" \"E2U+sip\" \"!^.*$!sip:info@example.com!\" .",
-    URI: "<strong>URI-Record:</strong><br><br>Definiert einen Dienst über Dienstname, Protokoll, Priorität, Gewichtung und Ziel-URI.<br>Format: &lt;Prio&gt; &lt;Weight&gt; \"&lt;URI&gt;\"<br>Beispiel: 10 1 \"ftp://ftp1.example.com/public\""
-};
-
-const recordTypeDescriptionsReverse = {
-    PTR: "<strong>PTR-Record:</strong><br><br>Zeigt auf den Hostnamen einer IP-Adresse.<br>Erforderlich: vollständiger FQDN mit Punkt.",
-    TXT: "<strong>TXT-Record:</strong><br><br>Freitext oder strukturierte Daten.<br>Beispiel: \"Zertifikat gültig bis ...\""
-};
+/**
+ * Gibt die Beschreibungstexte für DNS-Record-Typen abhängig vom Zonentyp zurück.
+ *
+ * Die Texte werden zur Laufzeit über die `lang()`-Funktion geladen, um sicherzustellen,
+ * dass die Übersetzungen erst dann abgerufen werden, wenn `window.LANG` verfügbar ist.
+ *
+ * @param {string} zoneType - Zonenkontext ('forward' oder 'reverse')
+ * @returns {Object<string, string>} Schlüssel-Wert-Paar aus Record-Typ und HTML-Text
+ */
+function getRecordTypeDescriptions(zoneType) {
+    if (zoneType === 'forward') {
+        return {
+            A: lang('record_info_forward_a'),
+            AAAA: lang('record_info_forward_aaaa'),
+            CNAME: lang('record_info_forward_cname'),
+            MX: lang('record_info_forward_mx'),
+            NS: lang('record_info_forward_ns'),
+            PTR: lang('record_info_forward_ptr'),
+            TXT: lang('record_info_forward_txt'),
+            SPF: lang('record_info_forward_spf'),
+            DKIM: lang('record_info_forward_dkim'),
+            LOC: lang('record_info_forward_loc'),
+            CAA: lang('record_info_forward_caa'),
+            SRV: lang('record_info_forward_srv'),
+            NAPTR: lang('record_info_forward_naptr'),
+            URI: lang('record_info_forward_uri')
+        };
+    } else if (zoneType === 'reverse') {
+        return {
+            PTR: lang('record_info_reverse_ptr'),
+            TXT: lang('record_info_reverse_txt')
+        };
+    }
+    return {};
+}
 
 /**
  * Aktualisiert den Beschreibungstext in der Info-Box abhängig vom Record-Typ.
+ *
  * @param {string} type - Gewählter Record-Typ (z. B. A, MX, etc.)
  */
 function updateInfoBox(type) {
     const content = document.getElementById('typeInfoContent');
     const form = document.getElementById('recordForm');
     const zoneType = form.dataset.zoneType;
-    let text = "";
 
-    if (zoneType === 'forward') {
-        text = recordTypeDescriptionsForward[type] || "";
-    } else if (zoneType === 'reverse') {
-        text = recordTypeDescriptionsReverse[type] || "";
-    }
+    const descriptions = getRecordTypeDescriptions(zoneType);
+    const text = descriptions[type] || "";
 
     content.innerHTML = text;
 }
@@ -94,28 +105,28 @@ function updatePlaceholders(type, zoneType) {
     const prefixField = document.getElementById('input_name_prefix');
 
     const placeholders = {
-        A: "z. B. 192.0.2.1",
-        AAAA: "z. B. 2001:db8::1",
-        CNAME: "z. B. alias.example.com",
-        MX: "z. B. mail.example.com",
-        NS: "z. B. ns1.example.com",
-        PTR: "z. B. mail.example.com.",
-        TXT: "z. B. \"v=verify123\"",
-        SPF: "z. B. \"v=spf1 mx ~all\"",
-        LOC: "z. B. 52 31 0.000 N 13 24 0.000 E 34.0m 1m 10000m 10m",
-        CAA: 'z. B. 0 issue "letsencrypt.org"',
-        SRV: "z. B. _sip._tcp.example.com 0 5 5060 sipserver.example.com",
-        NAPTR: 'z. B. 100 10 "U" "E2U+sip" "!^.*$!sip:info@example.com!" .',
+        A: lang('for_example') + ' 192.0.2.1',
+        AAAA: lang('for_example') + ' 2001:db8::1',
+        CNAME: lang('for_example') + ' alias.example.com',
+        MX: lang('for_example') + ' mail.example.com',
+        NS: lang('for_example') + ' ns1.example.com',
+        PTR: lang('for_example') + ' mail.example.com.',
+        TXT: lang('for_example') + ' \"v=verify123\"',
+        SPF: lang('for_example') + ' \"v=spf1 mx ~all\"',
+        LOC: lang('for_example') + ' 52 31 0.000 N 13 24 0.000 E 34.0m 1m 10000m 10m',
+        CAA: lang('for_example') + ' 0 issue "letsencrypt.org"',
+        SRV: lang('for_example') + ' _sip._tcp.example.com 0 5 5060 sipserver.example.com',
+        NAPTR: lang('for_example') + ' 100 10 "U" "E2U+sip" "!^.*$!sip:info@example.com!" .',
     };
 
     const namePlaceholders = {
-        MX: "z. B. @ oder sub",
+        MX: lang('for_example') + ' @ oder sub',
         DKIM: "@",
         URI: "@",
-        CAA: "z. B. www oder sub",
-        SRV: "z. B. _sip",
-        NAPTR: zoneType === 'reverse' ? "z. B. 42" : "z. B. www oder sub",
-        default: zoneType === 'reverse' ? "z. B. 42" : "z. B. www oder @"
+        CAA: lang('for_example') + ' www oder sub',
+        SRV: lang('for_example') + ' _sip',
+        NAPTR: zoneType === 'reverse' ? lang('for_example') + ' 42' : lang('for_example') + ' www oder sub',
+        default: zoneType === 'reverse' ? lang('for_example') + ' 42' : lang('for_example') + ' www oder @'
     };
 
     // Content-Placeholder
@@ -250,13 +261,13 @@ document.addEventListener('DOMContentLoaded', function () {
             const target = targetField.value.trim();
 
             if (!/^\d+$/.test(prio)) {
-                alert("Bitte eine gültige Priorität (Zahl) für den MX-Eintrag angeben.");
+                alert(lang('record_mx_invalid_priority'));
                 e.preventDefault();
                 return;
             }
 
             if (!target) {
-                alert("Bitte einen gültigen Mailserver angeben.");
+                alert(lang('record_mx_missing_target'));
                 e.preventDefault();
                 return;
             }
@@ -274,14 +285,14 @@ document.addEventListener('DOMContentLoaded', function () {
         if (type === 'NAPTR') {
             const requiredFields = ['naptr_order', 'naptr_pref', 'naptr_flags', 'naptr_service', 'naptr_regexp', 'naptr_replacement'];
             if (requiredFields.some(id => !document.getElementById(id).value.trim())) {
-                alert("Bitte alle NAPTR-Felder ausfüllen.");
+                alert(lang('record_naptr_missing_fields'));
                 e.preventDefault();
                 return;
             }
             // Namensfeld
             const prefix = document.getElementById('input_name_prefix').value.trim();
             if (!prefix) {
-                alert("Bitte einen Namen für den NAPTR-Eintrag angeben.");
+                alert(lang('record_naptr_missing_name'));
                 e.preventDefault();
                 return;
             }
@@ -304,19 +315,19 @@ document.addEventListener('DOMContentLoaded', function () {
             const mode = document.getElementById('srv_target_mode').value;
 
             if (!nameField.value.trim() || !protoField.value) {
-                alert("Bitte Dienstname und Protokoll für den SRV-Eintrag angeben.");
+                alert(lang('record_srv_missing_fields'));
                 e.preventDefault();
                 return;
             }
 
             if (!/^\d+$/.test(priority) || !/^\d+$/.test(weight) || !/^\d+$/.test(port)) {
-                alert("SRV: Priorität, Weight und Port müssen numerisch sein.");
+                alert(lang('record_srv_invalid_numbers'));
                 e.preventDefault();
                 return;
             }
 
             if (!target) {
-                alert("Bitte ein gültiges Ziel für den SRV-Eintrag angeben.");
+                alert(lang('record_srv_missing_target'));
                 e.preventDefault();
                 return;
             }
@@ -340,7 +351,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (type === 'CAA') {
             const prefix = document.getElementById('input_name_prefix').value.trim();
             if (!prefix) {
-                alert("Bitte einen Namen für den CAA-Eintrag angeben.");
+                alert(lang('record_caa_missing_name'));
                 e.preventDefault();
                 return;
             }
@@ -360,7 +371,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const t = document.getElementById('dkim_flags')?.value.trim();
 
             if (!selector || !domain || !key) {
-                alert("Bitte alle DKIM-Felder ausfüllen.");
+                alert(lang('record_dkim_missing_fields'));
                 e.preventDefault();
                 return;
             }

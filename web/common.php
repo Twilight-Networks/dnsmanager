@@ -7,6 +7,33 @@
 // Konfiguration laden (z.B. DB-Verbindungsdaten, BASE_URL)
 require_once __DIR__ . '/config/ui_config.php';
 
+// Sprache laden
+$availableLanguages = ['de', 'en', 'es'];
+$defaultLanguage = defined('DEFAULT_LANGUAGE') ? DEFAULT_LANGUAGE : 'auto';
+
+if ($defaultLanguage === 'auto') {
+    $lang = $_GET['lang'] ?? $_SESSION['lang'] ?? substr($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '', 0, 2);
+} else {
+    $lang = $defaultLanguage;
+}
+
+$lang = substr($lang, 0, 2); // z. B. "de-DE" → "de"
+$lang = in_array($lang, $availableLanguages, true) ? $lang : 'de';
+
+$_SESSION['lang'] = $lang;
+
+$langFile = __DIR__ . '/lang/' . $lang . '.php';
+
+if (!file_exists($langFile)) {
+    die("Language file not found: " . htmlspecialchars($langFile));
+}
+
+$LANG = require $langFile;
+
+if (!isset($LANG) || !is_array($LANG)) {
+    die("Language file invalid or not readable: " . htmlspecialchars($langFile));
+}
+
 // Asset-Verwaltungsklasse einbinden
 require_once __DIR__ . '/inc/asset_registry.php';
 

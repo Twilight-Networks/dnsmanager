@@ -37,7 +37,7 @@ $hostname = trim($_POST['hostname'] ?? '');
 $zone_id  = (int)($_POST['zone_id'] ?? 0);
 
 if ($username === '' || $password === '' || $hostname === '' || $zone_id <= 0) {
-    toastError('Alle Felder sind erforderlich.');
+    toastError($LANG['dyndns_error_missing_fields']);
     header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?add_new=1');
     exit;
 }
@@ -48,7 +48,7 @@ $hash = password_hash($password, PASSWORD_BCRYPT);
 $stmt = $pdo->prepare("SELECT id FROM zones WHERE id = ? AND allow_dyndns = 1");
 $stmt->execute([$zone_id]);
 if (!$stmt->fetch()) {
-    toastError('Zone ist nicht für DynDNS freigegeben.');
+    toastError($LANG['dyndns_error_zone_not_allowed']);
     ("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?add_new=1');
     exit;
 }
@@ -59,9 +59,9 @@ try {
         VALUES (?, ?, ?, ?)
     ");
     $stmt->execute([$username, $hash, $hostname, $zone_id]);
-    toastSuccess('DynDNS-Account erfolgreich erstellt.');
+    toastSuccess($LANG['dyndns_success_account_created']);
 } catch (PDOException $e) {
-    toastError('Fehler beim Speichern: ' . $e->getMessage());
+    toastError($LANG['dyndns_error_db'] . ': ' . $e->getMessage());
 }
 
 header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');

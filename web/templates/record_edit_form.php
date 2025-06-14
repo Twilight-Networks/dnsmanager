@@ -192,12 +192,12 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
 
             <!-- Namensfeld: Zeigt entweder 'Name' (forward) oder 'IP-Anteil' (reverse) -->
             <div class="col-md-4 colform-name d-flex flex-column">
-                <label class="form-label"><?= $zone_type === 'reverse' ? 'IP-Anteil' : 'Name' ?></label>
+                <label class="form-label"><?= $zone_type === 'reverse' ? $LANG['record_name_reverse'] : $LANG['record_name'] ?></label>
 
                 <!-- Nur für CAA und NAPTR sichtbar: Präfix-Eingabe + feste Zonen-Suffix -->
                 <div class="input-group <?= in_array($r['type'], ['CAA', 'NAPTR']) ? '' : 'd-none' ?>" id="edit_caa_name_wrapper">
                     <input type="text" id="edit_input_name_prefix" name="edit_name_prefix" class="form-control"
-                           value="<?= htmlspecialchars($caa_prefix) ?>" placeholder="z. B. www oder sub" autocomplete="off">
+                           value="<?= htmlspecialchars($caa_prefix) ?>" placeholder="<?= $LANG['for_example'] ?> www oder sub" autocomplete="off">
                     <span class="input-group-text">.<?= htmlspecialchars($zone_suffix) ?></span>
                 </div>
 
@@ -225,7 +225,7 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
             <?php endif; ?>
 
             <div class="d-flex flex-column colform-content <?= in_array($r['type'], ['SRV', 'NAPTR']) || !empty($r['is_dkim']) ? 'invisible' : '' ?>" id="edit_content_wrapper">
-                <label class="form-label">Inhalt</label>
+                <label class="form-label"><?= $LANG['record_content'] ?></label>
                 <input
                     name="content"
                     id="edit_input_content"
@@ -238,20 +238,20 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
             <div class="d-flex flex-column colform-ttl">
                 <label class="form-label" for="edit_ttl_select">TTL</label>
                 <select name="ttl" id="edit_ttl_select" class="form-select">
-                    <option value="auto" <?= $is_auto_ttl ? 'selected' : '' ?>>Auto</option>
+                    <option value="auto" <?= $is_auto_ttl ? 'selected' : '' ?>><?= $LANG['ttl_auto'] ?></option>
                     <?php
                     $ttlOptions = [
-                        60   => '1 Minute',
-                        120  => '2 Minuten',
-                        300  => '5 Minuten',
-                        600  => '10 Minuten',
-                        900  => '15 Minuten',
-                        1800 => '30 Minuten',
-                        3600 => '1 Stunde',
-                        7200 => '2 Stunden',
-                        18000 => '5 Stunden',
-                        43200 => '12 Stunden',
-                        86400 => '1 Tag'
+                        60   => '1 ' . $LANG['minute'],
+                        120  => '2 ' . $LANG['minutes'],
+                        300  => '5 ' . $LANG['minutes'],
+                        600  => '10 ' . $LANG['minutes'],
+                        900  => '15 ' . $LANG['minutes'],
+                        1800 => '30 ' . $LANG['minutes'],
+                        3600 => '1 ' . $LANG['hour'],
+                        7200 => '2 ' . $LANG['hours'],
+                        18000 => '5 ' . $LANG['hours'],
+                        43200 => '12 ' . $LANG['hours'],
+                        86400 => '1 ' . $LANG['day'],
                     ];
                     foreach ($ttlOptions as $val => $label):
                         // wenn TTL auf "auto", soll keine echte Zahl zusätzlich selected werden
@@ -264,7 +264,7 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
 
             <!-- MX-spezifische Felder: Priorität und Ziel-Mailserver (FQDN) -->
             <div class="d-flex flex-column colform-priority <?= $r['type'] === 'MX' ? '' : 'd-none' ?>" id="edit_mx_fields">
-                <label class="form-label">Priorität</label>
+                <label class="form-label"><?= $LANG['priority'] ?></label>
                 <input name="mx_priority" id="edit_input_mx_priority" class="form-control" type="number" value="<?= htmlspecialchars($mx_priority) ?>">
             </div>
 
@@ -272,26 +272,26 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
             <div class="d-flex flex-column colform-srv <?= $r['type'] === 'SRV' ? '' : 'd-none' ?>" id="edit_srv_fields">
                 <div class="d-flex gap-2 flex-wrap">
                     <div class="d-flex flex-column colform-protocol">
-                        <label class="form-label">Protokoll</label>
+                        <label class="form-label"><?= $LANG['protocol'] ?></label>
                         <select name="srv_protocol" id="edit_srv_protocol" class="form-select">
                             <option value="_tcp" <?= $srv_proto === 'tcp' ? 'selected' : '' ?>>TCP</option>
                             <option value="_udp" <?= $srv_proto === 'udp' ? 'selected' : '' ?>>UDP</option>
                         </select>
                     </div>
                     <div class="d-flex flex-column colform-priority">
-                        <label class="form-label">Priorität</label>
+                        <label class="form-label"><?= $LANG['priority'] ?></label>
                         <input name="srv_priority" id="edit_input_srv_priority" class="form-control" type="number" value="<?= htmlspecialchars($srv_priority) ?>">
                     </div>
                     <div class="d-flex flex-column colform-weight">
-                        <label class="form-label">Weight</label>
+                        <label class="form-label"><?= $LANG['weight'] ?></label>
                         <input name="srv_weight" class="form-control" type="number" value="<?= htmlspecialchars($weight) ?>">
                     </div>
                     <div class="d-flex flex-column colform-port">
-                        <label class="form-label">Port</label>
+                        <label class="form-label"><?= $LANG['port'] ?></label>
                         <input name="srv_port" class="form-control" type="number" value="<?= htmlspecialchars($port) ?>">
                     </div>
                     <div class="d-flex flex-column colform-target">
-                        <label class="form-label">Target</label>
+                        <label class="form-label"><?= $LANG['target'] ?></label>
                         <input name="srv_target" class="form-control" type="text" value="<?= htmlspecialchars($target) ?>">
                     </div>
                 </div>
@@ -301,27 +301,27 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
             <div class="d-flex flex-column colform-naptr <?= $r['type'] === 'NAPTR' ? '' : 'd-none' ?>" id="edit_naptr_fields">
                 <div class="d-flex gap-2 flex-wrap">
                     <div class="d-flex flex-column colform-order">
-                        <label class="form-label">Order</label>
+                        <label class="form-label"><?= $LANG['order'] ?></label>
                         <input name="naptr_order" class="form-control" type="number" value="<?= htmlspecialchars($naptr_order) ?>">
                     </div>
                     <div class="d-flex flex-column colform-preference">
-                        <label class="form-label">Preference</label>
+                        <label class="form-label"><?= $LANG['preference'] ?></label>
                         <input name="naptr_pref" class="form-control" type="number" value="<?= htmlspecialchars($naptr_pref) ?>">
                     </div>
                     <div class="d-flex flex-column colform-flags">
-                        <label class="form-label">Flags</label>
+                        <label class="form-label"><?= $LANG['flags'] ?></label>
                         <input name="naptr_flags" class="form-control" value="<?= htmlspecialchars($naptr_flags) ?>">
                     </div>
                     <div class="d-flex flex-column colform-service">
-                        <label class="form-label">Service</label>
+                        <label class="form-label"><?= $LANG['service'] ?></label>
                         <input name="naptr_service" class="form-control" value="<?= htmlspecialchars($naptr_service) ?>">
                     </div>
                     <div class="d-flex flex-column colform-regex">
-                        <label class="form-label">Regexp</label>
+                        <label class="form-label"><?= $LANG['regexp'] ?></label>
                         <input name="naptr_regexp" class="form-control" value="<?= htmlspecialchars($naptr_regexp) ?>">
                     </div>
                     <div class="d-flex flex-column colform-replacement">
-                        <label class="form-label">Replacement</label>
+                        <label class="form-label"><?= $LANG['replacement'] ?></label>
                         <input name="naptr_replacement" class="form-control" value="<?= htmlspecialchars($naptr_replace) ?>">
                     </div>
                 </div>
@@ -331,26 +331,26 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
             <div class="d-flex flex-column colform-uri <?= $r['type'] === 'URI' ? '' : 'd-none' ?>" id="edit_uri_fields">
                 <div class="d-flex flex-row gap-2 flex-wrap">
                     <div class="d-flex flex-column colform-service">
-                        <label class="form-label">Dienst</label>
+                        <label class="form-label"><?= $LANG['service'] ?></label>
                         <input name="uri_service" id="edit_uri_service" class="form-control" type="text" value="<?= htmlspecialchars($uri_service) ?>">
                     </div>
                     <div class="d-flex flex-column colform-protocol">
-                        <label class="form-label">Protokoll</label>
+                        <label class="form-label"><?= $LANG['protocol'] ?></label>
                         <select name="uri_protocol" id="edit_uri_protocol" class="form-select">
                             <option value="_tcp" <?= $uri_proto === '_tcp' ? 'selected' : '' ?>>TCP</option>
                             <option value="_udp" <?= $uri_proto === '_udp' ? 'selected' : '' ?>>TCP</option>
                         </select>
                     </div>
                     <div class="d-flex flex-column colform-priority">
-                        <label class="form-label">Priorität</label>
+                        <label class="form-label"><?= $LANG['priority'] ?></label>
                         <input name="uri_priority" id="edit_uri_priority" class="form-control" type="number" value="<?= htmlspecialchars($uri_priority) ?>">
                     </div>
                     <div class="d-flex flex-column colform-weight">
-                        <label class="form-label">Weight</label>
+                        <label class="form-label"><?= $LANG['weight'] ?></label>
                         <input name="uri_weight" id="edit_uri_weight" class="form-control" type="number" value="<?= htmlspecialchars($uri_weight) ?>">
                     </div>
                     <div class="d-flex flex-column flex-grow-1">
-                        <label class="form-label">Ziel-URI</label>
+                        <label class="form-label"><?= $LANG['uri_target'] ?></label>
                         <input name="uri_target" id="edit_uri_target" class="form-control" type="text" value="<?= htmlspecialchars($uri_target) ?>">
                     </div>
                 </div>
@@ -361,11 +361,11 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
                 <div class="row">
                     <input type="hidden" name="is_dkim" value="1">
                     <div class="col-md-4 colform-dkim-selector">
-                        <label class="form-label">DKIM Selector</label>
+                        <label class="form-label"><?= $LANG['dkim_selector'] ?></label>
                         <input type="text" name="dkim_selector" class="form-control" value="<?= htmlspecialchars($dkim_selector) ?>">
                     </div>
                         <div class="col-md-4 colform-dkim-domain">
-                            <label class="form-label">Subdomain (optional)</label>
+                            <label class="form-label"><?= $LANG['dkim_subdomain'] ?></label>
                             <div class="input-group">
                                 <input type="text"
                                        name="dkim_subdomain"
@@ -378,7 +378,7 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
                         </div>
                         <!-- Key Type -->
                         <div class="col-md-4 colform-dkim-keytype">
-                            <label class="form-label">Key Type (k=)</label>
+                            <label class="form-label"><?= $LANG['dkim_key_type'] ?> (k=)</label>
                             <select name="dkim_key_type" class="form-select">
                                 <option value="rsa" <?= $dkim_key_type === 'rsa' ? 'selected' : '' ?>>RSA</option>
                                 <option value="ed25519" <?= $dkim_key_type === 'ed25519' ? 'selected' : '' ?>>Ed25519</option>
@@ -387,19 +387,19 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
 
                         <!-- Hash Algorithmen -->
                         <div class="col-md-4 colform-dkim-hash">
-                            <label class="form-label">Hash (h=)</label>
+                            <label class="form-label"><?= $LANG['dkim_hash'] ?> (h=)</label>
                             <input type="text" name="dkim_hash_algos" class="form-control"
                                 placeholder="z. B. sha256" value="<?= htmlspecialchars($dkim_hash_algos) ?>">
                         </div>
 
                         <!-- Flags -->
                         <div class="col-md-4 colform-dkim-flags">
-                            <label class="form-label">Flags (t=)</label>
+                            <label class="form-label"><?= $LANG['dkim_flags'] ?> (t=)</label>
                             <input type="text" name="dkim_flags" class="form-control"
                                 placeholder="z. B. y" value="<?= htmlspecialchars($dkim_flags) ?>">
                         </div>
                         <div class="col-md-4 colform-dkim-keyblock">
-                            <label class="form-label">Public Key</label>
+                            <label class="form-label"><?= $LANG['dkim_key'] ?></label>
                             <!-- Setzen des Public Keys aus den vorhandenen Daten -->
                             <textarea name="dkim_key" class="form-control" rows="7" placeholder="Nur Base64-Inhalt"><?= htmlspecialchars($dkim_key) ?></textarea>
                         </div>

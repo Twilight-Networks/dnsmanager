@@ -73,7 +73,7 @@ function tryAutoPtr(PDO $pdo, int $zone_id, string $type, string $ip, string $na
 
     if (!$ptr_zone || !$ptr_name) {
         toastError(
-            "PTR-Eintrag konnte nicht erzeugt werden – ungültige IP-Adresse oder Formatfehler.",
+            $LANG['record_error_auto_ptr_invalid_ip'],
             "Fehler bei PTR-Berechnung für {$type} {$ip} → Zone-ID {$zone_id}, Name '{$name}'"
         );
         return false;
@@ -86,7 +86,7 @@ function tryAutoPtr(PDO $pdo, int $zone_id, string $type, string $ip, string $na
 
     if (!$ptr_zone_id) {
         toastError(
-            "PTR-Eintrag nicht möglich – passende Reverse-Zone <code>{$ptr_zone}</code> ist nicht vorhanden.",
+            sprintf($LANG['record_error_auto_ptr_no_zone'], "<code>{$ptr_zone}</code>"),
             "PTR-Zuordnung fehlgeschlagen: keine Reverse-Zone '{$ptr_zone}' für IP {$ip}"
         );
         return false;
@@ -97,7 +97,7 @@ function tryAutoPtr(PDO $pdo, int $zone_id, string $type, string $ip, string $na
     $stmt->execute([$ptr_zone_id, $ptr_name]);
     if ((int)$stmt->fetchColumn() > 0) {
         toastError(
-            "PTR-Eintrag nicht möglich – in der Zone <code>{$ptr_zone}</code> existiert bereits ein PTR für <code>{$ptr_name}</code>.",
+            sprintf($LANG['record_error_auto_ptr_duplicate'], "<code>{$ptr_zone}</code>", "<code>{$ptr_name}</code>"),
             "PTR-Duplikat erkannt: PTR {$ptr_name}.{$ptr_zone} existiert bereits"
         );
         return false;
@@ -114,7 +114,7 @@ function tryAutoPtr(PDO $pdo, int $zone_id, string $type, string $ip, string $na
         return true;
     } catch (PDOException $e) {
         toastError(
-            "Fehler beim automatischen PTR-Eintrag.",
+            $LANG['record_error_auto_ptr_db'],
             "Datenbankfehler beim Einfügen von PTR {$ptr_name}.{$ptr_zone}: " . $e->getMessage()
         );
         return false;
@@ -159,7 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Überprüfen, ob die Datei nicht größer als die maximal erlaubte Größe ist
         if ($_FILES['dkim_file']['size'] > $maxFileSize) {
         toastError(
-            "Die Datei ist zu groß. Die maximale Dateigröße beträgt 2 KB.",
+            $LANG['record_error_dkim_file_too_large'],
             "DKIM-Upload abgebrochen: Datei überschreitet 2 KB Limit."
         );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
@@ -171,7 +171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fileExtension = strtolower($fileInfo['extension']);
         if ($fileExtension !== 'txt') {
             toastError(
-                "Nur .txt-Dateien sind erlaubt.",
+                $LANG['record_error_dkim_invalid_extension'],
                 "DKIM-Upload abgelehnt: Dateiendung '{$fileExtension}' ist nicht erlaubt."
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
@@ -185,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fileContent = file_get_contents($filePath);
         if (preg_match('/<\?php|<script|<\/script>/', $fileContent)) {
             toastError(
-                "Die Datei enthält unerlaubten Code und konnte nicht verarbeitet werden.",
+                $LANG['record_error_dkim_invalid_code'],
                 "DKIM-Datei abgewiesen: Enthält verbotene Zeichenfolgen."
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
@@ -201,7 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_POST['dkim_key'] = $dkimData['key'];
         } else {
             toastError(
-                "Die DKIM-Datei konnte nicht verarbeitet werden.",
+                $LANG['record_error_dkim_parse_failed'],
                 "Fehler beim Parsen der hochgeladenen DKIM-Datei."
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
@@ -220,7 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (isset($result['error'])) {
         toastError(
-            $result['error'],
+            $LANG['record_error_build_failed'],
             "Fehler beim Verarbeiten des Record-Typs '{$raw_type}': {$result['error']}"
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
@@ -237,7 +237,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!empty($errors)) {
         foreach ($errors as $error) {
             toastError(
-                $error,
+                $LANG[$error] ?? $LANG['generic_validation_error'],
                 "Fehler bei der Validierung von Record '{$type} {$name}': {$error}"
             );
         }
@@ -248,7 +248,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Auf Duplikate prüfen
     if (isDuplicateRecord($pdo, $zone_id, $name, $type, $content)) {
         toastError(
-            "Ein identischer $type-Eintrag für <code>" . htmlspecialchars($name) . "</code> existiert bereits.",
+            sprintf($LANG['record_error_duplicate'], htmlspecialchars($name), $type),
             "Record-Duplikat erkannt: {$type} {$name} bereits vorhanden in Zone {$zone_name} (ID {$zone_id})"
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
@@ -269,7 +269,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($rebuild['status'] === 'error') {
             $pdo->rollBack();
             toastError(
-                "Der Record konnte nicht gespeichert werden, da die Zonendatei ungültig wäre.",
+                $LANG['record_error_zonefile_invalid'],
                 $rebuild['output']
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
@@ -278,7 +278,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($rebuild['status'] === 'warning') {
             toastWarning(
-                "Record gespeichert – Warnung beim Zonendatei-Check.",
+                $LANG['record_warning_zonefile_check'],
                 $rebuild['output']
             );
         }
@@ -287,7 +287,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (Throwable $e) {
         $pdo->rollBack();
         toastError(
-            "Beim Speichern des Records ist ein Fehler aufgetreten.",
+            $LANG['record_error_db_save_failed'],
             "Datenbankfehler beim Speichern von {$type} {$name} in Zone-ID {$zone_id}: " . $e->getMessage()
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
@@ -304,7 +304,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (empty($_SESSION['toast_errors'])) {
         toastSuccess(
-            "Record <strong>" . htmlspecialchars($type) . " {$name}</strong> erfolgreich in <strong>" . htmlspecialchars($zone_name) . "</strong> hinzugefügt.",
+            sprintf($LANG['record_created'], htmlspecialchars($type), htmlspecialchars($name), htmlspecialchars($zone_name)),
             "Neuer DNS-Record {$type} {$name} erfolgreich gespeichert in Zone '{$zone_name}' (ID {$zone_id})"
         );
     }

@@ -36,55 +36,51 @@ $active     = isset($_POST['active']) ? 1 : 0;
 // Eingabevalidierung
 $errors = [];
 
-if ($name === '' || strlen($name) > 100) {
-    $errors[] = "Name fehlt oder zu lang";
-} elseif (!isValidFqdn($name) || substr_count(rtrim($name, '.'), '.') < 1) {
-    $errors[] = "Der Servername muss ein gültiger FQDN sein (z. B. ns1.example.com)";
+if ($name === '' || strlen($name) > 100 || !isValidFqdn($name) || substr_count(rtrim($name, '.'), '.') < 1) {
+    $errors[] = $LANG['server_error_invalid_name'];
 }
 
 $valid_dns_ip4 = filter_var($dns_ip4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 $valid_dns_ip6 = filter_var($dns_ip6, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
 
 if (!$valid_dns_ip4 && !$valid_dns_ip6) {
-    $errors[] = "Mindestens eine gültige DNS-IP-Adresse (IPv4 oder IPv6) ist erforderlich";
+    $errors[] = $LANG['server_error_invalid_dns_ip'];
 }
 
 if ($dns_ip4 !== '' && !$valid_dns_ip4) {
-    $errors[] = "Ungültige IPv4-Adresse";
+    $errors[] = $LANG['server_error_invalid_ipv4'];
 }
 
 if ($dns_ip6 !== '' && !$valid_dns_ip6) {
-    $errors[] = "Ungültige IPv6-Adresse";
+    $errors[] = $LANG['server_error_invalid_ipv6'];
 }
 
 if ($api_ip !== '' && !filter_var($api_ip, FILTER_VALIDATE_IP)) {
-    $errors[] = "Ungültige API-IP-Adresse";
+    $errors[] = $LANG['server_error_invalid_api_ip'];
 }
 
 if (!$is_local && $api_ip === '') {
-    $errors[] = "API-IP-Adresse ist erforderlich";
+    $errors[] = $LANG['server_error_api_ip_required'];
 }
 
 if (!$is_local && ($api_token === '' || strlen($api_token) < 32)) {
-    $errors[] = "API-Key fehlt oder zu kurz";
+    $errors[] = $LANG['server_error_api_token_required'];
 }
 
-// Es darf exakt ein lokaler Server existieren
+// Nur ein lokaler Server erlaubt
 if ($is_local) {
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM servers WHERE is_local = 1");
     $stmt->execute();
     if ($stmt->fetchColumn() > 0) {
-        $errors[] = "Es darf nur einen lokalen Server geben";
+        $errors[] = $LANG['server_error_local_exists'];
     }
 }
 
 if (!empty($errors)) {
     foreach ($errors as $err) {
-        toastAndLog(
-            'error',
-            htmlspecialchars($err),
-            "Validierungsfehler beim Hinzufügen von Server: {$err}",
-            'warning'
+        toastError(
+            $LANG['server_error_invalid_input'] . ': ' . htmlspecialchars($err),
+            "Validierungsfehler beim Hinzufügen von Server: {$err}"
         );
     }
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php?add_new=1");
@@ -112,7 +108,7 @@ try {
     $pdo->commit();
 
     toastSuccess(
-        "Server <strong>" . htmlspecialchars($name) . "</strong> erfolgreich hinzugefügt.",
+        sprintf($LANG['server_created_success'], htmlspecialchars($name)),
         "Neuer Server hinzugefügt: {$name} ({$dns_ip4}) ({$dns_ip6}), lokal={$is_local}, aktiv={$active}"
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
@@ -121,7 +117,7 @@ try {
 } catch (PDOException $e) {
     $pdo->rollBack();
     toastError(
-        "Beim Hinzufügen des Servers ist ein Fehler aufgetreten.",
+        $LANG['server_error_db_save_failed'],
         "Datenbankfehler beim Hinzufügen von Server '{$name}': " . $e->getMessage()
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php?add_new=1");

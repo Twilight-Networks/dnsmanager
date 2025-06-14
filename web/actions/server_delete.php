@@ -21,11 +21,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
 
 if ($id < 1) {
-    toastAndLog(
-        'error',
-        'Ungültige Server-ID.',
-        'Ungültige Server-ID beim Löschversuch übergeben.',
-        'warning'
+    toastError(
+        $LANG['server_error_invalid_id'],
+        "Ungültige Server-ID beim Löschversuch übergeben."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
     exit;
@@ -37,11 +35,9 @@ $stmt->execute([$id]);
 $server = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$server) {
-    toastAndLog(
-        'error',
-        'Server nicht gefunden.',
-        "Server mit ID {$id} konnte in der Datenbank nicht gefunden werden.",
-        'warning'
+    toastError(
+        $LANG['error_server_not_found'],
+        "Server mit ID {$id} konnte in der Datenbank nicht gefunden werden."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
     exit;
@@ -53,11 +49,9 @@ $stmt->execute([$id]);
 $usage_count = $stmt->fetchColumn();
 
 if ($usage_count > 0) {
-    toastAndLog(
-        'error',
-        'Der Server ist noch mindestens einer Zone zugewiesen und kann daher nicht gelöscht werden.',
-        "'{$server['name']}' (ID {$id}) ist noch mindestens einer Zone zugewiesen – Löschvorgang abgebrochen.",
-        'warning'
+    toastError(
+        $LANG['server_error_delete_assigned'],
+        "'{$server['name']}' (ID {$id}) ist noch mindestens einer Zone zugewiesen – Löschvorgang abgebrochen."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
     exit;
@@ -80,14 +74,14 @@ try {
     $pdo->commit();
 
     toastSuccess(
-        'Server erfolgreich gelöscht.',
+        $LANG['server_deleted'],
         "Server '{$server['name']}' (ID {$id}) erfolgreich gelöscht."
     );
 
 } catch (PDOException $e) {
     $pdo->rollBack();
     toastError(
-        'Beim Löschen des Servers ist ein Fehler aufgetreten.',
+        $LANG['server_error_delete_failed'],
         "Datenbankfehler beim Löschen von Server '{$server['name']}' (ID {$id}): " . $e->getMessage()
     );
 }

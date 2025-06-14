@@ -70,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <title>Login - DNS Manager</title>
+    <title>Login - DNS-Manager</title>
     <link href="assets/bootstrap/bootstrap.min.css?v=<?= filemtime(__DIR__ . '/../assets/bootstrap/bootstrap.min.css') ?>" rel="stylesheet">
     <link href="assets/fonts/fonts.css?v=<?= filemtime(__DIR__ . '/../assets/fonts/fonts.css') ?>" rel="stylesheet">
     <link rel="icon" href="<?= rtrim(BASE_URL, '/') ?>/assets/branding/favicon.ico" type="image/x-icon">
@@ -90,17 +90,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <!-- Hinweis: Erfolgreich abgemeldet -->
         <?php if ($logoutSuccess): ?>
-            <div class="alert alert-success">✅ Sie wurden erfolgreich abgemeldet.</div>
+            <div class="alert alert-success">✅ <?= $LANG['logout_success'] ?></div>
         <?php endif; ?>
 
         <!-- Hinweis: Session abgelaufen -->
         <?php if ($timeoutExpired): ?>
-            <div class="alert alert-warning">⏳ Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.</div>
+            <div class="alert alert-warning">⏳ <?= $LANG['session_expired'] ?></div>
         <?php endif; ?>
 
         <!-- Hinweis: Fehlgeschlagener Login -->
         <?php if ($error): ?>
-            <div class="alert alert-danger">❌ Login fehlgeschlagen. Bitte überprüfen Sie Benutzername und Passwort.</div>
+            <div class="alert alert-danger">❌ <?= $LANG['login_failed'] ?></div>
         <?php endif; ?>
 
         <!-- Login-Formular -->
@@ -109,16 +109,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?= csrf_input() ?>
 
                 <div class="mb-3 text-start">
-                    <label class="form-label">Benutzername</label>
+                    <label class="form-label"><?= $LANG['username'] ?></label>
                     <input type="text" name="username" class="form-control" required autofocus>
                 </div>
                 <div class="mb-3 text-start">
-                    <label class="form-label">Passwort</label>
+                    <label class="form-label"><?= $LANG['password'] ?></label>
                     <input type="password" name="password" class="form-control" required>
                 </div>
 
                 <div class="d-grid" style="max-width: 120px; margin: 0 auto;">
-                    <button type="submit" class="btn btn-primary">Anmelden</button>
+                    <button type="submit" class="btn btn-primary"><?= $LANG['login_button'] ?></button>
                 </div>
             </form>
         </div>

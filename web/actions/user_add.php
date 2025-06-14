@@ -27,7 +27,7 @@ $zones = isset($_POST['zones']) ? $_POST['zones'] : [];
 // Benutzername validieren
 if (!preg_match('/^[a-zA-Z0-9_\-\.@]+$/', $username)) {
     toastError(
-        "Ungültiger Benutzername.",
+        $LANG['user_error_invalid_username'],
         "Benutzeranlage fehlgeschlagen: ungültiger Benutzername '{$username}'."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -37,7 +37,7 @@ if (!preg_match('/^[a-zA-Z0-9_\-\.@]+$/', $username)) {
 // Passwort validieren über zentrale Helferfunktion
 if (!validatePassword($password_raw)) {
     toastError(
-        "Das Passwort muss mindestens " . PASSWORD_MIN_LENGTH . " Zeichen lang sein.",
+        sprintf($LANG['error_password_too_short'], PASSWORD_MIN_LENGTH),
         "Benutzeranlage fehlgeschlagen: Passwort für '{$username}' zu kurz."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -49,7 +49,7 @@ $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
 $stmt->execute([$username]);
 if ($stmt->fetchColumn() > 0) {
     toastError(
-        "Benutzername existiert bereits.",
+        $LANG['user_error_username_exists'],
         "Benutzeranlage fehlgeschlagen: Benutzername '{$username}' existiert bereits."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -95,13 +95,13 @@ try {
 
     $pdo->commit();
     toastSuccess(
-        "Benutzer <strong>" . htmlspecialchars($username) . "</strong> erfolgreich angelegt.",
+        sprintf($LANG['user_created'], htmlspecialchars($username)),
         "Benutzer '{$username}' mit Rolle '{$role}' erfolgreich erstellt."
     );
 } catch (Throwable $e) {
     $pdo->rollBack();
     toastError(
-        "Fehler beim Anlegen des Benutzers.",
+        $LANG['user_error_create_failed'],
         "Transaktion fehlgeschlagen bei Benutzeranlage '{$username}': " . $e->getMessage()
     );
 }

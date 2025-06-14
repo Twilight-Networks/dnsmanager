@@ -71,26 +71,33 @@ foreach ($server_diag as $entry) {
     }
 }
 
-$overall_server_class = $has_server_errors ? 'danger' : ($has_server_warnings ? 'warning' : 'success');
-$overall_server_message = $has_server_errors ? '❌ Fehlerhafte Server erkannt' :
-    ($has_server_warnings ? '⚠️ Warnungen bei Serverprüfungen' : '✅ Alle Server in Ordnung');
+if ($has_server_errors) {
+    $overall_server_class = 'danger';
+    $overall_server_message = '❌ ' . $LANG['server_error'];
+} elseif ($has_server_warnings) {
+    $overall_server_class = 'warning';
+    $overall_server_message = '⚠️ ' . $LANG['server_warning'];
+} else {
+    $overall_server_class = 'success';
+    $overall_server_message = '✅ ' . $LANG['server_ok'];
+}
 ?>
 
 <br>
 <br>
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2>DNS-Server</h2>
+    <h2><?= $LANG['dns_servers'] ?></h2>
     <?php if ($_SESSION['role'] === 'admin'): ?>
-        <a href="pages/servers.php?add_new=1" class="btn btn-success">+ Neuer Server</a>
+        <a href="pages/servers.php?add_new=1" class="btn btn-success">+ <?= $LANG['add_server'] ?></a>
     <?php endif; ?>
 </div>
 
 <div class="card mb-4"<?= $overall_server_class !== 'success' ? ' onclick="toggleServerDiagnostics()" style="cursor: pointer;"' : '' ?>>
     <div class="card-body">
-        <h5>Serverstatus</h5>
-        <div class="alert alert-<?= $overall_server_class ?> mb-0">
-            <?= $overall_server_message ?>
-        </div>
+        <h5><?= $LANG['server_status'] ?></h5>
+            <div class="alert alert-<?= $overall_server_class ?> mb-0">
+                <?= htmlspecialchars($overall_server_message) ?>
+            </div>
         <div id="serverDiagnosticsBlock"<?= $overall_server_class !== 'success' ? ' style="display: none;"' : ' style="display: none;" hidden' ?> class="mt-3 small">
             <?php foreach ($server_diagnostics_output as $block): ?>
                 <div class="alert alert-<?= $overall_server_class ?>"><?= $block ?></div>
@@ -107,12 +114,12 @@ $overall_server_message = $has_server_errors ? '❌ Fehlerhafte Server erkannt' 
 <table class="table table-bordered align-middle">
     <thead class="table-light">
         <tr>
-            <th class="coltbl-name">Name</th>
+            <th class="coltbl-name"><?= $LANG['name'] ?></th>
             <th class="coltbl-ip">DNS-IP</th>
             <th class="coltbl-ip">API-IP</th>
-            <th class="coltbl-server-local">Local</th>
-            <th class="coltbl-server-activ">Aktiv</th>
-            <th class="coltbl-actions">Aktionen</th>
+            <th class="coltbl-server-local"><?= $LANG['local'] ?></th>
+            <th class="coltbl-server-activ"><?= $LANG['active'] ?></th>
+            <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
         </tr>
     </thead>
     <tbody>
@@ -128,12 +135,12 @@ $overall_server_message = $has_server_errors ? '❌ Fehlerhafte Server erkannt' 
                         <?php endif; ?>
                     </td>
                     <td><?= htmlspecialchars($server['api_ip'] ?? '-') ?></td>
-                    <td><?= $server['is_local'] ? 'Ja' : 'Nein' ?></td>
-                    <td><?= $server['active'] ? 'Ja' : 'Nein' ?></td>
+                        <td><?= $server['is_local'] ? $LANG['yes'] : $LANG['no'] ?></td>
+                        <td><?= $server['active'] ? $LANG['yes'] : $LANG['no'] ?></td>
                     <td>
                         <div class="d-flex flex-wrap gap-1">
-                            <button type="submit" form="editForm_<?= $server['id'] ?>" class="btn btn-sm btn-success">Speichern</button>
-                            <a href="pages/servers.php" class="btn btn-sm btn-secondary">Abbrechen</a>
+                            <button type="submit" form="editForm_<?= $server['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                            <a href="pages/servers.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
                         </div>
                     </td>
                 </tr>
@@ -178,14 +185,14 @@ $overall_server_message = $has_server_errors ? '❌ Fehlerhafte Server erkannt' 
                     <td class="coltbl-actions">
                         <div class="d-flex flex-wrap gap-1">
                             <?php if (in_array($_SESSION['role'], ['admin', 'zoneadmin'])): ?>
-                                <a href="pages/servers.php?edit_id=<?= $server['id'] ?>" class="btn btn-sm btn-outline-primary">Bearbeiten</a>
+                                <a href="pages/servers.php?edit_id=<?= $server['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
                             <?php endif; ?>
                             <?php if ($_SESSION['role'] === 'admin'): ?>
                                 <form class="d-inline">
                                     <button type="button"
                                             class="btn btn-sm btn-outline-warning btn-bind-reload"
                                             data-server-id="<?= $server['id'] ?>">
-                                        BIND Reload
+                                        <?= $LANG['bind_reload'] ?>
                                     </button>
                                 </form>
                             <?php endif; ?>
@@ -193,7 +200,7 @@ $overall_server_message = $has_server_errors ? '❌ Fehlerhafte Server erkannt' 
                                 <form method="post" action="actions/server_delete.php" class="d-inline confirm-delete">
                                     <?= csrf_input() ?>
                                     <input type="hidden" name="id" value="<?= $server['id'] ?>">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Löschen</button>
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
                                 </form>
                             <?php endif; ?>
                         </div>
@@ -211,18 +218,18 @@ $overall_server_message = $has_server_errors ? '❌ Fehlerhafte Server erkannt' 
       <div class="modal-dialog">
         <div class="modal-content">
           <div class="modal-header">
-            <h5 class="modal-title" id="reloadConfirmLabel">BIND neu laden</h5>
+            <h5 class="modal-title" id="reloadConfirmLabel"><?= $LANG['bind_reload_title'] ?></h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
           </div>
           <div class="modal-body">
-            Bind auf diesem Server wirklich neu laden?
+            <?= $LANG['bind_reload_confirm'] ?>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
             <form id="reloadConfirmForm" method="post" action="actions/bind_reload.php" class="d-inline">
                 <?= csrf_input() ?>
                 <input type="hidden" name="id" id="reload_server_id">
-                <button type="submit" class="btn btn-primary">BIND Reload</button>
+                <button type="submit" class="btn btn-primary"><?= $LANG['bind_reload'] ?></button>
             </form>
           </div>
         </div>

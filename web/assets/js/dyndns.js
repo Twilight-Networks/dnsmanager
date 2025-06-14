@@ -26,10 +26,10 @@ function copyDynDnsUrl() {
     navigator.clipboard.writeText(input.value)
         .then(() => {
             const oldText = input.value;
-            input.value = "✔️ In der Zwischenablage";
+            input.value = "✔️ " + lang('clipboard_success');
             setTimeout(() => { input.value = oldText; }, 1000);
         })
         .catch(() => {
-            alert("Kopieren fehlgeschlagen.");
+            alert(lang('clipboard_failed'));
         });
 }

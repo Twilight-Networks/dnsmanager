@@ -57,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $all_records = getAllZoneRecords($pdo, $zone_id);
             if (isGlueRecord($record, $all_records, $zone_name)) {
                 toastError(
-                    "Glue-Record <strong>" . htmlspecialchars($record['name']) . "</strong> darf nicht gelöscht werden.",
+                    sprintf($LANG['record_error_glue_protected'], "<strong>" . htmlspecialchars($record['name']) . "</strong>"),
                     "Löschversuch für Glue-Record '{$record['name']}' in Zone '{$zone_name}' blockiert."
                 );
                 throw new RuntimeException("Löschen von Glue-Record nicht erlaubt.");
@@ -66,7 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Geschützte NS-Records dürfen nicht gelöscht werden
             if ($record['type'] === 'NS' && isProtectedNsRecord($record, $all_records, $zone_name, $pdo, $zone_id)) {
                 toastError(
-                    "NS-Record <strong>" . htmlspecialchars($record['content']) . "</strong> ist durch Server-Zuweisung oder Glue geschützt.",
+                    sprintf($LANG['record_error_ns_protected'], "<strong>" . htmlspecialchars($record['content']) . "</strong>"),
                     "Löschversuch für NS-Record in Zone '{$zone_name}' blockiert."
                 );
                 throw new RuntimeException("Löschen von geschütztem NS-Record nicht erlaubt.");
@@ -90,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if ($rebuild['status'] === 'warning') {
                 toastWarning(
-                    "Record(s) gelöscht – Warnung beim Zonendatei-Check in <strong>{$zone_name}</strong>.",
+                    sprintf($LANG['record_warning_zonefile_check_after_delete'], "<strong>{$zone_name}</strong>"),
                     $rebuild['output']
                 );
             }
@@ -98,13 +98,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $pdo->commit();
         toastSuccess(
-            "Record(s) erfolgreich gelöscht.",
+            $LANG['record_deleted_success'],
             "Alle ausgewählten Records wurden erfolgreich entfernt."
         );
     } catch (Throwable $e) {
         $pdo->rollBack();
         toastError(
-            "Beim Löschen der Records ist ein Fehler aufgetreten.",
+            $LANG['record_error_delete_failed'],
             "Transaktion abgebrochen: " . $e->getMessage()
         );
     }

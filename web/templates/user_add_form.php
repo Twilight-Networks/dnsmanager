@@ -15,33 +15,33 @@ if (!defined('IN_APP')) {
 ?>
 
 <hr class="my-4">
-<h4 class="mt-4">Neuen Benutzer anlegen</h4>
+<h4 class="mt-4"><?= $LANG['add_new_user'] ?></h4>
 
 <form method="post" action="actions/user_add.php" class="row g-3">
     <?= csrf_input() ?>
 
     <div class="col-md-3">
-        <label>Benutzername</label>
+        <label><?= $LANG['username'] ?></label>
         <input name="username" class="form-control" required>
     </div>
 
     <div class="col-md-3">
-        <label>Passwort</label>
+        <label><?= $LANG['password'] ?></label>
         <input name="password" type="password" class="form-control" required>
     </div>
 
     <div class="col-md-3">
-        <label>Rolle</label>
+        <label><?= $LANG['role'] ?></label>
         <select name="role" class="form-select" id="new_user_role" onchange="toggleZoneOptions(this)">
-            <option value="admin" selected>admin</option>
-            <option value="zoneadmin">zoneadmin</option>
+            <option value="admin" selected><?= $LANG['role_admin'] ?></option>
+            <option value="zoneadmin"><?= $LANG['role_zoneadmin'] ?></option>
         </select>
     </div>
 
     <div class="col-md-3">
-        <label>Zonen</label>
+        <label><?= $LANG['zones'] ?></label>
         <select name="zones[]" multiple class="form-select" id="zone_select">
-            <option value="all" id="admin-placeholder">Alle Zonen</option>
+            <option value="all" id="admin-placeholder"><?= $LANG['all_zones'] ?></option>
             <?php foreach ($zones as $z): ?>
                 <option value="<?= $z['id'] ?>"><?= htmlspecialchars($z['name']) ?></option>
             <?php endforeach; ?>
@@ -49,8 +49,8 @@ if (!defined('IN_APP')) {
     </div>
 
     <div class="col-12">
-        <button class="btn btn-success">Benutzer anlegen</button>
-        <a href="pages/users.php" class="btn btn-secondary">Abbrechen</a>
+        <button class="btn btn-success"><?= $LANG['create_user'] ?></button>
+        <a href="pages/users.php" class="btn btn-secondary"><?= $LANG['cancel'] ?></a>
     </div>
 </form>
 

@@ -72,6 +72,7 @@ Entwickelt von **Twilight-Networks**, 2025.
 
 ### UX & Oberfläche
 - Responsives, modernes Layout auf Basis von Bootstrap 5
+- Mehrsprachigkeit (i18n) - Deutsch, Englisch, Spanisch
 - Klar strukturiertes Layout mit flexibler Navigation für Zonen, Records, Benutzer und Server
 - REST-konforme API-Struktur (interner Einsatz für Agentenkommunikation)
 

@@ -123,7 +123,7 @@
             const name = nameField.value.trim().replace(/\._(tcp|udp)$/i, ''); // doppelt absichern
 
             if (!name.startsWith('_')) {
-                alert("Dienstname muss mit Unterstrich beginnen, z. B. _sip");
+                alert(lang('record_srv_name_invalid'));
                 return false;
             }
 
@@ -146,7 +146,7 @@
             const typeField = form.querySelector('input[name="type"]');
 
             if (!selector || !key) {
-                alert("Bitte alle DKIM-Felder ausfüllen.");
+                alert(lang('record_dkim_missing_fields'));
                 return false;
             }
 
@@ -208,7 +208,7 @@ if (!isDKIM) {
             const contentField = document.getElementById('edit_input_content');
 
             if (!service || !proto || !priority || !weight || !target) {
-                alert("Bitte alle URI-Felder ausfüllen.");
+                alert(lang('record_uri_missing_fields'));
                 return false;
             }
 

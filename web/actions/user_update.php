@@ -25,7 +25,7 @@ $zones = isset($_POST['zones']) ? $_POST['zones'] : [];
 // Grundvalidierung der Eingaben
 if ($id <= 0 || !in_array($role, ['admin', 'zoneadmin'], true)) {
     toastError(
-        "Ungültige Eingabe.",
+        $LANG['user_error_invalid_id'],
         "Benutzer-Update fehlgeschlagen: Ungültige ID oder Rolle (ID {$id}, Rolle '{$role}')."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -35,7 +35,7 @@ if ($id <= 0 || !in_array($role, ['admin', 'zoneadmin'], true)) {
 // Benutzername validieren
 if (!preg_match('/^[a-zA-Z0-9_\-\.@]+$/', $username)) {
     toastError(
-        "Ungültiger Benutzername.",
+        $LANG['user_error_invalid_username'],
         "Benutzer-Update fehlgeschlagen: Benutzername '{$username}' ist ungültig."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -47,7 +47,7 @@ $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ?");
 $stmt->execute([$id]);
 if ((int)$stmt->fetchColumn() === 0) {
     toastError(
-        "Benutzer nicht gefunden.",
+        $LANG['user_error_username_exists'],
         "Update fehlgeschlagen: Benutzer-ID {$id} existiert nicht."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -60,7 +60,10 @@ $stmt->execute([$id]);
 $old = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$old) {
-    toastError("Benutzer konnte nicht geladen werden.");
+    toastError(
+        $LANG['user_error_load_failed'],
+        "Benutzer-ID {$id} konnte nicht geladen werden."
+    );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
     exit;
 }
@@ -78,7 +81,7 @@ $zonesChanged    = ($role === 'zoneadmin') &&
                     array_diff($new_zone_ids, $existing_zone_ids));
 
 if (!$usernameChanged && !$roleChanged && !$zonesChanged) {
-    toastSuccess("Keine Änderungen vorgenommen.", "Benutzerdaten sind unverändert.");
+    toastSuccess($LANG['no_changes'], "Benutzerdaten sind unverändert.");
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
     exit;
 }
@@ -105,13 +108,13 @@ try {
 
     $pdo->commit();
     toastSuccess(
-        "Benutzer <strong>" . htmlspecialchars($username) . "</strong> erfolgreich aktualisiert.",
+        sprintf($LANG['user_updated'], htmlspecialchars($username)),
         "Benutzer '{$username}' (ID {$id}) mit Rolle '{$role}' erfolgreich geändert."
     );
 } catch (Exception $e) {
     $pdo->rollBack();
     toastError(
-        "Fehler beim Aktualisieren des Benutzers.",
+        $LANG['user_error_update_failed'],
         "Fehler beim Speichern von Benutzer '{$username}' (ID {$id}): " . $e->getMessage()
     );
 }

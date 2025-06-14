@@ -36,14 +36,14 @@ curl_setopt_array($ch, [
 $response = curl_exec($ch);
 
 if ($response === false) {
-    $error = 'Verbindung zum Update-Server fehlgeschlagen: ' . curl_error($ch);
+    $error = sprintf($LANG['update_connection_failed'], curl_error($ch));
 } else {
     $data = json_decode($response, true);
     if (!is_array($data) || empty($data['version'])) {
-        $error = 'Ungültige Antwort vom Update-Server.';
+        $error = $LANG['update_invalid_response'];
     } else {
         $remote_version = $data['version'];
-        $release_date = $data['release_date'] ?? 'unbekannt';
+        $release_date = $data['release_date'] ?? $LANG['unknown'];
         $download_url = $data['download_url'] ?? null;
         $changelog_url = $data['changelog_url'] ?? null;
     }
@@ -57,32 +57,32 @@ include __DIR__ . '/../templates/layout.php';
 
 <br>
 <br>
-<h2>Update-Prüfung</h2>
+<h2><?= $LANG['update_check'] ?></h2>
 <br>
 
 <?php if ($error): ?>
     <div class="alert alert-danger">
-        ❌ <?= htmlspecialchars($error) ?>
+        ❌ <?= htmlspecialchars($LANG['update_error'] . ': ' . $error) ?>
     </div>
 <?php elseif (version_compare($remote_version, $current_version, '>')): ?>
     <div class="alert alert-warning">
-        ⚠️ Eine neue Version ist verfügbar:<br><br>
-        <strong>Version <?= htmlspecialchars($remote_version) ?></strong>
-        (veröffentlicht am <?= htmlspecialchars($release_date) ?>)
+        ⚠️ <?= $LANG['update_available'] ?><br><br>
+        <strong><?= sprintf($LANG['update_version'], htmlspecialchars($remote_version)) ?></strong>
+        (<?= sprintf($LANG['update_released'], htmlspecialchars($release_date)) ?>)
         <br><br>
         <?php if ($download_url): ?>
             <a href="<?= htmlspecialchars($download_url) ?>" class="btn btn-sm btn-outline-primary" target="_blank">
-                Zum Download
+                <?= $LANG['update_download'] ?>
             </a>
         <?php endif; ?>
         <?php if ($changelog_url): ?>
             <a href="<?= htmlspecialchars($changelog_url) ?>" class="btn btn-sm btn-outline-primary" target="_blank">
-                Zum Changelog
+                <?= $LANG['update_changelog'] ?>
             </a>
         <?php endif; ?>
     </div>
 <?php else: ?>
     <div class="alert alert-success">
-        ✅ Du verwendest die aktuellste Version (<strong><?= htmlspecialchars($current_version) ?></strong>).
+        ✅ <?= sprintf($LANG['update_current'], htmlspecialchars($current_version)) ?>
     </div>
 <?php endif; ?>

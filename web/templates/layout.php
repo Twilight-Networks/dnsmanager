@@ -31,7 +31,7 @@ if (isset($_SESSION['user_id'])) {
 
     $dirty = $status['bind_dirty'] || $status['changed_zones'] > 0;
     $btn_class = $dirty ? 'btn-warning' : 'btn-secondary';
-    $btn_text = 'Veröffentlichen';
+    $btn_text = $LANG['publish'];
 }
 
 // Prüfen, ob Fehler im Systemstatus vorliegen
@@ -65,7 +65,7 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
 
 ?>
 <!DOCTYPE html>
-<html lang="de">
+<html lang="<?= htmlspecialchars($lang) ?>">
 <head>
     <meta charset="UTF-8">
     <title>DNS-Manager</title>
@@ -102,20 +102,20 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
         v<?= htmlspecialchars(DNSMANAGER_VERSION) ?>
     </div>
     <hr>
-    <a href="pages/dashboard.php" class="<?= isActive('dashboard.php') ?>">🏠 Dashboard</a>
+    <a href="pages/dashboard.php" class="<?= isActive('dashboard.php') ?>">🏠 <?= $LANG['menu_dashboard'] ?></a>
     <?php if ($_SESSION['role'] === 'admin'): ?>
-        <a href="pages/servers.php" class="<?= isActive('servers.php') ?>">🖥️ Server</a>
+        <a href="pages/servers.php" class="<?= isActive('servers.php') ?>">🖥️ <?= $LANG['menu_servers'] ?></a>
     <?php endif; ?>
-    <a href="pages/zones.php" class="<?= isActive('zones.php') ?>">🌐 Zonen</a>
+    <a href="pages/zones.php" class="<?= isActive('zones.php') ?>">🌐 <?= $LANG['zones'] ?></a>
     <?php if ($_SESSION['role'] === 'admin'): ?>
-        <a href="pages/dyndns.php" class="<?= isActive('dyndns.php') ?>">🌐 DynDNS</a>
+        <a href="pages/dyndns.php" class="<?= isActive('dyndns.php') ?>">🌐 <?= $LANG['menu_dyndns'] ?></a>
     <?php endif; ?>
-    <a href="pages/users.php" class="<?= isActive('users.php') ?>">👥 Benutzer</a>
+    <a href="pages/users.php" class="<?= isActive('users.php') ?>">👥 <?= $LANG['users'] ?></a>
     <?php if ($_SESSION['role'] === 'admin'): ?>
         <a id="system_healthButton"
            href="pages/system_health.php"
            class="<?= isActive('system_health.php') ?><?= $system_has_errors ? ' has-errors' : '' ?>">
-           🩺 Systemstatus<?= $system_has_errors ? ' ❗' : '' ?>
+           🩺 <?= $LANG['system_status'] ?><?= $system_has_errors ? ' ❗' : '' ?>
         </a>
     <?php endif; ?>
     <hr>
@@ -132,16 +132,16 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
     <!-- Benutzerinfos + Logout -->
     <div class="mt-auto p-2">
         <div class="small mb-2">
-            Angemeldet als: <br><strong><?= htmlspecialchars($_SESSION['username']) ?></strong>
+            <?= $LANG['logged_in_as'] ?> <br><strong><?= htmlspecialchars($_SESSION['username']) ?></strong>
         </div>
         <a href="logout.php" class="<?= isActive('logout.php') ?>">
-            🚪 Abmelden
+            🚪 <?= $LANG['menu_logout'] ?>
         </a>
     </div>
     <hr>
     <div class="text-center small">
         <a href="pages/update.php" class="text-muted text-decoration-none">
-            🔄 Auf Updates prüfen
+            🔄 <?= $LANG['menu_check_updates'] ?>
         </a>
     </div>
 </div> <!-- Ende Sidebar -->
@@ -173,7 +173,7 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
         <div class="toast align-items-center text-bg-danger border-0" role="alert" aria-live="assertive" aria-atomic="true">
             <div class="d-flex">
                 <div class="toast-body">
-                    <strong>❌ Fehler:</strong><br>
+                    <strong>❌ <?= $LANG['errors'] ?>:</strong><br>
                     <?php
                     $allowed_tags = '<br><strong><code>';
                     foreach ($_SESSION['toast_errors'] as $error) {
@@ -194,7 +194,7 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
         <div class="toast align-items-center text-bg-warning border-0" role="alert" aria-live="assertive" aria-atomic="true">
             <div class="d-flex">
                 <div class="toast-body">
-                    ⚠️ <strong>Warnungen:</strong><br>
+                    ⚠️ <strong><?= $LANG['warnings'] ?>:</strong><br>
                     <?php
                     $allowed_tags = '<br><strong><code>';
                     foreach ($_SESSION['toast_warnings'] as $warning) {

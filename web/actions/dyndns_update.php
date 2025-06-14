@@ -37,7 +37,7 @@ $hostname = trim($_POST['hostname'] ?? '');
 $zone_id  = (int)($_POST['zone_id'] ?? 0);
 
 if ($id <= 0 || $hostname === '' || $zone_id <= 0 || $username === '') {
-    toastError('Ungültige Eingaben.');
+    toastError($LANG['dyndns_error_invalid_input']);
     header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?edit_id=' . $id);
     exit;
 }
@@ -46,7 +46,7 @@ if ($id <= 0 || $hostname === '' || $zone_id <= 0 || $username === '') {
 $stmt = $pdo->prepare("SELECT id FROM zones WHERE id = ? AND allow_dyndns = 1");
 $stmt->execute([$zone_id]);
 if (!$stmt->fetch()) {
-    toastError('Zone ist nicht für DynDNS freigegeben.');
+    toastError($LANG['dyndns_error_zone_not_allowed']);
     header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?edit_id=' . $id);
     exit;
 }
@@ -57,7 +57,7 @@ $stmt->execute([$id]);
 $existing = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$existing) {
-    toastError('DynDNS-Account nicht gefunden.');
+    toastError($LANG['dyndns_error_not_found']);
     header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');
     exit;
 }
@@ -72,7 +72,7 @@ $zoneChanged     = (int)$existing['zone_id'] !== (int)$zone_id;
 $passwordChanged = $password !== '';
 
 if (!$hostnameChanged && !$zoneChanged && !$usernameChanged && !$passwordChanged) {
-    toastSuccess('Keine Änderungen vorgenommen.', 'Der DynDNS-Account ist unverändert.');
+    toastSuccess($LANG['no_changes'], 'Der DynDNS-Account ist unverändert.');
     header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');
     exit;
 }
@@ -129,7 +129,7 @@ try {
         }
 
         if (!$hasInsertedAny) {
-            toastWarning('Keine IP übernommen.', 'Es wurden keine A-/AAAA-Records gesetzt, da keine aktuelle IP vorliegt.');
+            toastWarning($LANG['dyndns_no_ip_warning'], 'Es wurden keine A-/AAAA-Records gesetzt, da keine aktuelle IP vorliegt.');
         }
 
         $affected_zones[] = $zone_id;
@@ -142,24 +142,24 @@ try {
             $result = rebuild_zone_and_flag_if_valid((int)$zid);
             if ($result['status'] === 'error') {
                 $pdo->rollBack();
-                toastError("Zonen-Rebuild fehlgeschlagen für Zone-ID {$zid}.", $result['output']);
+                toastError(sprintf($LANG['zone_rebuild_failed'], $zid), $result['output']);
                 header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?edit_id=' . $id);
                 exit;
             } elseif ($result['status'] === 'warning') {
-                toastWarning("Warnung beim Zonen-Rebuild für Zone-ID {$zid}.", $result['output']);
+                toastWarning(sprintf($LANG['zone_rebuild_warning'], $zid), $result['output']);
             }
         }
     }
 
     $pdo->commit();
     if (!empty($affected_zones) && $hasInsertedAny) {
-        toastSuccess('DynDNS-Account aktualisiert.', 'Änderungen gespeichert und betroffene Zonen rebuildet.');
+        toastSuccess($LANG['dyndns_updated'], 'Änderungen gespeichert und betroffene Zonen rebuildet.');
     } else {
-        toastSuccess('DynDNS-Account aktualisiert.', 'Änderungen gespeichert – kein Zonen-Rebuild notwendig.');
+        toastSuccess($LANG['dyndns_updated'], 'Änderungen gespeichert – kein Zonen-Rebuild notwendig.');
     }
 } catch (Throwable $e) {
     $pdo->rollBack();
-    toastError('Fehler beim Speichern: ' . $e->getMessage());
+    toastError($LANG['dyndns_error_update'] . ': ' . $e->getMessage());
 }
 
 header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');

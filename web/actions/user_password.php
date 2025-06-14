@@ -18,7 +18,7 @@ $is_admin = ($_SESSION['role'] === 'admin');
 
 if (!$is_admin && !$is_self) {
     toastError(
-        "Du darfst nur dein eigenes Passwort ändern.",
+        $LANG['error_password_unauthorized'],
         "Verbotener Passwort-Änderungsversuch für Benutzer-ID {$user_id} durch Benutzer-ID {$current_user_id}."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -30,7 +30,7 @@ $password_repeat = trim($_POST['password_repeat'] ?? '');
 
 if (!validatePassword($password)) {
     toastError(
-        "Das Passwort muss mindestens " . PASSWORD_MIN_LENGTH . " Zeichen lang sein.",
+        sprintf($LANG['error_password_too_short'], PASSWORD_MIN_LENGTH),
         "Passwort-Änderung abgelehnt: Passwort zu kurz für Benutzer-ID {$user_id}."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -39,7 +39,7 @@ if (!validatePassword($password)) {
 
 if ($is_self && $password !== $password_repeat) {
     toastError(
-        "Die Passwörter stimmen nicht überein.",
+        $LANG['error_password_mismatch'],
         "Passwort-Änderung durch Benutzer-ID {$user_id} abgebrochen: Eingaben nicht identisch."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -50,7 +50,7 @@ if ($is_self && $password !== $password_repeat) {
 $hash = password_hash($password, PASSWORD_DEFAULT);
 if ($hash === false) {
     toastError(
-        "Fehler beim Verarbeiten des Passworts.",
+        $LANG['error_password_processing'],
         "Passwort-Hashing für Benutzer-ID {$user_id} fehlgeschlagen."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
@@ -67,15 +67,15 @@ try {
 
     toastSuccess(
         $is_self
-            ? "Dein Passwort wurde erfolgreich geändert."
-            : "Das Passwort wurde erfolgreich aktualisiert.",
+            ? $LANG['password_changed']
+            : $LANG['password_changed_admin'],
         "Passwort erfolgreich geändert für Benutzer-ID {$user_id}" . ($is_self ? " (eigenes Konto)" : " (durch Admin)")
     );
 
 } catch (Exception $e) {
     $pdo->rollBack();
     toastError(
-        "Fehler beim Speichern des Passworts.",
+        $LANG['error_password_save'],
         "Fehler beim Speichern des Passworts für Benutzer-ID {$user_id}: " . $e->getMessage()
     );
 }

@@ -33,48 +33,44 @@ $errors = [];
 
 // Eingabevalidierung
 if ($id < 1) {
-    $errors[] = "Ungültige ID";
+    $errors[] = $LANG['server_error_invalid_id'];
 }
 
-if ($name === '' || strlen($name) > 100) {
-    $errors[] = "Name fehlt oder zu lang";
-} elseif (!isValidFqdn($name) || substr_count(rtrim($name, '.'), '.') < 1) {
-    $errors[] = "Der Servername muss ein gültiger FQDN sein (z. B. ns1.example.com)";
+if ($name === '' || strlen($name) > 100 || !isValidFqdn($name) || substr_count(rtrim($name, '.'), '.') < 1) {
+    $errors[] = $LANG['server_error_invalid_name'];
 }
 
 $valid_dns_ip4 = filter_var($dns_ip4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 $valid_dns_ip6 = filter_var($dns_ip6, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
 
 if (!$valid_dns_ip4 && !$valid_dns_ip6) {
-    $errors[] = "Mindestens eine gültige DNS-IP-Adresse (IPv4 oder IPv6) ist erforderlich";
+    $errors[] = $LANG['server_error_invalid_dns_ip'];
 }
 
 if ($dns_ip4 !== '' && !$valid_dns_ip4) {
-    $errors[] = "Ungültige IPv4-Adresse";
+    $errors[] = $LANG['server_error_invalid_ipv4'];
 }
 if ($dns_ip6 !== '' && !$valid_dns_ip6) {
-    $errors[] = "Ungültige IPv6-Adresse";
+    $errors[] = $LANG['server_error_invalid_ipv6'];
 }
 
 if ($api_ip !== '' && !filter_var($api_ip, FILTER_VALIDATE_IP)) {
-    $errors[] = "Ungültige API-IP-Adresse";
+    $errors[] = $LANG['server_error_invalid_api_ip'];
 }
 
 if (!$is_local && $api_ip === '') {
-    $errors[] = "API-IP-Adresse ist erforderlich für entfernte Server";
+    $errors[] = $LANG['server_error_api_ip_required'];
 }
 
 if (!$is_local && ($api_token === '' || strlen($api_token) < 32)) {
-    $errors[] = "API-Key fehlt oder zu kurz";
+    $errors[] = $LANG['server_error_api_token_required'];
 }
 
 if (!empty($errors)) {
     foreach ($errors as $e) {
-        toastAndLog(
-            'error',
-            $e,
-            "Validierungsfehler beim Server-Update '{$name}' (ID {$id}): {$e}",
-            'warning'
+        toastError(
+            $LANG['server_error_invalid_input'] . ': ' . htmlspecialchars($e),
+            "Validierungsfehler beim Server-Update '{$name}' (ID {$id}): {$e}"
         );
     }
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
@@ -90,7 +86,10 @@ $stmt = $pdo->prepare("
 $existing = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$existing) {
-    toastError("Server nicht gefunden.", "Server-ID {$id} konnte nicht geladen werden.");
+    toastError(
+        $LANG['error_server_not_found'],
+        "Server-ID {$id} konnte nicht geladen werden."
+    );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
     exit;
 }
@@ -122,7 +121,10 @@ $nonCriticalChanged =
 
 // Wenn gar nichts verändert wurde → sofortiger Abbruch
 if (!$server_data_changed && !$nonCriticalChanged) {
-    toastSuccess("Keine Änderungen vorgenommen.", "Die Serverdaten sind unverändert.");
+    toastSuccess(
+        $LANG['no_changes'],
+        "Die Serverdaten sind unverändert."
+    );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
     exit;
 }
@@ -134,11 +136,9 @@ if ($active === 0) {
     $count = $stmt->fetchColumn();
 
     if ($count > 0) {
-        toastAndLog(
-            'error',
-            "Der Server ist als Master-Server in mindestens einer Zone eingetragen und kann daher nicht deaktiviert werden.",
-            "Aktiver Master-Server '{$name}' (ID {$id}) sollte deaktiviert werden – abgebrochen.",
-            'warning'
+        toastError(
+            $LANG['server_error_master_deactivation_blocked'],
+            "Aktiver Master-Server '{$name}' (ID {$id}) sollte deaktiviert werden – abgebrochen."
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
         exit;
@@ -179,12 +179,12 @@ try {
 
             if ($result['status'] === 'error') {
                 toastError(
-                    "Zonen-Rebuild fehlgeschlagen für Zone-ID {$zid}.",
+                    sprintf($LANG['zone_rebuild_failed'], $zid),
                     $result['output']
                 );
             } elseif ($result['status'] === 'warning') {
                 toastWarning(
-                    "Zonen-Rebuild mit Warnung für Zone-ID {$zid}.",
+                    sprintf($LANG['zone_rebuild_warning'], $zid),
                     $result['output']
                 );
             }
@@ -192,13 +192,13 @@ try {
     }
 
     toastSuccess(
-        "Server erfolgreich aktualisiert.",
+        sprintf($LANG['server_updated_success'], htmlspecialchars($name)),
         "Server '{$name}' (ID {$id}) erfolgreich aktualisiert mit neuen Daten."
     );
 } catch (Exception $e) {
     $pdo->rollBack();
     toastError(
-        "Beim Speichern des Servers ist ein Fehler aufgetreten.",
+        $LANG['server_error_db_update_failed'],
         "Fehler beim Speichern von Server '{$name}' (ID {$id}): " . $e->getMessage()
     );
 }

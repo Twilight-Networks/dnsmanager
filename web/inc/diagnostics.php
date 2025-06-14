@@ -23,38 +23,40 @@ require_once __DIR__ . '/helpers.php';
  */
 function check_config_validity(): array
 {
+    global $LANG;
+
     $issues = [];
 
     // BASE_URL prüfen (muss definiert sein)
     if (!defined('BASE_URL')) {
-        $issues[] = 'BASE_URL ist nicht definiert.';
+        $issues[] = $LANG['diag_error_base_url'];
     }
 
     // NAMED_CHECKZONE prüfen
     if (!defined('NAMED_CHECKZONE') || !is_executable(NAMED_CHECKZONE)) {
-        $issues[] = 'NAMED_CHECKZONE ist nicht vorhanden oder nicht ausführbar.';
+        $issues[] = $LANG['diag_error_named_checkzone'];
     }
 
     // PASSWORD_MIN_LENGTH prüfen
     if (!defined('PASSWORD_MIN_LENGTH') || PASSWORD_MIN_LENGTH < 4) {
-        $issues[] = 'PASSWORD_MIN_LENGTH ist zu niedrig oder nicht gesetzt.';
+        $issues[] = $LANG['diag_error_password_min'];
     }
 
     // PHP_ERR_REPORT prüfen
     if (!defined('PHP_ERR_REPORT') || PHP_ERR_REPORT == true) {
-        $issues[] = 'PHP_ERR_REPORT steht auf true (Entwicklungsmodus aktiv).';
+        $issues[] = $LANG['diag_error_php_dev_mode'];
     }
 
         // LOG_LEVEL prüfen
     $valid_levels = ['debug', 'info', 'warning', 'error'];
     if (!defined('LOG_LEVEL') || !in_array(LOG_LEVEL, $valid_levels, true)) {
-        $issues[] = 'Ungültiger LOG_LEVEL: ' . (defined('LOG_LEVEL') ? LOG_LEVEL : 'nicht definiert');
+        $issues[] = sprintf($LANG['diag_error_log_level'], defined('LOG_LEVEL') ? LOG_LEVEL : $LANG['unknown']);
     }
 
     // LOG_TARGET prüfen
     $valid_targets = ['apache', 'syslog'];
     if (!defined('LOG_TARGET') || !in_array(strtolower(LOG_TARGET), $valid_targets, true)) {
-        $issues[] = 'Ungültiger LOG_TARGET: ' . (defined('LOG_TARGET') ? LOG_TARGET : 'nicht definiert');
+        $issues[] = sprintf($LANG['diag_error_log_target'], defined('LOG_TARGET') ? LOG_TARGET : $LANG['unknown']);
     }
 
     return $issues;

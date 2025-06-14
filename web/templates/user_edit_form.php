@@ -36,23 +36,23 @@ if (!isset($u) || !isset($zones) || !isset($selected)) {
 
             <div class="row g-3">
                 <div class="col-md-4 coltbl-users-name">
-                    <label class="form-label">Benutzername</label>
+                    <label class="form-label"><?= $LANG['username'] ?></label>
                     <input name="username" value="<?= htmlspecialchars($u['username']) ?>"
                            class="form-control" required maxlength="100">
                 </div>
 
                 <div class="col-md-4 coltbl-users-role">
-                    <label class="form-label">Rolle</label>
+                    <label class="form-label"><?= $LANG['role'] ?></label>
                     <select name="role" class="form-select">
-                        <option value="admin" <?= $u['role'] === 'admin' ? 'selected' : '' ?>>admin</option>
-                        <option value="zoneadmin" <?= $u['role'] === 'zoneadmin' ? 'selected' : '' ?>>zoneadmin</option>
+                        <option value="admin" <?= $u['role'] === 'admin' ? 'selected' : '' ?>><?= $LANG['role_admin'] ?></option>
+                        <option value="zoneadmin" <?= $u['role'] === 'zoneadmin' ? 'selected' : '' ?>><?= $LANG['role_zoneadmin'] ?></option>
                     </select>
                 </div>
 
                 <div class="col-md-4 coltbl-users-zones">
-                    <label class="form-label">Zonen</label>
+                    <label class="form-label"><?= $LANG['zones'] ?></label>
                     <div id="zoneInfo<?= $u['id'] ?>" class="<?= $u['role'] === 'zoneadmin' ? 'd-none' : '' ?>">
-                        <div class="form-control-plaintext">Alle Zonen</div>
+                        <div class="form-control-plaintext"><?= $LANG['all_zones'] ?></div>
                     </div>
 
                     <div id="zoneSelect<?= $u['id'] ?>" class="<?= $u['role'] === 'zoneadmin' ? '' : 'd-none' ?>">

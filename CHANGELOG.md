@@ -143,3 +143,40 @@ CREATE TABLE dyndns_accounts (
 - **CLI-Zugriffsschutz** für interne Skripte `monitoring_run-cli.php` und `monitoring_log_cleanup.php` implementiert
   - Direkter Aufruf über den Browser (HTTP) ist nun vollständig blockiert (HTTP 403)
   - Skripte reagieren nur noch auf legitime Ausführung über die Kommandozeile (z. B. per Cron)
+
+<br>
+<br>
+
+## [1.2.3] – 2025-06-14
+
+### Added
+- **Mehrsprachigkeit (i18n) vollständig integriert**
+  - Alle UI-Texte wurden aus dem Quellcode extrahiert und durch sprachabhängige `$LANG`-Einträge ersetzt
+  - Neue Sprachdateien `lang/de.php`, `lang/en.php` und `lang/es.php`
+  - Vollständige Übersetzung für Deutsch, Englisch und Spanisch
+  - Dynamische Inhalte (z. B. mit `sprintf()`, Validierungstexte, Platzhalter etc.) werden korrekt lokalisiert
+  - Sprachumschaltung erfolgt über `ui_config.php` (`LANGUAGE = 'de'|'en'|'es'`)
+  - Alternativ kann in der `ui_config.php` `DEFAULT_LANGUAGE = 'auto'` gesetzt werden – die Sprache richtet sich dann automatisch nach der Browsereinstellung
+  - Einheitliche Struktur für bestehende und künftige Lokalisierungen etabliert
+  - Backend-Logik, Toast-Meldungen und Formulare unterstützen jetzt mehrere Sprachen
+
+### Changed
+- **Zone-Bearbeitung: Umgang mit inaktiven Servern überarbeitet**
+  - Inaktive Server werden beim Bearbeiten von Zonen nun nicht mehr versehentlich entfernt
+  - Hintergrund: HTML `<input disabled>` verhindert Übertragung im POST – zuvor wurden inaktive Slaves dadurch aus der Zuweisung gelöscht
+  - Neue Logik:
+    - Bestehende inaktive Slave-Server bleiben erhalten, solange sie nicht entfernt werden
+    - Inaktive Server können nicht als Master-Server gesetzt werden (führt zu `toastError`)
+  - Vergleichslogik (`serverListChanged`) erkennt korrekt, ob sich tatsächlich etwas verändert hat
+  - Keine unnötigen Rebuilds oder DB-Updates mehr, wenn nichts geändert wurde
+  - Insert-Logik wurde auf `effective_new_server_ids` umgestellt (inkl. inaktiver Slaves)
+
+### Fixed
+- **Zone-Update: Falsches Entfernen von Servern verhindert**
+  - Beim sofortigen Speichern einer Zone ohne Änderungen wurden vormals zugewiesene inaktive Server versehentlich entfernt
+  - Ursache: HTML-Formular übermittelt deaktivierte Einträge nicht
+  - Behoben durch Ergänzung inaktiver Slaves auf Basis des vorherigen DB-Zustands vor dem Vergleich
+
+- **Master-Validierung**: Inaktive Server können nicht mehr als Master gesetzt werden
+  - Zuvor fehlte eine explizite Prüfung – dies konnte zu inkonsistenten Zuständen führen
+  - Neue Prüfung verhindert das Speichern und zeigt eine aussagekräftige `toastError`-Meldung

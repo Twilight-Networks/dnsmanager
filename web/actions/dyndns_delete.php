@@ -29,7 +29,7 @@ if ($_SESSION['role'] !== 'admin') {
 $id = (int)($_POST['id'] ?? 0);
 
 if ($id <= 0) {
-    toastError('Ungültige ID.');
+    toastError($LANG['dyndns_error_invalid_id']);
     header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');
     exit;
 }
@@ -61,11 +61,11 @@ try {
 
     $pdo->commit();
 
-    toastSuccess('DynDNS-Account und zugehörige A/AAAA-Records gelöscht.');
+    toastSuccess($LANG['dyndns_delete_success']);
 
 } catch (Throwable $e) {
     $pdo->rollBack();
-    toastError('Fehler beim Löschen: ' . $e->getMessage());
+    toastError($LANG['dyndns_error_delete'] . ': ' . $e->getMessage());
 }
 
 header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');

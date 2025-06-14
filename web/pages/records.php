@@ -79,115 +79,113 @@ foreach ($all_records as $r) {
  */
 function render_records_table(array $records, string $title, int $zone_id, ?int $edit_record_id, PDO $pdo): void
 {
+    global $all_records, $zone, $LANG;
+
     if (empty($records)) {
         return;
     }
 
-    echo "<h4 class='mt-4'>$title</h4>";
+    echo "<h4 class='mt-4'>" . htmlspecialchars($title) . "</h4>";
     echo "<div class='table-responsive'>
             <table class='table table-striped table-bordered align-middle' style='table-layout: fixed; width: 100%;'>";
+
     echo "<thead class='table-light'><tr>";
     echo "<th class='coltbl-select'><input type='checkbox' class='form-check-input select-all' data-table-id='" . md5($title) . "'></th>";
+    echo "<th class='coltbl-name'>" . $LANG['name'] . "</th>";
+    echo "<th class='coltbl-type'>" . $LANG['record_type'] . "</th>";
+    echo "<th class='coltbl-content'>" . $LANG['record_content'] . "</th>";
+    echo "<th class='coltbl-ttl'>TTL</th>";
+    echo "<th class='coltbl-actions'>" . $LANG['actions'] . "</th>";
+    echo "</tr></thead><tbody>";
 
-    echo "<th class='coltbl-name'>Name</th>
-          <th class='coltbl-type'>Typ</th>
-          <th class='coltbl-content'>Inhalt</th>
-          <th class='coltbl-ttl'>TTL</th>
-          <th class='coltbl-actions'>Aktionen</th>
-        </tr></thead><tbody>";
-
-    global $all_records, $zone; // notwendig, um Zugriff auf Gesamtdaten zu haben
     foreach ($records as $r) {
         $is_glue = isGlueRecord($r, $all_records, $zone['name']);
-        $is_ns_glue = false;
-        if ($r['type'] === 'NS') {
-            $is_ns_glue = isProtectedNsRecord($r, $all_records, $zone['name'], $pdo, $zone_id);
-        }
-
-        // Normale Anzeigezeile
+        $is_ns_glue = ($r['type'] === 'NS') ? isProtectedNsRecord($r, $all_records, $zone['name'], $pdo, $zone_id) : false;
         $is_editing = ($edit_record_id === (int)$r['id']);
         $row_class = $is_editing ? 'table-warning' : '';
+
         echo "<tr class='$row_class'>";
         echo "<td class='coltbl-select'>";
         if (!$is_editing) {
             if ($is_glue) {
-                echo "<input type='checkbox' class='form-check-input' disabled style='opacity:0.5; cursor:not-allowed;' title='Glue-Record – nicht löschbar'>";
+                echo "<input type='checkbox' class='form-check-input' disabled style='opacity:0.5; cursor:not-allowed;' title='" . $LANG['glue_protected'] . "'>";
             } else {
-                echo "<input type='checkbox' class='form-check-input select-row' data-id='{$r['id']}' data-table-id='" . md5($title) . "'>";
+                echo "<input type='checkbox' class='form-check-input select-row' data-id='" . $r['id'] . "' data-table-id='" . md5($title) . "'>";
             }
         }
         echo "</td>";
+
         echo "<td>" . htmlspecialchars($r['name']) . "</td>";
-        echo "<td>" . $r['type'] . "</td>";
-        echo "<td class='coltbl-content' title=\"" . htmlspecialchars($r['content']) . "\">" . htmlspecialchars($r['content']) . "</td>";
+        echo "<td>" . htmlspecialchars($r['type']) . "</td>";
+        echo "<td class='coltbl-content' title='" . htmlspecialchars($r['content']) . "'>" . htmlspecialchars($r['content']) . "</td>";
 
-        // TTL auf Basis des Record-Typs setzen, wenn "auto" gewählt wurde
-        $ttl_labels = [
-            60     => '1 Minute',
-            120    => '2 Minuten',
-            300    => '5 Minuten',
-            600    => '10 Minuten',
-            900    => '15 Minuten',
-            1800   => '30 Minuten',
-            3600   => '1 Stunde',
-            7200   => '2 Stunden',
-            18000  => '5 Stunden',
-            43200  => '12 Stunden',
-            86400  => '1 Tag',
-        ];
-
+        // TTL-Anzeige
         $ttl_value = (int)$r['ttl'];
         $ttl_auto = getAutoTTL($r['type']);
         if ($ttl_value === $ttl_auto) {
-            $ttl_display = 'Auto';
-        } elseif (isset($ttl_labels[$ttl_value])) {
-            $ttl_display = $ttl_labels[$ttl_value];
+            $ttl_display = $LANG['ttl_auto'];
         } else {
-            $ttl_display = "{$ttl_value} Sekunden";
+            $ttl_map = [
+                60 => '1 ' . $LANG['minute'],
+                120 => '2 ' . $LANG['minutes'],
+                300 => '5 ' . $LANG['minutes'],
+                600 => '10 ' . $LANG['minutes'],
+                900 => '15 ' . $LANG['minutes'],
+                1800 => '30 ' . $LANG['minutes'],
+                3600 => '1 ' . $LANG['hour'],
+                7200 => '2 ' . $LANG['hours'],
+                18000 => '5 ' . $LANG['hours'],
+                43200 => '12 ' . $LANG['hours'],
+                86400 => '1 ' . $LANG['day'],
+            ];
+            $ttl_display = $ttl_map[$ttl_value] ?? $ttl_value . ' ' . $LANG['seconds'];
         }
 
-        echo "<td>$ttl_display</td>";
+        echo "<td>" . htmlspecialchars($ttl_display) . "</td>";
 
+        // Aktionsspalte
         echo "<td><div class='d-flex gap-1 flex-wrap'>";
-        if ($edit_record_id === (int)$r['id']) {
-            echo "<button type='submit' form='editForm_{$r['id']}' class='btn btn-sm btn-success'>Speichern</button>";
-            echo "<a href='pages/records.php?zone_id=$zone_id' class='btn btn-sm btn-secondary'>Abbrechen</a>";
+        if ($is_editing) {
+            echo "<button type='submit' form='editForm_" . $r['id'] . "' class='btn btn-sm btn-success'>" . $LANG['save'] . "</button>";
+            echo "<a href='pages/records.php?zone_id=" . $zone_id . "' class='btn btn-sm btn-secondary'>" . $LANG['cancel'] . "</a>";
         } else {
-            echo "<a href='pages/records.php?zone_id=$zone_id&edit_id={$r['id']}' class='btn btn-sm btn-outline-warning'>Bearbeiten</a>";
+            echo "<a href='pages/records.php?zone_id=" . $zone_id . "&edit_id=" . $r['id'] . "' class='btn btn-sm btn-outline-warning'>" . $LANG['edit'] . "</a>";
 
-        if (!$is_glue && !$is_ns_glue) {
-            echo "<form method='post' action='actions/record_delete.php' class='d-inline confirm-delete'>";
-            echo csrf_input();
-            echo "<input type='hidden' name='id' value='{$r['id']}'>";
-            echo "<input type='hidden' name='zone_id' value='{$zone_id}'>";
-            echo "<button type='submit' class='btn btn-sm btn-outline-danger'>Löschen</button>";
-            echo "</form>";
+            if (!$is_glue && !$is_ns_glue) {
+                echo "<form method='post' action='actions/record_delete.php' class='d-inline confirm-delete'>";
+                echo csrf_input();
+                echo "<input type='hidden' name='id' value='" . $r['id'] . "'>";
+                echo "<input type='hidden' name='zone_id' value='" . $zone_id . "'>";
+                echo "<button type='submit' class='btn btn-sm btn-outline-danger'>" . $LANG['delete'] . "</button>";
+                echo "</form>";
+            }
         }
-    }
-    echo "</div></td>";
+        echo "</div></td>";
 
-
-        // Bearbeitungszeile nur bei passendem edit_id
-        if ($edit_record_id === (int)$r['id']) {
+        // Bearbeitungsformular (wenn aktiv)
+        if ($is_editing) {
             include __DIR__ . '/../templates/record_edit_form.php';
         }
+
+        echo "</tr>";
     }
-    echo "</tbody></table>";
+
+    echo "</tbody></table></div>";
 }
 ?>
 
 <br>
 <br>
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap">
-    <h2>DNS-Einträge für <strong><?= htmlspecialchars($zone['name']) ?></strong></h2>
+    <h2><?= sprintf($LANG['dns_records_for'], htmlspecialchars($zone['name'])) ?></h2>
     <div class="d-flex gap-2 align-items-center flex-wrap">
-        <a href="pages/records.php?zone_id=<?= $zone['id'] ?>&add_new=1" class="btn btn-success">+ Neuer Eintrag</a>
+        <a href="pages/records.php?zone_id=<?= $zone['id'] ?>&add_new=1" class="btn btn-success">+ <?= $LANG['add_record'] ?></a>
 
         <form id="bulkDeleteForm" method="post" action="actions/record_delete.php" class="d-none confirm-delete">
             <?= csrf_input() ?>
 
             <input type="hidden" name="bulk_ids" value="">
-            <button type="submit" class="btn btn-danger fw-bold" id="bulkDeleteBtn">Einträge löschen</button>
+            <button type="submit" class="btn btn-danger fw-bold" id="bulkDeleteBtn"><?= $LANG['delete_records'] ?></button>
         </form>
     </div>
 </div>
@@ -211,7 +209,7 @@ foreach ($zone_diag as $entry) {
 }
 
 // Ausgabe gesammelt darstellen
-echo "<div class='alert alert-secondary'><strong>📦 Zonenprüfung für <code>" . htmlspecialchars($zone['name']) . "</code> auf allen zugewiesenen Servern:</strong><br>";
+echo "<div class='alert alert-secondary'><strong>📦 " . sprintf($LANG['zone_diagnostic_for'], htmlspecialchars($zone['name'])) . "</strong><br>";
 echo "<br>";
 
 foreach ($results as $r) {
@@ -235,12 +233,15 @@ if ($show_add_form): ?>
 <?php endif; ?>
 
 <?php
-render_records_table($groups['NS'], "Name-Server Konfiguration (NS)", $zone['id'], $edit_record_id, $pdo);
-render_records_table($groups['MAIL'], "Mail-Konfiguration (MX, SPF, DKIM)", $zone['id'], $edit_record_id, $pdo);
-$other_title = $zone['type'] === 'reverse'
-    ? "Host-Einträge (PTR, TXT)"
-    : "Host-Einträge (A, AAAA, CNAME, PTR, TXT)";
-render_records_table($groups['OTHER'], $other_title, $zone['id'], $edit_record_id, $pdo);
+$record_title_ns   = $LANG['records_ns'];
+$record_title_mail = $LANG['records_mail'];
+$record_title_other = $zone['type'] === 'reverse'
+    ? $LANG['records_host_reverse']
+    : $LANG['records_host'];
+
+render_records_table($groups['NS'], $record_title_ns, $zone['id'], $edit_record_id, $pdo);
+render_records_table($groups['MAIL'], $record_title_mail, $zone['id'], $edit_record_id, $pdo);
+render_records_table($groups['OTHER'], $record_title_other, $zone['id'], $edit_record_id, $pdo);
 ?>
 
 <!-- JavaScript auslagern -->

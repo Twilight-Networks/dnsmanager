@@ -42,3 +42,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
+
+/**
+ * Sprach-Helper für JavaScript
+ *
+ * Funktion: t('key') → Gibt den übersetzten Text aus window.LANG zurück.
+ * Optionales Fallback möglich, wenn Schlüssel nicht vorhanden ist.
+ *
+ * Beispiele:
+ * - lang('save') → "Speichern"
+ * - lang('for_example') + ' example.com' → "z. B. example.com"
+ *
+ * @param {string} key
+ * @param {string|null} fallback
+ * @returns {string}
+ */
+function lang(key, fallback = null) {
+    if (typeof window.LANG === 'object' && key in window.LANG) {
+        return window.LANG[key];
+    }
+    return fallback !== null ? fallback : key;
+}

@@ -29,7 +29,7 @@ $errors = validateZoneInput($_POST);
 if (!empty($errors)) {
     foreach ($errors as $error) {
         toastError(
-            $error,
+            $LANG[$error] ?? $LANG['generic_validation_error'],
             "Zoneneingabe ungültig: {$error}"
         );
     }
@@ -66,7 +66,7 @@ $master_id  = $_POST['master_server_id'] ?? null;
 
 if (!is_array($server_ids) || count($server_ids) < 1) {
     toastError(
-        "Es muss mindestens ein Server ausgewählt werden.",
+        $LANG['zone_error_no_server_selected'],
         "Zonenanlage fehlgeschlagen: Kein Server ausgewählt."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?add_new=1");
@@ -75,7 +75,7 @@ if (!is_array($server_ids) || count($server_ids) < 1) {
 
 if (!$master_id || !in_array($master_id, $server_ids, true)) {
     toastError(
-        "Der Master-Server muss unter den gewählten Servern sein.",
+        $LANG['zone_error_master_not_included'],
         "Zonenanlage fehlgeschlagen: Master nicht unter den ausgewählten Servern."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?add_new=1");
@@ -89,8 +89,8 @@ $master = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$master) {
     toastError(
-        "Master-Server konnte nicht geladen werden.",
-        "Zonenanlage fehlgeschlagen: Master-ID {$master_id} nicht ladbar."
+        $LANG['zone_error_master_load_failed'],
+        "Zonenanlage fehlgeschlagen: Master-ID {$master_id} konnte nicht geladen werden."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?add_new=1");
     exit;
@@ -213,7 +213,7 @@ try {
     if ($rebuild['status'] === 'error') {
         $pdo->rollBack();
         toastError(
-            "Die Zone konnte nicht gespeichert werden, da die Zonendatei ungültig wäre.",
+            $LANG['zone_error_zonefile_invalid'],
             $rebuild['output']
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?add_new=1");
@@ -222,14 +222,14 @@ try {
 
     if ($rebuild['status'] === 'warning') {
         toastWarning(
-            "Zone wurde erstellt – Warnung beim Zonendatei-Check.",
+            $LANG['zone_warning_zonefile_check'],
             $rebuild['output']
         );
     }
 
     $pdo->commit();
     toastSuccess(
-        "Zone <strong>" . htmlspecialchars($name) . "</strong> erfolgreich angelegt.",
+        sprintf($LANG['zone_created'], htmlspecialchars($name)),
         "Zone '{$name}' wurde erfolgreich erstellt und gespeichert."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
@@ -238,7 +238,7 @@ try {
 } catch (Exception $e) {
     $pdo->rollBack();
     toastError(
-        "Fehler beim Speichern der Zone.",
+        $LANG['zone_error_db_save_failed'],
         "Datenbankfehler beim Speichern von Zone '{$name}': " . $e->getMessage()
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?add_new=1");

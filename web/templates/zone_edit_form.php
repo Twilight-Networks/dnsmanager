@@ -18,7 +18,7 @@ if (!isset($zone)) {
     return;
 }
 
-$stmt_all = $pdo->prepare("SELECT id, name, dns_ip4, dns_ip6 FROM servers WHERE active = 1 ORDER BY name");
+$stmt_all = $pdo->prepare("SELECT id, name, dns_ip4, dns_ip6, active FROM servers ORDER BY name");
 $stmt_all->execute();
 $all_servers = $stmt_all->fetchAll(PDO::FETCH_ASSOC);
 
@@ -43,7 +43,7 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
             <!-- Formularfelder: TTL, SOA-Werte, Beschreibung -->
             <div class="row g-3">
                 <div class="col-md-4 d-flex flex-column colform-name">
-                    <label class="form-label">SOA NS</label>
+                    <label class="form-label"><?= $LANG['soa_ns'] ?></label>
                     <input
                         name="soa_ns"
                         id="soa_ns"
@@ -53,7 +53,7 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                 </div>
 
                 <div class="col-md-4 d-flex flex-column colform-zones-mail">
-                    <label class="form-label">SOA Mail</label>
+                    <label class="form-label"><?= $LANG['soa_mail'] ?></label>
                     <input name="soa_mail" class="form-control" value="<?= htmlspecialchars($zone['soa_mail']) ?>">
                 </div>
 
@@ -63,42 +63,42 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                 </div>
 
                 <div class="col-md-4 d-flex flex-column colform-ttl">
-                    <label class="form-label">SOA Refresh</label>
+                    <label class="form-label"><?= $LANG['soa_refresh'] ?></label>
                     <input name="soa_refresh" type="number" class="form-control" value="<?= (int)$zone['soa_refresh'] ?>">
                 </div>
 
                 <div class="col-md-4 d-flex flex-column colform-ttl">
-                    <label class="form-label">SOA Retry</label>
+                    <label class="form-label"><?= $LANG['soa_retry'] ?></label>
                     <input name="soa_retry" type="number" class="form-control" value="<?= (int)$zone['soa_retry'] ?>">
                 </div>
 
                 <div class="col-md-4 d-flex flex-column colform-ttl">
-                    <label class="form-label">SOA Expire</label>
+                    <label class="form-label"><?= $LANG['soa_expire'] ?></label>
                     <input name="soa_expire" type="number" class="form-control" value="<?= (int)$zone['soa_expire'] ?>">
                 </div>
 
                 <div class="col-md-4 d-flex flex-column colform-ttl">
-                    <label class="form-label">SOA Minimum</label>
+                    <label class="form-label"><?= $LANG['soa_minimum'] ?></label>
                     <input name="soa_minimum" type="number" class="form-control" value="<?= (int)$zone['soa_minimum'] ?>">
                 </div>
 
                 <?php if ($zone['type'] === 'reverse'): ?>
                 <div class="col-md-4 d-flex flex-column colform-prefix">
-                    <label class="form-label">Prefix-Length</label>
+                    <label class="form-label"><?= $LANG['prefix_length'] ?></label>
                     <input name="prefix_length" type="number" class="form-control" value="<?= (int)$zone['prefix_length'] ?>">
                 </div>
                 <?php endif; ?>
 
                 <!-- Serverzuweisung -->
                 <div class="d-flex flex-column">
-                    <label class="form-label">DNS-Serverzuweisung</label>
+                    <label class="form-label"><?= $LANG['assign_dns_servers'] ?></label>
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
-                                <th class="coltbl-assign">Zuweisen</th>
+                                <th class="coltbl-assign"><?= $LANG['assign'] ?></th>
                                 <th class="coltbl-master">Master</th>
-                                <th class="coltbl-name-dns">Name</th>
+                                <th class="coltbl-name-dns"><?= $LANG['name'] ?></th>
                                 <th class="coltbl-ip-dns">DNS-IP</th>
                                 </tr>
                             </thead>
@@ -108,14 +108,31 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                                         $is_checked = array_key_exists($srv['id'], $assigned);
                                         $is_master  = $assigned[$srv['id']] ?? 0;
                                     ?>
-                                    <tr>
+                                    <?php
+                                    $is_active = $srv['active'] ?? true;
+                                    $row_class = $is_active ? '' : 'text-muted';
+                                    $title_attr = $is_active ? '' : 'title="' . $LANG['server_ignored_on_publish'] . '"';
+                                    ?>
+                                    <tr class="<?= $row_class ?>" <?= $title_attr ?>>
                                         <td class="text-center">
-                                            <input type="checkbox" name="server_ids[]" value="<?= $srv['id'] ?>" <?= $is_checked ? 'checked' : '' ?>>
+                                            <input type="checkbox"
+                                                   name="server_ids[]"
+                                                   value="<?= $srv['id'] ?>"
+                                                   <?= $is_checked ? 'checked' : '' ?>
+                                                   <?= !$is_active ? 'disabled' : '' ?>>
                                         </td>
                                         <td class="text-center">
-                                            <input type="radio" name="master_server_id" value="<?= $srv['id'] ?>" <?= $is_master ? 'checked' : '' ?>>
+                                            <input type="radio"
+                                                   name="master_server_id"
+                                                   value="<?= $srv['id'] ?>"
+                                                   <?= $is_master ? 'checked' : '' ?>
+                                                   <?= !$is_active ? 'disabled' : '' ?>>
                                         </td>
-                                        <td><label for="server_<?= $srv['id'] ?>"><?= htmlspecialchars($srv['name']) ?></label></td>
+                                        <td>
+                                            <label for="server_<?= $srv['id'] ?>">
+                                                <?= htmlspecialchars($srv['name']) ?><?= !$is_active ? ' (' . $LANG['inactive'] . ')' : '' ?>
+                                            </label>
+                                        </td>
                                         <td>
                                             <?= htmlspecialchars($srv['dns_ip4']) ?>
                                             <?php if (!empty($srv['dns_ip6'])): ?>
@@ -127,11 +144,11 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                             </tbody>
                         </table>
                     </div>
-                    <small class="text-muted">Bitte mindestens einen Server auswählen. Genau einer muss als Master definiert sein.</small>
+                    <small class="text-muted"><?= $LANG['assign_hint'] ?></small>
                 </div>
 
                 <div class="col-md-9 d-flex flex-column mt-2">
-                    <label class="form-label">DynDNS erlaubt</label>
+                    <label class="form-label"><?= $LANG['allow_dyndns'] ?></label>
                     <div class="form-check form-switch">
                         <input class="form-check-input"
                                type="checkbox" role="switch"
@@ -140,13 +157,13 @@ $assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
                                value="1"
                                <?= $zone['allow_dyndns'] ? 'checked' : '' ?>>
                         <label class="form-check-label" for="allow_dyndns_<?= $zone['id'] ?>">
-                            DynDNS-Updates für diese Zone zulassen
+                            <?= $LANG['dyndns_zone_hint'] ?>
                         </label>
                     </div>
                 </div>
 
                 <div class="col-md-4 d-flex flex-column coltbl-desc">
-                    <label class="form-label">Beschreibung (optional)</label>
+                    <label class="form-label"><?= $LANG['description_optional'] ?></label>
                     <textarea name="description" class="form-control" rows="2"><?= htmlspecialchars((string)($zone['description'] ?? '')) ?></textarea>
                 </div>
             </div>

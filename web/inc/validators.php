@@ -25,42 +25,42 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
 
     // Namen dürfen keine Leer- oder Steuerzeichen enthalten
     if (preg_match('/[\s\p{C}]/u', $name)) {
-        $errors[] = "Der Name enthält ungültige Zeichen (z. B. Leer- oder Steuerzeichen).";
+        $errors[] = 'ERR_INVALID_NAME_CHARS';
     }
 
     // TTL prüfen (darf nicht negativ sein)
     if ($ttl !== null && $ttl < 0) {
-        $errors[] = "TTL darf nicht negativ sein.";
+        $errors[] = 'ERR_TTL_NEGATIVE';
     }
 
     switch (strtoupper($type)) {
         case 'A':
             // Inhalt muss gültige IPv4-Adresse sein
             if (!filter_var($content, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                $errors[] = "Ungültige IPv4-Adresse.";
+                $errors[] = 'ERR_INVALID_IPV4';
             }
             break;
 
         case 'AAAA':
             // Inhalt muss gültige IPv6-Adresse sein
             if (!filter_var($content, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-                $errors[] = "Ungültige IPv6-Adresse.";
+                $errors[] = 'ERR_INVALID_IPV6';
             }
             break;
 
         case 'MX':
             $parts = preg_split('/\s+/', trim($content));
             if (count($parts) !== 2) {
-                $errors[] = "MX-Record muss zwei Teile enthalten: <priority> <target>.";
+                $errors[] = 'ERR_MX_PARTS_INVALID';
             } else {
                 [$prio, $target] = $parts;
 
                 if (!ctype_digit($prio) || (int)$prio < 0 || (int)$prio > 65535) {
-                    $errors[] = "Priority im MX-Record muss zwischen 0 und 65535 liegen.";
+                    $errors[] = 'ERR_MX_PRIORITY_INVALID';
                 }
 
                 if (!isValidFqdn($target)) {
-                    $errors[] = "Target im MX-Record ist kein gültiger FQDN.";
+                    $errors[] = 'ERR_MX_TARGET_INVALID';
                 }
             }
             break;
@@ -70,32 +70,32 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
         case 'PTR':
             // Inhalt muss ein gültiger FQDN sein
             if (!isValidFqdn($content)) {
-                $errors[] = "PTR-Einträge dürfen keine IP-Adresse enthalten – erwartet wird ein FQDN.";
+                $errors[] = 'ERR_FQDN_REQUIRED';
             }
             break;
 
         case 'SPF':
             // Inhalt muss mit "v=spf1 ..." beginnen (inkl. Anführungszeichen)
             if (!preg_match('/^"v=spf1\s.+"/', $content)) {
-                $errors[] = "SPF-Inhalt muss mit \"v=spf1 ...\" beginnen.";
+                $errors[] = 'ERR_SPF_FORMAT';
             }
             break;
 
         case 'DKIM':
             // Alle DKIM-Abschnitte aus Quoted-Strings zusammenführen
             if (!preg_match_all('/"([^"]+)"/', $content, $matches)) {
-                $errors[] = "DKIM-Eintrag muss in Anführungszeichen stehen.";
+                $errors[] = 'ERR_DKIM_QUOTES';
                 break;
             }
 
             $joined = implode('', $matches[1]);
 
             if (!str_starts_with($joined, 'v=DKIM1')) {
-                $errors[] = "DKIM-Eintrag muss mit v=DKIM1 beginnen.";
+                $errors[] = 'ERR_DKIM_VERSION';
             }
 
             if (!preg_match('/\bk=(rsa|ed25519)\b/i', $joined)) {
-                $errors[] = "DKIM-Eintrag muss k=rsa oder k=ed25519 enthalten.";
+                $errors[] = 'ERR_DKIM_KEYTYPE';
             }
 
             if (preg_match('/\bp=([A-Za-z0-9+\/=]{32,})\b/', $joined, $m)) {
@@ -106,10 +106,10 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
 
                 // Zusätzlich sicherstellen, dass es ein echter Base64-„Roundtrip“ ist
                 if ($decoded === false || base64_encode($decoded) !== $key) {
-                    $errors[] = "DKIM Public Key (p=...) ist kein gültiger Base64-String.";
+                    $errors[] = 'ERR_DKIM_KEY_INVALID';
                 }
             } else {
-                $errors[] = "DKIM-Eintrag enthält keinen gültigen Public Key (p=...).";
+                $errors[] = 'ERR_DKIM_KEY_MISSING';
             }
 
             break;
@@ -117,7 +117,7 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
         case 'TXT':
             // TXT-Eintrag darf nicht länger als 512 Zeichen sein
             if (strlen($content) > 512) {
-                $errors[] = "TXT-Inhalt darf maximal 512 Zeichen lang sein.";
+                $errors[] = 'ERR_TXT_TOO_LONG';
             }
             break;
 
@@ -140,27 +140,27 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
                 )?
                 \s*$/x';
             if (!preg_match($loc_pattern, $content)) {
-                $errors[] = "Ungültiges LOC-Format. Beispiel: 52 31 0.000 N 13 24 0.000 E 34.0m";
+                $errors[] = 'ERR_LOC_FORMAT';
             }
             break;
 
         case 'CAA':
                     // CAA-Record: Format "<flag> <tag> <value>"
                     if (!preg_match('/^(0|128) (issue|issuewild|iodef) ".+?"$/', $content)) {
-                        $errors[] = "Ungültiger CAA-Record. Erwartet: 0 issue \"letsencrypt.org\"";
+                        $errors[] = 'ERR_CAA_FORMAT';
                     }
                     break;
 
         case 'SRV':
             $parts = preg_split('/\s+/', trim($content));
             if (count($parts) !== 4) {
-                $errors[] = "SRV-Record muss genau vier Teile enthalten: <priority> <weight> <port> <target>.";
+                $errors[] = 'ERR_SRV_PARTS_INVALID';
             } else {
                 [$prio, $weight, $port, $target] = $parts;
 
                 foreach ([$prio, $weight, $port] as $val) {
                     if (!ctype_digit($val) || (int)$val < 0 || (int)$val > 65535) {
-                        $errors[] = "Priority, Weight und Port müssen Ganzzahlen zwischen 0 und 65535 sein.";
+                        $errors[] = 'ERR_SRV_NUMERIC_FIELDS';
                         break;
                     }
                 }
@@ -174,34 +174,34 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
         case 'NAPTR':
             $parts = preg_split('/\s+/', trim($content), 6);
             if (count($parts) !== 6) {
-                $errors[] = "NAPTR-Record muss genau sechs Teile enthalten: <order> <preference> \"<flags>\" \"<service>\" \"<regexp>\" <replacement>.";
+                $errors[] = 'ERR_NAPTR_PARTS_INVALID';
             } else {
                 [$order, $preference, $flags, $service, $regexp, $replacement] = $parts;
 
                 // Order und Preference prüfen (Ganzzahlen)
                 foreach (['Order' => $order, 'Preference' => $preference] as $label => $val) {
                     if (!ctype_digit($val) || (int)$val < 0 || (int)$val > 65535) {
-                        $errors[] = "$label muss eine Ganzzahl zwischen 0 und 65535 sein.";
+                        $errors[] = 'ERR_NAPTR_ORDER_PREF';
                     }
                 }
 
                 // Flags und Service müssen in doppelte Anführungszeichen eingeschlossen sein
                 if (!preg_match('/^".*"$/', $flags)) {
-                    $errors[] = "Flags müssen in Anführungszeichen stehen (z. B. \"U\").";
+                    $errors[] = 'ERR_NAPTR_FLAGS';
                 }
 
                 if (!preg_match('/^".+?"$/', $service)) {
-                    $errors[] = "Service muss in Anführungszeichen stehen (z. B. \"E2U+sip\").";
+                    $errors[] = 'ERR_NAPTR_SERVICE';
                 }
 
                 // Regexp validieren: Muss mit Anführungszeichen eingeschlossen sein
                 if (!preg_match('/^".*?"$/', $regexp)) {
-                    $errors[] = "Regexp muss in Anführungszeichen stehen (z. B. \"!^.*$!sip:info@example.com!\").";
+                    $errors[] = 'ERR_NAPTR_REGEXP';
                 }
 
                 // Replacement: gültiger FQDN oder ein einzelner Punkt (".")
                 if ($replacement !== '.' && !isValidFqdn($replacement)) {
-                    $errors[] = "Replacement muss ein gültiger FQDN oder ein einzelner Punkt sein.";
+                    $errors[] = 'ERR_NAPTR_REPLACEMENT';
                 }
             }
             break;
@@ -209,26 +209,26 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
             case 'URI':
                 $parts = preg_split('/\s+/', trim($content), 3);
                 if (count($parts) !== 3) {
-                    $errors[] = "URI-Record muss genau drei Teile enthalten: <priority> <weight> \"<target>\".";
+                    $errors[] = 'ERR_URI_PARTS_INVALID';
                 } else {
                     [$priority, $weight, $target] = $parts;
 
                     if (!ctype_digit($priority) || (int)$priority < 0 || (int)$priority > 65535) {
-                        $errors[] = "Priority im URI-Record muss eine Ganzzahl zwischen 0 und 65535 sein.";
+                        $errors[] = 'ERR_URI_PRIORITY';
                     }
 
                     if (!ctype_digit($weight) || (int)$weight < 0 || (int)$weight > 65535) {
-                        $errors[] = "Weight im URI-Record muss eine Ganzzahl zwischen 0 und 65535 sein.";
+                        $errors[] = 'ERR_URI_WEIGHT';
                     }
 
                     if (!preg_match('/^".+?"$/', $target)) {
-                        $errors[] = "Ziel im URI-Record muss in Anführungszeichen stehen (z. B. \"https://example.com\").";
+                        $errors[] = 'ERR_URI_TARGET';
                     }
                 }
                 break;
         default:
             // Unbekannter/unsupported Record-Typ
-            $errors[] = "Unbekannter Record-Typ.";
+            $errors[] = 'ERR_UNKNOWN_RECORD_TYPE';
     }
 
     return $errors;
@@ -244,7 +244,7 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
  * @param array $input  Assoziatives Array (z. B. $_POST), enthält die Formularwerte.
  * @return string[]     Liste von Fehlermeldungen (leeres Array = gültig)
  */
-function validateZoneInput(array $input): array
+function validateZoneInput(array $input, bool $requirePrefix = true): array
 {
     $errors = [];
 
@@ -260,18 +260,21 @@ function validateZoneInput(array $input): array
         $name = $prefix;
     }
 
-    if ($name === '') {
-        $errors[] = "Zonenname darf nicht leer sein.";
-    }
+    // Nur wenn explizit gefordert, Zonenprefix + Name prüfen
+    if ($requirePrefix) {
+        if ($name === '') {
+            $errors[] = 'ERR_ZONE_EMPTY';
+        }
 
-    if (!preg_match('/^[a-zA-Z0-9._\-]+$/', str_replace(['.in-addr.arpa', '.ip6.arpa'], '', $name))) {
-        $errors[] = "Ungültiger Zonenname.";
+        if (!preg_match('/^[a-zA-Z0-9._\-]+$/', str_replace(['.in-addr.arpa', '.ip6.arpa'], '', $name))) {
+            $errors[] = 'ERR_ZONE_NAME_INVALID';
+        }
     }
 
     if ($type === 'reverse') {
         $prefix_length = (int)($input['prefix_length'] ?? 0);
         if ($prefix_length < 8 || $prefix_length > 128) {
-            $errors[] = "Prefix-Length für Reverse-Zonen muss zwischen 8 und 128 liegen.";
+            $errors[] = 'ERR_ZONE_PREFIX_LENGTH';
         }
     }
 
@@ -279,7 +282,7 @@ function validateZoneInput(array $input): array
     $soa_mail = trim($input['soa_mail'] ?? '');
 
     if ($soa_mail === '' || !isValidFqdn($soa_mail)) {
-        $errors[] = "Ungültige Administrator-Adresse (SOA Mail).";
+        $errors[] = 'ERR_ZONE_SOA_MAIL';
     }
 
     // SOA-Zeiten prüfen
@@ -289,19 +292,19 @@ function validateZoneInput(array $input): array
     $soa_minimum = (int)($input['soa_minimum'] ?? 0);
 
     if ($soa_refresh < 1200 || $soa_refresh > 86400) {
-        $errors[] = "SOA-Refresh muss zwischen 1200 und 86400 Sekunden liegen.";
+        $errors[] = 'ERR_ZONE_SOA_REFRESH';
     }
 
     if ($soa_retry < 180 || $soa_retry > 7200) {
-        $errors[] = "SOA-Retry muss zwischen 180 und 7200 Sekunden liegen.";
+        $errors[] = 'ERR_ZONE_SOA_RETRY';
     }
 
     if ($soa_expire < 1209600 || $soa_expire > 2419200) {
-        $errors[] = "SOA-Expire muss zwischen 1209600 und 2419200 Sekunden liegen.";
+        $errors[] = 'ERR_ZONE_SOA_EXPIRE';
     }
 
     if ($soa_minimum < 300 || $soa_minimum > 86400) {
-        $errors[] = "SOA-Minimum TTL muss zwischen 300 und 86400 Sekunden liegen.";
+        $errors[] = 'ERR_ZONE_SOA_MINIMUM';
     }
 
     return $errors;

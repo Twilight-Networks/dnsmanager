@@ -46,17 +46,17 @@ $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             <div class="row g-3">
                 <div class="col-md-3 coltbl-users-name">
-                    <label class="form-label">Benutzername</label>
+                    <label class="form-label"><?= $LANG['username'] ?></label>
                     <input type="text" class="form-control" name="username" required maxlength="64"
                            value="<?= htmlspecialchars($edit_account['username']) ?>">
                 </div>
                 <div class="col-md-3 coltbl-dyndns-hostname">
-                    <label class="form-label">Hostname</label>
+                    <label class="form-label"><?= $LANG['hostname'] ?></label>
                     <input type="text" class="form-control" name="hostname" required maxlength="255"
                            value="<?= htmlspecialchars($edit_account['hostname']) ?>">
                 </div>
                 <div class="col-md-3 coltbl-dyndns-zone">
-                    <label class="form-label">Zone</label>
+                    <label class="form-label"><?= $LANG['zone'] ?></label>
                     <select name="zone_id" class="form-select" required>
                         <?php foreach ($zones as $z): ?>
                             <option value="<?= $z['id'] ?>" <?= $z['id'] == $edit_account['zone_id'] ? 'selected' : '' ?>>

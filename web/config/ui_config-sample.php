@@ -10,8 +10,9 @@
  * - Externe Programme
  * - Sicherheitseinstellungen (Passwortregeln)
  * - Standard-Zeitzone
- * - Logziel
- * - Logging-Level
+ * - Spracheinstellungen (inkl. automatischer Browsererkennung)
+ * - Mailer-Konfiguration für Monitoring-Benachrichtigungen (SMTP oder mail())
+ * - Logging-Ziel und -Level
  * - PHP-Error-Reporting
  */
 
@@ -81,6 +82,11 @@ define('CURL_SSL_VERIFYHOST', 0);
  *  Zeitzoneneinstellung
  * --------------------------------------- */
 date_default_timezone_set('Europe/Berlin'); // Standard-Zeitzone der Anwendung
+
+/** ---------------------------------------
+ *  Spracheinstellung
+ * --------------------------------------- */
+define('DEFAULT_LANGUAGE', 'auto'); // oder 'de', 'en', 'es', 'auto' = erkenne Sprache aus dem Browser
 
 /** ---------------------------------------
  *  Mail-Benachrichtigungen (Monitoring)

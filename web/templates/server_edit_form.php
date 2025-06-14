@@ -38,49 +38,49 @@ if (!isset($edit_server)) {
 
             <div class="row g-3">
                 <div class="col-md-4 colform-name">
-                    <label class="form-label">Servername</label>
+                    <label class="form-label"><?= $LANG['server_name'] ?></label>
                     <input type="text" class="form-control" name="name" required maxlength="100"
-                            placeholder="z. B. ns1"
+                            placeholder="<?= $LANG['for_example'] ?> ns1.example.com"
                             value="<?= htmlspecialchars($edit_server['name']) ?>">
                 </div>
 
                 <div class="col-md-4 colform-ip">
-                    <label class="form-label">DNS-IP-Adresse (IPv4)</label>
+                    <label class="form-label"><?= $LANG['dns_ipv4'] ?></label>
                     <input type="text" class="form-control" id="dns_ip4" name="dns_ip4" maxlength="45"
-                            placeholder="z. B. 192.0.2.1"
+                            placeholder="<?= $LANG['for_example'] ?> 192.0.2.1"
                             value="<?= htmlspecialchars($edit_server['dns_ip4']) ?>">
                     <div class="form-check mt-2">
                         <input class="form-check-input" type="checkbox" id="same_ip_checkbox">
-                        <label class="form-check-label" for="same_ip_checkbox">= API-IP</label>
+                        <label class="form-check-label" for="same_ip_checkbox"><?= $LANG['same_as_api_ip'] ?></label>
                     </div>
                 </div>
 
                 <div class="col-md-4 colform-ip">
-                    <label class="form-label">DNS-IP-Adresse (IPv6)</label>
+                    <label class="form-label"><?= $LANG['dns_ipv6'] ?></label>
                     <input type="text" class="form-control" id="dns_ip6" name="dns_ip6" maxlength="45"
-                           placeholder="z. B. 2001:db8::1"
+                           placeholder="<?= $LANG['for_example'] ?> 2001:db8::1"
                            value="<?= htmlspecialchars($edit_server['dns_ip6'] ?? '') ?>">
                     <div class="form-check mt-2">
                         <input class="form-check-input" type="checkbox" id="same_ip6_checkbox">
-                        <label class="form-check-label" for="same_ip6_checkbox">= API-IP</label>
+                        <label class="form-check-label" for="same_ip6_checkbox"><?= $LANG['same_as_api_ip'] ?></label>
                     </div>
                 </div>
 
                 <div class="col-md-4 colform-ip">
-                    <label class="form-label" style="white-space: nowrap;">API-IP-Adresse (IPv4/IPv6)</label>
+                    <label class="form-label" style="white-space: nowrap;"><?= $LANG['api_ip'] ?></label>
                     <input type="text" class="form-control" id="api_ip" name="api_ip" maxlength="45"
-                            placeholder="z. B. 192.0.2.1"
+                            placeholder="<?= $LANG['for_example'] ?> 192.0.2.1"
                             value="<?= htmlspecialchars($edit_server['api_ip'] ?? '') ?>">
                 </div>
 
                 <div class="col-md-6 colform-key">
-                    <label class="form-label">API-Key</label>
+                    <label class="form-label"><?= $LANG['api_token'] ?></label>
                     <div class="input-group">
                         <input type="password" class="form-control" id="api_token" name="api_token" required maxlength="255"
-                               placeholder="z. B. 64-stelliger Hexwert"
+                               placeholder="<?= $LANG['api_token_placeholder'] ?>"
                                value="<?= htmlspecialchars($edit_server['api_token']) ?>">
                         <button class="btn btn-outline-secondary" type="button" id="toggleTokenVisibility" title="Anzeigen/Ausblenden">👁️</button>
-                        <button class="btn btn-outline-secondary" type="button" onclick="generateApiKey()" id="generateBtn">Generieren</button>
+                        <button class="btn btn-outline-secondary" type="button" onclick="generateApiKey()" id="generateBtn"><?= $LANG['generate'] ?></button>
                     </div>
                 </div>
 
@@ -88,12 +88,12 @@ if (!isset($edit_server)) {
                     <div class="form-check">
                         <input type="checkbox" class="form-check-input" id="edit_active_<?= $edit_server['id'] ?>"
                                name="active" value="1" <?= $edit_server['active'] ? 'checked' : '' ?>>
-                        <label class="form-check-label" for="edit_active_<?= $edit_server['id'] ?>">Server ist aktiv</label>
+                        <label class="form-check-label" for="edit_active_<?= $edit_server['id'] ?>"><?= $LANG['server_active'] ?></label>
                     </div>
                     <div class="form-check">
                         <input type="checkbox" class="form-check-input" id="edit_is_local_<?= $edit_server['id'] ?>"
                                name="is_local" value="1" <?= $edit_server['is_local'] ? 'checked' : '' ?>>
-                        <label class="form-check-label" for="edit_is_local_<?= $edit_server['id'] ?>">Dieser Server ist der lokale (Webinterface-Host)</label>
+                        <label class="form-check-label" for="edit_is_local_<?= $edit_server['id'] ?>"><?= $LANG['server_is_local'] ?></label>
                     </div>
                 </div>
             </div>

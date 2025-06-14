@@ -56,20 +56,20 @@ window.addEventListener('DOMContentLoaded', function () {
             const masterRadio = form.querySelector('input[name="master_server_id"]:checked');
 
             if (serverCheckboxes.length === 0) {
-                alert("Bitte mindestens einen DNS-Server auswählen.");
+                alert(lang('zone_form_no_server_selected'));
                 e.preventDefault();
                 return;
             }
 
             if (!masterRadio) {
-                alert("Bitte einen Master-Server auswählen.");
+                alert(lang('zone_form_no_master_selected'));
                 e.preventDefault();
                 return;
             }
 
             const selectedServerIds = Array.from(serverCheckboxes).map(cb => cb.value);
             if (!selectedServerIds.includes(masterRadio.value)) {
-                alert("Der gewählte Master-Server muss auch bei den ausgewählten DNS-Servern markiert sein.");
+                alert(lang('zone_form_master_not_among_selected'));
                 e.preventDefault();
             }
         });

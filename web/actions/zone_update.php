@@ -19,6 +19,7 @@
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
+require_once __DIR__ . '/../inc/validators.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -56,7 +57,7 @@ $old = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$zone) {
     toastError(
-        "Zone nicht gefunden.",
+        $LANG['zone_error_not_found'],
         "Zone-ID {$id} konnte nicht geladen werden."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
@@ -78,10 +79,23 @@ $soa_retry   = (int)($_POST['soa_retry'] ?? 1800);
 $soa_expire  = (int)($_POST['soa_expire'] ?? 1209600);
 $soa_minimum = (int)($_POST['soa_minimum'] ?? 86400);
 
+// Eingabevalidierung
+$errors = validateZoneInput($_POST, false);
+if (!empty($errors)) {
+    foreach ($errors as $error) {
+        toastError(
+            $LANG[$error] ?? $LANG['generic_validation_error'],
+            "Zoneneingabe ungültig (ID {$id}): {$error}"
+        );
+    }
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
+    exit;
+}
+
 // Reverse-Zonen: Prefix prüfen
 if ($type === 'reverse' && ($prefix_length < 8 || $prefix_length > 128)) {
     toastError(
-        "Ungültiger Prefix-Length.",
+        $LANG['zone_error_invalid_prefix_length'],
         "Zone-ID {$id} hat ungültige Prefix-Länge: {$prefix_length}"
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
@@ -95,7 +109,7 @@ if ($_SESSION['role'] === 'admin') {
     // Validierung der Serverwahl
     if (!is_array($server_ids) || count($server_ids) < 1) {
         toastError(
-            "Mindestens ein DNS-Server muss gewählt sein.",
+            $LANG['zone_error_no_servers'],
             "Zone-ID {$id}: keine DNS-Server ausgewählt."
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
@@ -104,8 +118,22 @@ if ($_SESSION['role'] === 'admin') {
 
     if (!$master_id || !in_array($master_id, $server_ids, true)) {
         toastError(
-            "Der Master-Server muss unter den gewählten Servern sein.",
+            $LANG['zone_error_master_not_in_list'],
             "Zone-ID {$id}: Master-ID {$master_id} nicht in Serverliste."
+        );
+        header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
+        exit;
+    }
+
+    // Aktive Server-IDs laden
+    $stmt = $pdo->query("SELECT id FROM servers WHERE active = 1");
+    $active_ids = $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+
+    // Prüfen: Master muss aktiv sein
+    if (!in_array((int)$master_id, $active_ids, true)) {
+        toastError(
+            $LANG['zone_error_master_inactive'],
+            "Zone-ID {$id}: Der gewählte Master-Server ({$master_id}) ist nicht aktiv."
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
         exit;
@@ -120,13 +148,27 @@ if ($_SESSION['role'] === 'admin') {
     $old_server_ids = array_keys($old_servers);
     $old_master_id = array_search(1, $old_servers, true); // erster mit is_master = 1
 
-    $new_server_ids = array_map('intval', $server_ids);
     $new_master_id = (int)$master_id;
 
-    // Vergleich: Hat sich die Serverauswahl oder der Master geändert?
-    $serverListChanged = array_diff($old_server_ids, $new_server_ids) ||
-                         array_diff($new_server_ids, $old_server_ids);
+    /**
+     * Ergänze inaktive alte Slave-Server für Vergleich und Speicherung,
+     * da sie durch das Formular (<input disabled>) nicht übermittelt werden.
+     * Nur gültig für Slaves – ein inaktiver Master wäre bereits weiter oben geblockt.
+     */
+    $preserve_inactive_slaves = [];
+    foreach ($old_servers as $sid => $is_master) {
+        if (!in_array($sid, $active_ids, true) && (int)$is_master !== 1) {
+            $preserve_inactive_slaves[] = (int)$sid;
+        }
+    }
 
+    // Neue Serverliste inkl. inaktiver Slaves für Vergleich und späteren Insert
+    $effective_new_server_ids = array_unique(array_merge(array_map('intval', $server_ids), $preserve_inactive_slaves));
+    sort($effective_new_server_ids);
+    sort($old_server_ids);
+
+    // Vergleich alt ↔︎ neu
+    $serverListChanged = $effective_new_server_ids !== $old_server_ids;
     $masterChanged = (int)$old_master_id !== $new_master_id;
 
     // Wenn keine Änderungen bei der Serverzuweisung → keine Aktion, SOA-NS unverändert übernehmen
@@ -141,7 +183,7 @@ if ($_SESSION['role'] === 'admin') {
 
             // Neue setzen
             $stmt = $pdo->prepare("INSERT INTO zone_servers (zone_id, server_id, is_master) VALUES (?, ?, ?)");
-            foreach ($server_ids as $sid) {
+            foreach ($effective_new_server_ids as $sid) {
                 $stmt->execute([$id, $sid, ((int)$sid === $new_master_id) ? 1 : 0]);
             }
 
@@ -150,7 +192,7 @@ if ($_SESSION['role'] === 'admin') {
 
             if ($result['status'] === 'error') {
                 toastError(
-                    "Zonenstruktur konnte nicht neu aufgebaut werden.",
+                    $LANG['zone_error_ns_glue_failed'],
                     $result['output']
                 );
                 header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
@@ -159,7 +201,7 @@ if ($_SESSION['role'] === 'admin') {
 
             if ($result['status'] === 'warning') {
                 toastWarning(
-                    "Zone wurde aktualisiert – Warnung beim Zonen-Rebuild.",
+                    $LANG['zone_warning_ns_glue'],
                     $result['output']
                 );
             }
@@ -170,7 +212,7 @@ if ($_SESSION['role'] === 'admin') {
             $soa_ns = $stmt->fetchColumn();
         } catch (Exception $e) {
             toastError(
-                "Fehler beim Aktualisieren der Server-Zuweisungen.",
+                $LANG['zone_error_server_assignment_failed'],
                 "Fehler beim Aktualisieren von Zone-ID {$id}: " . $e->getMessage()
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
@@ -181,7 +223,7 @@ if ($_SESSION['role'] === 'admin') {
 
 if (!$old) {
     toastError(
-        "Zone konnte nicht geprüft werden.",
+        $LANG['zone_error_check_failed'],
         "Zone-ID {$id} existiert nicht mehr."
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
@@ -208,7 +250,7 @@ $hasNonCriticalChanges =
 
 // Wenn keine Änderungen → keine Aktion
 if (!$hasZoneRelevantChanges && !$serverListChanged && !$masterChanged && !$hasNonCriticalChanges) {
-    toastSuccess("Keine Änderungen vorgenommen.", "Die Zonendaten sind unverändert.");
+    toastSuccess($LANG['no_changes'], "Die Zonendaten sind unverändert.");
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
     exit;
 }
@@ -245,7 +287,7 @@ try {
         if ($rebuild['status'] === 'error') {
             $pdo->rollBack();
             toastError(
-                "Zone konnte nicht gespeichert werden, da die Zonendatei ungültig wäre.",
+                $LANG['zone_error_zonefile_invalid'],
                 $rebuild['output']
             );
             header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
@@ -254,7 +296,7 @@ try {
 
         if ($rebuild['status'] === 'warning') {
             toastWarning(
-                "Zone gespeichert – Warnung beim Zonendatei-Check.",
+                $LANG['zone_warning_zonefile_check'],
                 $rebuild['output']
             );
         }
@@ -264,7 +306,7 @@ try {
 } catch (Throwable $e) {
     $pdo->rollBack();
     toastError(
-        "Fehler beim Speichern der Zone.",
+        $LANG['zone_error_db_save_failed'],
         "Zonen-Metadaten konnten für Zone '{$name}' (ID {$id}) nicht gespeichert werden: " . $e->getMessage()
     );
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
@@ -273,7 +315,7 @@ try {
 
 if (empty($_SESSION['toast_errors'])) {
     toastSuccess(
-        "Zone <strong>" . htmlspecialchars($name) . "</strong> erfolgreich aktualisiert.",
+        sprintf($LANG['zone_updated'], htmlspecialchars($name)),
         "Zone '{$name}' (ID {$id}) erfolgreich geändert."
     );
 }
