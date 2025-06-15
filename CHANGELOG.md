@@ -180,3 +180,19 @@ CREATE TABLE dyndns_accounts (
 - **Master-Validierung**: Inaktive Server können nicht mehr als Master gesetzt werden
   - Zuvor fehlte eine explizite Prüfung – dies konnte zu inkonsistenten Zuständen führen
   - Neue Prüfung verhindert das Speichern und zeigt eine aussagekräftige `toastError`-Meldung
+
+<br>
+<br>
+
+## [1.2.4] – 2025-06-15
+
+### Fixed
+- **Darstellung: Spalte "Beschreibung" bei Reverse-Zonen wieder sichtbar**
+  - In der Tabelle der Reverse Lookup Zonen wurde die Beschreibungsspalte fälschlicherweise nicht korrekt angezeigt
+  - Die Spaltenstruktur wurde überarbeitet, sodass alle Felder sauber und konsistent dargestellt werden
+
+### Changed
+- **UI-Layout: Tabellenstruktur im gesamten Pages-Bereich responsive überarbeitet**
+  - Alle Tabellen unter `pages/` (z. B. `zones.php`, `users.php`, `dyndns.php`, `servers.php`) sind nun vollständig von `<div class="table-responsive">` umschlossen
+  - Dadurch korrektes Verhalten auf schmalen Displays (z. B. Mobilgeräte)
+  - Konsistente Spaltenausrichtung und Layoutstruktur zwischen Forward- und Reverse-Zonenansicht

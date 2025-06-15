@@ -111,105 +111,107 @@ if ($has_server_errors) {
     <?php include __DIR__ . '/../templates/server_add_form.php'; ?>
 <?php endif; ?>
 
-<table class="table table-bordered align-middle">
-    <thead class="table-light">
-        <tr>
-            <th class="coltbl-name"><?= $LANG['name'] ?></th>
-            <th class="coltbl-ip">DNS-IP</th>
-            <th class="coltbl-ip">API-IP</th>
-            <th class="coltbl-server-local"><?= $LANG['local'] ?></th>
-            <th class="coltbl-server-activ"><?= $LANG['active'] ?></th>
-            <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
-        </tr>
-    </thead>
-    <tbody>
-        <?php foreach ($servers as $server): ?>
-            <?php if ($edit_id === (int)$server['id']): ?>
-                <!-- Anzeigezeile (gelb) -->
-                <tr class="table-warning">
-                    <td><?= htmlspecialchars($server['name']) ?></td>
-                    <td>
-                        <?= htmlspecialchars($server['dns_ip4']) ?><br>
-                        <?php if (!empty($server['dns_ip6'])): ?>
-                            <?= htmlspecialchars($server['dns_ip6']) ?>
-                        <?php endif; ?>
-                    </td>
-                    <td><?= htmlspecialchars($server['api_ip'] ?? '-') ?></td>
-                        <td><?= $server['is_local'] ? $LANG['yes'] : $LANG['no'] ?></td>
-                        <td><?= $server['active'] ? $LANG['yes'] : $LANG['no'] ?></td>
-                    <td>
-                        <div class="d-flex flex-wrap gap-1">
-                            <button type="submit" form="editForm_<?= $server['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                            <a href="pages/servers.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Bearbeitungsformular darunter -->
-                <?php $edit_server = $server; include __DIR__ . '/../templates/server_edit_form.php'; ?>
-            <?php else: ?>
-                <tr>
-                    <td>
-                        <?php
-                        $status_icon = '';
-                        $status = $server_status[$server['id']] ?? null;
-
-                        if ((int)$server['is_local'] === 1) {
-                            $base_icon = '🖥️';
-                        } else {
-                            $base_icon = '';
-                        }
-
-                        if ($status === 'ok') {
-                            $status_icon = '✅';
-                        } elseif ($status === 'warning') {
-                            $status_icon = '⚠️';
-                        } elseif ($status === 'error') {
-                            $status_icon = '❌';
-                        } else {
-                            $status_icon = '⚪';
-                        }
-
-                        echo "{$status_icon} {$base_icon} " . htmlspecialchars($server['name']);
-                        ?>
-                    </td>
-                    <td>
-                        <?= htmlspecialchars($server['dns_ip4']) ?><br>
-                        <?php if (!empty($server['dns_ip6'])): ?>
-                            <?= htmlspecialchars($server['dns_ip6']) ?>
-                        <?php endif; ?>
-                    </td>
-                    <td><?= htmlspecialchars($server['api_ip'] ?? '-') ?></td>
-                    <td><?= $server['is_local'] ? 'Ja' : 'Nein' ?></td>
-                    <td><?= $server['active'] ? 'Ja' : 'Nein' ?></td>
-                    <td class="coltbl-actions">
-                        <div class="d-flex flex-wrap gap-1">
-                            <?php if (in_array($_SESSION['role'], ['admin', 'zoneadmin'])): ?>
-                                <a href="pages/servers.php?edit_id=<?= $server['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
+<div class="table-responsive">
+    <table class="table table-bordered align-middle">
+        <thead class="table-light">
+            <tr>
+                <th class="coltbl-name"><?= $LANG['name'] ?></th>
+                <th class="coltbl-ip">DNS-IP</th>
+                <th class="coltbl-ip">API-IP</th>
+                <th class="coltbl-server-local"><?= $LANG['local'] ?></th>
+                <th class="coltbl-server-activ"><?= $LANG['active'] ?></th>
+                <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($servers as $server): ?>
+                <?php if ($edit_id === (int)$server['id']): ?>
+                    <!-- Anzeigezeile (gelb) -->
+                    <tr class="table-warning">
+                        <td><?= htmlspecialchars($server['name']) ?></td>
+                        <td>
+                            <?= htmlspecialchars($server['dns_ip4']) ?><br>
+                            <?php if (!empty($server['dns_ip6'])): ?>
+                                <?= htmlspecialchars($server['dns_ip6']) ?>
                             <?php endif; ?>
-                            <?php if ($_SESSION['role'] === 'admin'): ?>
-                                <form class="d-inline">
-                                    <button type="button"
-                                            class="btn btn-sm btn-outline-warning btn-bind-reload"
-                                            data-server-id="<?= $server['id'] ?>">
-                                        <?= $LANG['bind_reload'] ?>
-                                    </button>
-                                </form>
+                        </td>
+                        <td><?= htmlspecialchars($server['api_ip'] ?? '-') ?></td>
+                            <td><?= $server['is_local'] ? $LANG['yes'] : $LANG['no'] ?></td>
+                            <td><?= $server['active'] ? $LANG['yes'] : $LANG['no'] ?></td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-1">
+                                <button type="submit" form="editForm_<?= $server['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                                <a href="pages/servers.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Bearbeitungsformular darunter -->
+                    <?php $edit_server = $server; include __DIR__ . '/../templates/server_edit_form.php'; ?>
+                <?php else: ?>
+                    <tr>
+                        <td>
+                            <?php
+                            $status_icon = '';
+                            $status = $server_status[$server['id']] ?? null;
+
+                            if ((int)$server['is_local'] === 1) {
+                                $base_icon = '🖥️';
+                            } else {
+                                $base_icon = '';
+                            }
+
+                            if ($status === 'ok') {
+                                $status_icon = '✅';
+                            } elseif ($status === 'warning') {
+                                $status_icon = '⚠️';
+                            } elseif ($status === 'error') {
+                                $status_icon = '❌';
+                            } else {
+                                $status_icon = '⚪';
+                            }
+
+                            echo "{$status_icon} {$base_icon} " . htmlspecialchars($server['name']);
+                            ?>
+                        </td>
+                        <td>
+                            <?= htmlspecialchars($server['dns_ip4']) ?><br>
+                            <?php if (!empty($server['dns_ip6'])): ?>
+                                <?= htmlspecialchars($server['dns_ip6']) ?>
                             <?php endif; ?>
-                            <?php if ($_SESSION['role'] === 'admin'): ?>
-                                <form method="post" action="actions/server_delete.php" class="d-inline confirm-delete">
-                                    <?= csrf_input() ?>
-                                    <input type="hidden" name="id" value="<?= $server['id'] ?>">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
-                                </form>
-                            <?php endif; ?>
-                        </div>
-                    </td>
-                </tr>
-            <?php endif; ?>
-        <?php endforeach; ?>
-    </tbody>
-</table>
+                        </td>
+                        <td><?= htmlspecialchars($server['api_ip'] ?? '-') ?></td>
+                        <td><?= $server['is_local'] ? 'Ja' : 'Nein' ?></td>
+                        <td><?= $server['active'] ? 'Ja' : 'Nein' ?></td>
+                        <td class="coltbl-actions">
+                            <div class="d-flex flex-wrap gap-1">
+                                <?php if (in_array($_SESSION['role'], ['admin', 'zoneadmin'])): ?>
+                                    <a href="pages/servers.php?edit_id=<?= $server['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
+                                <?php endif; ?>
+                                <?php if ($_SESSION['role'] === 'admin'): ?>
+                                    <form class="d-inline">
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-warning btn-bind-reload"
+                                                data-server-id="<?= $server['id'] ?>">
+                                            <?= $LANG['bind_reload'] ?>
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
+                                <?php if ($_SESSION['role'] === 'admin'): ?>
+                                    <form method="post" action="actions/server_delete.php" class="d-inline confirm-delete">
+                                        <?= csrf_input() ?>
+                                        <input type="hidden" name="id" value="<?= $server['id'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
+                                    </form>
+                                <?php endif; ?>
+                            </div>
+                        </td>
+                    </tr>
+                <?php endif; ?>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+</div>
 
 <!-- Modal: BIND Reload bestätigen -->
 <!-- (wird nur auf dieser Seite benötigt – daher lokal definiert -->

@@ -240,10 +240,12 @@ $allowedTypes = $zoneType === 'reverse'
                 <label class="form-label"><?= $LANG['dkim_flags'] ?> (t=)</label>
                 <input type="text" id="dkim_flags" class="form-control" placeholder="<?= $LANG['for_example'] ?> y">
             </div>
+
             <div class="col-md-4 colform-dkim-keyblock">
                 <label class="form-label"><?= $LANG['dkim_key'] ?></label>
                 <textarea id="dkim_key" class="form-control" rows="7" placeholder="Nur Base64-Inhalt"><?= htmlspecialchars($_POST['dkim_key'] ?? '') ?></textarea>
             </div>
+
             <div class="col-12">
                 <label class="form-label" for="dkim_file"><?= $LANG['dkim_upload_label'] ?></label>
                 <input type="file" name="dkim_file" id="dkim_file" class="form-control dkim-file-upload" accept=".txt" onchange="handleDKIMFileUpload(this)">

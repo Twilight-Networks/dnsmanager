@@ -204,7 +204,7 @@ a:active {
 .colform-dkim-keytype   { flex: 0 0 11%; max-width: 11%; }
 .colform-dkim-hash      { flex: 0 0 9%; max-width: 9%; }
 .colform-dkim-flags     { flex: 0 0 9%; max-width: 9%; }
-.colform-dkim-keyblock  { flex: 0 0 56%; max-width: 56%; }
+.colform-dkim-keyblock  { flex: 0 0 43%; max-width: 43%; }
 
 /* Upload-Button (DKIM) */
 .dkim-file-upload {

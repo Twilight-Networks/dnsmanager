@@ -99,88 +99,90 @@ $accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <?php include __DIR__ . '/../templates/dyndns_add_form.php'; ?>
 <?php endif; ?>
 
-<table class="table table-bordered align-middle">
-    <thead class="table-light">
-        <tr>
-            <th><?= $LANG['username'] ?></th>
-            <th><?= $LANG['hostname'] ?></th>
-            <th><?= $LANG['zone'] ?></th>
-            <th>IPv4</th>
-            <th>IPv6</th>
-            <th><?= $LANG['last_update'] ?></th>
-            <th><?= $LANG['actions'] ?></th>
-        </tr>
-    </thead>
-    <tbody>
-        <?php foreach ($accounts as $acc): ?>
-            <?php if ((int)$acc['id'] === $edit_id): ?>
-                <tr class="table-warning">
-                    <td><?= htmlspecialchars($acc['username']) ?></td>
-                    <td><?= htmlspecialchars($acc['hostname']) ?></td>
-                    <td><?= htmlspecialchars($acc['zone_name']) ?></td>
-                    <td><?= htmlspecialchars($acc['current_ipv4'] ?? '-') ?></td>
-                    <td><?= htmlspecialchars($acc['current_ipv6'] ?? '-') ?></td>
-                    <td><?= $acc['last_update'] ? htmlspecialchars($acc['last_update']) : '-' ?></td>
-                    <td>
-                        <div class="d-flex flex-wrap gap-1">
-                            <button type="submit" form="editForm_<?= $acc['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                            <a href="pages/dyndns.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
-                        </div>
-                    </td>
-                </tr>
-                <?php $edit_account = $acc; include __DIR__ . '/../templates/dyndns_edit_form.php'; ?>
-            <?php else: ?>
-                <tr>
-                    <td><?= htmlspecialchars($acc['username']) ?></td>
-                    <td><?= htmlspecialchars($acc['hostname']) ?></td>
-                    <td><?= htmlspecialchars($acc['zone_name']) ?></td>
-                    <td><?= htmlspecialchars($acc['current_ipv4'] ?? '-') ?></td>
-                    <td><?= htmlspecialchars($acc['current_ipv6'] ?? '-') ?></td>
-                    <td><?= $acc['last_update'] ? htmlspecialchars($acc['last_update']) : '-' ?></td>
-                    <td>
-                        <div class="d-flex flex-wrap gap-1">
-                            <a href="pages/dyndns.php?edit_id=<?= $acc['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
-                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $acc['id'] ?>"><?= $LANG['password'] ?></button>
-                            <form method="post" action="actions/dyndns_delete.php" class="d-inline confirm-delete">
+<div class="table-responsive">
+    <table class="table table-bordered align-middle">
+        <thead class="table-light">
+            <tr>
+                <th><?= $LANG['username'] ?></th>
+                <th><?= $LANG['hostname'] ?></th>
+                <th><?= $LANG['zone'] ?></th>
+                <th>IPv4</th>
+                <th>IPv6</th>
+                <th><?= $LANG['last_update'] ?></th>
+                <th><?= $LANG['actions'] ?></th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($accounts as $acc): ?>
+                <?php if ((int)$acc['id'] === $edit_id): ?>
+                    <tr class="table-warning">
+                        <td><?= htmlspecialchars($acc['username']) ?></td>
+                        <td><?= htmlspecialchars($acc['hostname']) ?></td>
+                        <td><?= htmlspecialchars($acc['zone_name']) ?></td>
+                        <td><?= htmlspecialchars($acc['current_ipv4'] ?? '-') ?></td>
+                        <td><?= htmlspecialchars($acc['current_ipv6'] ?? '-') ?></td>
+                        <td><?= $acc['last_update'] ? htmlspecialchars($acc['last_update']) : '-' ?></td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-1">
+                                <button type="submit" form="editForm_<?= $acc['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                                <a href="pages/dyndns.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
+                            </div>
+                        </td>
+                    </tr>
+                    <?php $edit_account = $acc; include __DIR__ . '/../templates/dyndns_edit_form.php'; ?>
+                <?php else: ?>
+                    <tr>
+                        <td><?= htmlspecialchars($acc['username']) ?></td>
+                        <td><?= htmlspecialchars($acc['hostname']) ?></td>
+                        <td><?= htmlspecialchars($acc['zone_name']) ?></td>
+                        <td><?= htmlspecialchars($acc['current_ipv4'] ?? '-') ?></td>
+                        <td><?= htmlspecialchars($acc['current_ipv6'] ?? '-') ?></td>
+                        <td><?= $acc['last_update'] ? htmlspecialchars($acc['last_update']) : '-' ?></td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-1">
+                                <a href="pages/dyndns.php?edit_id=<?= $acc['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
+                                <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $acc['id'] ?>"><?= $LANG['password'] ?></button>
+                                <form method="post" action="actions/dyndns_delete.php" class="d-inline confirm-delete">
+                                    <?= csrf_input() ?>
+                                    <input type="hidden" name="id" value="<?= $acc['id'] ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                <?php endif; ?>
+
+                <!-- Passwort Modal für DynDNS -->
+                <div class="modal fade" id="pwModal<?= $acc['id'] ?>" tabindex="-1" aria-labelledby="pwModalLabel<?= $acc['id'] ?>" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <form method="post" action="actions/dyndns_password.php">
                                 <?= csrf_input() ?>
                                 <input type="hidden" name="id" value="<?= $acc['id'] ?>">
-                                <button type="submit" class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="pwModalLabel<?= $acc['id'] ?>">
+                                        <?= sprintf($LANG['change_password_for'], htmlspecialchars($acc['username'])) ?>
+                                    </h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label class="form-label"><?= $LANG['new_password'] ?></label>
+                                        <input type="password" name="password" class="form-control" required>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
+                                    <button type="submit" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                                </div>
                             </form>
                         </div>
-                    </td>
-                </tr>
-            <?php endif; ?>
-
-            <!-- Passwort Modal für DynDNS -->
-            <div class="modal fade" id="pwModal<?= $acc['id'] ?>" tabindex="-1" aria-labelledby="pwModalLabel<?= $acc['id'] ?>" aria-hidden="true">
-                <div class="modal-dialog modal-dialog-centered">
-                    <div class="modal-content">
-                        <form method="post" action="actions/dyndns_password.php">
-                            <?= csrf_input() ?>
-                            <input type="hidden" name="id" value="<?= $acc['id'] ?>">
-                            <div class="modal-header">
-                                <h5 class="modal-title" id="pwModalLabel<?= $acc['id'] ?>">
-                                    <?= sprintf($LANG['change_password_for'], htmlspecialchars($acc['username'])) ?>
-                                </h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
-                            </div>
-                            <div class="modal-body">
-                                <div class="mb-3">
-                                    <label class="form-label"><?= $LANG['new_password'] ?></label>
-                                    <input type="password" name="password" class="form-control" required>
-                                </div>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
-                                <button type="submit" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                            </div>
-                        </form>
                     </div>
                 </div>
-            </div>
-        <?php endforeach; ?>
-    </tbody>
-</table>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+</div>
 
 <?php
 AssetRegistry::enqueueScript('js/dyndns.js');

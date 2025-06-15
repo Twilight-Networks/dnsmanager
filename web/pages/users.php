@@ -44,106 +44,108 @@ $admin_count = $stmt->fetchColumn();
     <?php include __DIR__ . '/../templates/user_add_form.php'; ?>
 <?php endif; ?>
 
-<table class="table table-bordered align-middle">
-    <thead class="table-light">
-        <tr>
-            <th class="coltbl-users-name"><?= $LANG['username'] ?></th>
-            <th class="coltbl-users-role">Rolle</th>
-            <th class="coltbl-users-zones"><?= $LANG['zones'] ?></th>
-            <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
-        </tr>
-    </thead>
-    <tbody>
-    <?php foreach ($users as $u): ?>
-        <?php if ($edit_id === (int)$u['id']): ?>
-            <?php
-            // Lade die zugewiesenen Zonen-IDs für das Bearbeitungsformular
-            $user_zone_ids = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
-            $user_zone_ids->execute([$u['id']]);
-            $selected = array_column($user_zone_ids->fetchAll(PDO::FETCH_ASSOC), 'zone_id');
-            ?>
-            <tr class="table-warning">
-                <td><?= htmlspecialchars($u['username']) ?></td>
-                <td><?= htmlspecialchars($u['role']) ?></td>
-                <td><em><?= $LANG['edit_mode'] ?></em></td>
-                <td>
-                    <div class="d-flex flex-wrap gap-1">
-                        <button type="submit" form="editForm_<?= $u['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                        <a href="pages/users.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
-                    </div>
-                </td>
-            </tr>
-            <?php
-            include __DIR__ . '/../templates/user_edit_form.php';
-            ?>
-        <?php else: ?>
+<div class="table-responsive">
+    <table class="table table-bordered align-middle">
+        <thead class="table-light">
             <tr>
-                <td><?= htmlspecialchars($u['username']) ?></td>
-                <td><?= htmlspecialchars($u['role']) ?></td>
-                <td>
-                    <?php if ($u['role'] === 'admin'): ?>
-                        <em><?= $LANG['all_zones'] ?></em>
-                    <?php else: ?>
-                        <?php
-                        $zstmt = $pdo->prepare("SELECT z.name FROM zones z JOIN user_zones uz ON uz.zone_id = z.id WHERE uz.user_id = ?");
-                        $zstmt->execute([$u['id']]);
-                        $userZoneNames = $zstmt->fetchAll(PDO::FETCH_COLUMN);
-                        foreach ($userZoneNames as $zname): ?>
-                            <span class="badge bg-primary"><?= htmlspecialchars($zname) ?></span>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </td>
-                <td class="d-flex flex-wrap gap-1">
-                    <?php if ($_SESSION['role'] === 'admin'): ?>
-                        <a href="pages/users.php?edit_id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
-                    <?php endif; ?>
-                    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $u['id'] ?>"><?= $LANG['password'] ?></button>
-                    <?php if ($_SESSION['role'] === 'admin' && !($u['role'] === 'admin' && $admin_count <= 1)): ?>
-                        <form method="post" action="actions/user_delete.php" class="d-inline confirm-delete">
+                <th class="coltbl-users-name"><?= $LANG['username'] ?></th>
+                <th class="coltbl-users-role">Rolle</th>
+                <th class="coltbl-users-zones"><?= $LANG['zones'] ?></th>
+                <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
+            </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($users as $u): ?>
+            <?php if ($edit_id === (int)$u['id']): ?>
+                <?php
+                // Lade die zugewiesenen Zonen-IDs für das Bearbeitungsformular
+                $user_zone_ids = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
+                $user_zone_ids->execute([$u['id']]);
+                $selected = array_column($user_zone_ids->fetchAll(PDO::FETCH_ASSOC), 'zone_id');
+                ?>
+                <tr class="table-warning">
+                    <td><?= htmlspecialchars($u['username']) ?></td>
+                    <td><?= htmlspecialchars($u['role']) ?></td>
+                    <td><em><?= $LANG['edit_mode'] ?></em></td>
+                    <td>
+                        <div class="d-flex flex-wrap gap-1">
+                            <button type="submit" form="editForm_<?= $u['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                            <a href="pages/users.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
+                        </div>
+                    </td>
+                </tr>
+                <?php
+                include __DIR__ . '/../templates/user_edit_form.php';
+                ?>
+            <?php else: ?>
+                <tr>
+                    <td><?= htmlspecialchars($u['username']) ?></td>
+                    <td><?= htmlspecialchars($u['role']) ?></td>
+                    <td>
+                        <?php if ($u['role'] === 'admin'): ?>
+                            <em><?= $LANG['all_zones'] ?></em>
+                        <?php else: ?>
+                            <?php
+                            $zstmt = $pdo->prepare("SELECT z.name FROM zones z JOIN user_zones uz ON uz.zone_id = z.id WHERE uz.user_id = ?");
+                            $zstmt->execute([$u['id']]);
+                            $userZoneNames = $zstmt->fetchAll(PDO::FETCH_COLUMN);
+                            foreach ($userZoneNames as $zname): ?>
+                                <span class="badge bg-primary"><?= htmlspecialchars($zname) ?></span>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </td>
+                    <td class="d-flex flex-wrap gap-1">
+                        <?php if ($_SESSION['role'] === 'admin'): ?>
+                            <a href="pages/users.php?edit_id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
+                        <?php endif; ?>
+                        <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $u['id'] ?>"><?= $LANG['password'] ?></button>
+                        <?php if ($_SESSION['role'] === 'admin' && !($u['role'] === 'admin' && $admin_count <= 1)): ?>
+                            <form method="post" action="actions/user_delete.php" class="d-inline confirm-delete">
+                                <?= csrf_input() ?>
+                                <input type="hidden" name="id" value="<?= $u['id'] ?>">
+                                <button class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
+                            </form>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endif; ?>
+
+            <!-- Passwort-Modal -->
+            <div class="modal fade" id="pwModal<?= $u['id'] ?>" tabindex="-1" aria-labelledby="pwModalLabel<?= $u['id'] ?>" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <form method="post" action="actions/user_password.php">
                             <?= csrf_input() ?>
                             <input type="hidden" name="id" value="<?= $u['id'] ?>">
-                            <button class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
-                        </form>
-                    <?php endif; ?>
-                </td>
-            </tr>
-        <?php endif; ?>
-
-        <!-- Passwort-Modal -->
-        <div class="modal fade" id="pwModal<?= $u['id'] ?>" tabindex="-1" aria-labelledby="pwModalLabel<?= $u['id'] ?>" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
-                    <form method="post" action="actions/user_password.php">
-                        <?= csrf_input() ?>
-                        <input type="hidden" name="id" value="<?= $u['id'] ?>">
-                        <div class="modal-header">
-                            <h5 class="modal-title" id="pwModalLabel<?= $u['id'] ?>">
-                                <?= sprintf($LANG['change_password_for'], htmlspecialchars($u['username'])) ?>
-                            </h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
-                        </div>
-                        <div class="modal-body">
-                            <div class="mb-3">
-                                <label class="form-label"><?= $LANG['new_password'] ?></label>
-                                <input type="password" name="password" class="form-control" required>
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="pwModalLabel<?= $u['id'] ?>">
+                                    <?= sprintf($LANG['change_password_for'], htmlspecialchars($u['username'])) ?>
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
                             </div>
-                            <?php if ($_SESSION['user_id'] === $u['id']): ?>
+                            <div class="modal-body">
                                 <div class="mb-3">
-                                    <label class="form-label"><?= $LANG['repeat_password'] ?></label>
-                                    <input type="password" name="password_repeat" class="form-control" required>
+                                    <label class="form-label"><?= $LANG['new_password'] ?></label>
+                                    <input type="password" name="password" class="form-control" required>
                                 </div>
-                            <?php endif; ?>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
-                            <button type="submit" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                        </div>
-                    </form>
+                                <?php if ($_SESSION['user_id'] === $u['id']): ?>
+                                    <div class="mb-3">
+                                        <label class="form-label"><?= $LANG['repeat_password'] ?></label>
+                                        <input type="password" name="password_repeat" class="form-control" required>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
+                                <button type="submit" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             </div>
-        </div>
-    <?php endforeach; ?>
-    </tbody>
-</table>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+</div>
 
 <?php include __DIR__ . '/../templates/layout_footer.php'; ?>
