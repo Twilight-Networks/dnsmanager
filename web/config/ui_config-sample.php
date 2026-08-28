@@ -20,10 +20,10 @@
  *  Datenbank-Konfiguration
  * --------------------------------------- */
 define('DB_HOST', 'localhost');           // Hostname des Datenbankservers
-define('DB_NAME', 'dnsmanager');           // Name der verwendeten Datenbank
-define('DB_USER', 'root');                 // Datenbank-Benutzername
-define('DB_PASS', 'init01');               // Datenbank-Passwort
-define('DB_CHARSET', 'utf8mb4');            // Zeichensatz der Verbindung
+define('DB_NAME', 'dnsmanager');          // Name der verwendeten Datenbank
+define('DB_USER', 'dnsmanager');          // Datenbank-Benutzername
+define('DB_PASS', 'sicheres_passwort');   // Datenbank-Passwort
+define('DB_CHARSET', 'utf8mb4');          // Zeichensatz der Verbindung
 
 /** ---------------------------------------
  *  Web-Anwendung Basis-URL
