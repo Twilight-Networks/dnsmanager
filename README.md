@@ -147,8 +147,8 @@ Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
 6. **Apache-Konfiguration einbinden:**
 
    ```bash
-   cp /usr/share/dnsmanager/apache/dnsmanager.conf /etc/apache2/conf-available/
-   a2enconf dnsmanager
+   cp /usr/share/dnsmanager/apache/dnsmanager-ui.conf /etc/apache2/conf-available/
+   a2enconf dnsmanager-ui
    systemctl reload apache2
    ```
 
