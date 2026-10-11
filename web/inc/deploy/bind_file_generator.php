@@ -32,7 +32,8 @@ require_once __DIR__ . '/../soa_serial.php';
  * Verhalten:
  * - Im Modus 'validate' wird die Datei nur temporär erzeugt und nach der Prüfung gelöscht.
  * - Im Modus 'publish' bleibt die Datei bestehen und wird zur weiteren Verarbeitung (z. B. Verteilung per API) verwendet.
- * - Die SOA-Serialnummer wird nur im Modus 'publish' erhöht und in der Datenbank gespeichert.
+ * - Die SOA-Serialnummer wird im Modus 'publish' erhöht und in der Datenbank gespeichert.
+ * - Im Modus 'dyndns' wird sie innerhalb der bereits offenen Transaktion des Aufrufers erhöht (ohne eigenen commit).
  *
  * Sicherheit:
  * - Es erfolgt keine direkte Verarbeitung von Benutzereingaben.
@@ -68,9 +69,10 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
     $safe_zone_name = preg_replace('/[^a-zA-Z0-9._\-]/', '_', $zone_name);
     $zone_file_path = rtrim($output_dir, '/') . "/db." . $safe_zone_name;
 
-    // Neue Serialnummer nur bei publish erzeugen
+    // Neue Serialnummer bei publish (eigene Transaktion) und dyndns (Transaktion des Aufrufers) erzeugen
     $serial = $zone['soa_serial'];
     $tx_started = false; // true nur, wenn diese Funktion die Transaktion selbst gestartet hat
+    $dyndns_serial = false; // true, wenn der Serial in der äußeren Transaktion des Aufrufers (DynDNS) erhöht wird
     if ($mode === 'publish') {
         try {
             $pdo->beginTransaction();
@@ -83,6 +85,31 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Starten der Transaktion: " . $e->getMessage(),
+                'errors' => ["DB: " . $e->getMessage()]
+            ];
+        }
+    } elseif ($mode === 'dyndns') {
+        // DynDNS: Serial innerhalb der bereits offenen Transaktion des Aufrufers (update.php) erhöhen.
+        // Ohne aktive Transaktion wird abgebrochen (keine Zonendatei, keine eigene Transaktion).
+        if (!$pdo->inTransaction()) {
+            return [
+                'status' => 'error',
+                'output' => 'DynDNS-Publish benötigt eine aktive Datenbanktransaktion.',
+                'errors' => ['Keine aktive DynDNS-Transaktion']
+            ];
+        }
+
+        // Es wird keine eigene Transaktion gestartet; Commit/Rollback liegt beim Aufrufer.
+        // FOR UPDATE liest den aktuellen Wert und serialisiert parallele Updates derselben Zone.
+        try {
+            $stmt_serial = $pdo->prepare("SELECT soa_serial FROM zones WHERE id = ? FOR UPDATE");
+            $stmt_serial->execute([$zone_id]);
+            $serial = generate_next_serial((int)$stmt_serial->fetchColumn());
+            $dyndns_serial = true;
+        } catch (Throwable $e) {
+            return [
+                'status' => 'error',
+                'output' => "Fehler beim Ermitteln der Serialnummer: " . $e->getMessage(),
                 'errors' => ["DB: " . $e->getMessage()]
             ];
         }
@@ -140,9 +167,22 @@ ZONE;
             $stmt->execute([$serial, $zone_id]);
             $pdo->commit();
         } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
+            if ($tx_started && $pdo->inTransaction()) {
                 $pdo->rollBack();
             }
+            return [
+                'status' => 'error',
+                'output' => "Fehler beim Speichern der Serialnummer: " . $e->getMessage(),
+                'errors' => ["DB-Update: " . $e->getMessage()]
+            ];
+        }
+    } elseif ($dyndns_serial) {
+        // Kein commit() hier: Der Serial wird atomar mit der Record-Änderung durch den Aufrufer committed
+        // bzw. bei dessen Rollback zurückgenommen.
+        try {
+            $stmt = $pdo->prepare("UPDATE zones SET soa_serial = ? WHERE id = ?");
+            $stmt->execute([$serial, $zone_id]);
+        } catch (Throwable $e) {
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Speichern der Serialnummer: " . $e->getMessage(),
