@@ -70,11 +70,16 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
 
     // Neue Serialnummer nur bei publish erzeugen
     $serial = $zone['soa_serial'];
+    $tx_started = false; // true nur, wenn diese Funktion die Transaktion selbst gestartet hat
     if ($mode === 'publish') {
         try {
             $pdo->beginTransaction();
+            $tx_started = true;
             $serial = generate_next_serial($serial);
         } catch (Throwable $e) {
+            if ($tx_started && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Starten der Transaktion: " . $e->getMessage(),
@@ -117,6 +122,9 @@ ZONE;
     }
 
     if (strpos($check_output, 'loaded serial') === false) {
+        if ($tx_started && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         file_put_contents("/tmp/named-checkzone-error.log", $check_output);
         return [
             'status' => 'error',
@@ -132,7 +140,9 @@ ZONE;
             $stmt->execute([$serial, $zone_id]);
             $pdo->commit();
         } catch (Throwable $e) {
-            $pdo->rollBack();
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Speichern der Serialnummer: " . $e->getMessage(),
