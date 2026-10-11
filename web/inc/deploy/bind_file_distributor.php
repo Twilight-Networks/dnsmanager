@@ -150,6 +150,8 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_SSL_VERIFYPEER => CURL_SSL_VERIFYPEER,
             CURLOPT_SSL_VERIFYHOST => CURL_SSL_VERIFYHOST,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => 30,
         ]);
         $response = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -272,6 +274,8 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_SSL_VERIFYPEER => CURL_SSL_VERIFYPEER,
             CURLOPT_SSL_VERIFYHOST => CURL_SSL_VERIFYHOST,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => 30,
         ]);
 
         $response = curl_exec($ch);
