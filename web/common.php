@@ -80,7 +80,8 @@ require_once __DIR__ . '/inc/helpers.php';
  * Die Nachrichten werden typabhängig in die jeweilige Session-Variable geschrieben:
  * - "success" → $_SESSION['toast_success'] (nur eine Nachricht)
  * - "error"   → $_SESSION['toast_errors'][] (mehrere Fehler möglich)
- * - sonst     → $_SESSION['toast_messages'][] (z. B. für Hinweise oder Warnungen)
+ * - "warning" → $_SESSION['toast_warnings'][] (mehrere Warnungen möglich)
+ * - sonst     → $_SESSION['toast_messages'][] (z. B. für Hinweise)
  *
  * Hinweis: Diese Funktion wird im Rahmen des PRG-Musters (Post-Redirect-Get) verwendet.
  * Die Ausgabe erfolgt typischerweise im HTML-Template beim nächsten Seitenaufruf.
@@ -96,6 +97,8 @@ function addToast(string $type, string $message): void
         $_SESSION['toast_success'] = $message;
     } elseif ($type === 'error') {
         $_SESSION['toast_errors'][] = $message;
+    } elseif ($type === 'warning') {
+        $_SESSION['toast_warnings'][] = $message;
     } else {
         $_SESSION['toast_messages'][] = $message;
     }
