@@ -176,6 +176,10 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         @unlink($zone_path);
     }
 
+    // Status: Agent-/HTTP-/Netzwerkfehler werden als 'warning' gemeldet (nicht 'error'),
+    // damit Publish-Ablauf, DynDNS-Rollback und changed/bind_dirty unverändert bleiben.
+    $status = empty($errors) ? 'ok' : 'warning';
+
     return [
         'status' => $status,
         'errors' => $errors,
