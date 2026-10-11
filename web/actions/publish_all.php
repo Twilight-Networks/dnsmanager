@@ -32,6 +32,8 @@ require_once __DIR__ . '/../inc/deploy/bind_file_distributor.php';
 
 $errors = [];
 $warnings = [];
+$published_zone_ids = []; // Zonen, die in diesem Lauf vollständig verteilt wurden
+$partial_zone_ids = [];   // Zonen mit Teilfehler bei Zone- oder Conf-Verteilung
 
 try {
     // Prüfen, ob ein vollständiger Rebuild nötig ist (z. B. nach Serveränderungen)
@@ -108,13 +110,31 @@ try {
                 appLog('info', "[publish] " . $conf_result['output']);
             }
         }
+
+        // Zone nur als veröffentlicht werten, wenn Zone- und Conf-Verteilung vollständig erfolgreich waren
+        $conf_ok = ($conf_result['status'] ?? '') === 'ok' && empty($conf_result['errors']);
+        if (($dist_result['status'] ?? '') === 'ok' && $conf_ok) {
+            $published_zone_ids[] = (int)$zone_id;
+        } else {
+            $partial_zone_ids[] = (int)$zone_id;
+        }
     }
 
     if (empty($errors)) {
 
         // Flags zurücksetzen
         $pdo->exec("UPDATE system_status SET bind_dirty = 0 WHERE id = 1");
-        $pdo->exec("UPDATE zones SET changed = 0 WHERE changed = 1");
+        // changed nur für die in diesem Lauf vollständig veröffentlichten Zonen zurücksetzen
+        $stmt_reset = $pdo->prepare("UPDATE zones SET changed = 0 WHERE id = ?");
+        foreach ($published_zone_ids as $pid) {
+            $stmt_reset->execute([$pid]);
+        }
+
+        // Teilweise verteilte Zonen für einen späteren Publish markiert lassen (auch bei bind_dirty-Läufen)
+        $stmt_mark = $pdo->prepare("UPDATE zones SET changed = 1 WHERE id = ?");
+        foreach ($partial_zone_ids as $pid) {
+            $stmt_mark->execute([$pid]);
+        }
 
         // Ergebnis anzeigen
         if (empty($warnings)) {

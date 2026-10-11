@@ -54,7 +54,12 @@ function publish_single_zone(PDO $pdo, int $zone_id, string $zone_name): array
             $output[] = "WARNUNG: Conf-Verteilung fehlgeschlagen: " . implode('; ', $conf_result['errors']);
         }
 
-        $pdo->prepare("UPDATE zones SET changed = 0 WHERE id = ?")->execute([$zone_id]);
+        // changed nur zurücksetzen, wenn Zone- und Conf-Verteilung vollständig erfolgreich waren;
+        // bei Teilfehler bleibt changed = 1 (vom vorherigen Rebuild gesetzt) für einen späteren Publish
+        $conf_ok = ($conf_result['status'] ?? '') === 'ok' && empty($conf_result['errors']);
+        if ($dist_result['status'] === 'ok' && $conf_ok) {
+            $pdo->prepare("UPDATE zones SET changed = 0 WHERE id = ?")->execute([$zone_id]);
+        }
 
         return [
             'status' => empty($output) ? 'ok' : 'warning',
