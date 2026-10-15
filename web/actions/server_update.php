@@ -13,6 +13,7 @@
  */
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
+requireRole(['admin']);
 require_once __DIR__ . '/../inc/validators.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
