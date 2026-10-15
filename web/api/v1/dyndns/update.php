@@ -64,6 +64,15 @@ $results = [];
 try {
     $pdo->beginTransaction();
 
+    // Zone sperren, bevor Records gelesen oder verändert werden: serialisiert parallele
+    // DynDNS-Updates derselben Zone. Der Lock muss die erste Abfrage der Transaktion sein,
+    // damit der Read-Snapshot erst nach dem Warten auf einen parallelen Request entsteht.
+    $stmt_lock = $pdo->prepare("SELECT id FROM zones WHERE id = ? FOR UPDATE");
+    $stmt_lock->execute([$zone_id]);
+    if ($stmt_lock->fetchColumn() === false) {
+        throw new RuntimeException('Zone nicht gefunden: ' . $zone_id);
+    }
+
     foreach (
         [['ip' => $ip4, 'type' => 'A', 'field' => 'current_ipv4'],
          ['ip' => $ip6, 'type' => 'AAAA', 'field' => 'current_ipv6']]
