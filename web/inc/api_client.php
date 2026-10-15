@@ -43,7 +43,6 @@ function apiPostJson(string $url, array $data, string $token): array {
 
     $response = curl_exec($ch);
     $error = curl_error($ch);
-    curl_close($ch);
 
     if (!empty($error)) {
         return ['status' => 'error', 'message' => $error];

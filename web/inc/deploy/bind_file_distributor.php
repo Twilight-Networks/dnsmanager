@@ -156,7 +156,6 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         $response = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curl_error = curl_error($ch);
-        curl_close($ch);
 
         // Fehlerauswertung für diesen Server
         if (!empty($curl_error)) {
@@ -281,7 +280,6 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         $response = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curl_error = curl_error($ch);
-        curl_close($ch);
 
         if (!empty($curl_error)) {
             $errors[] = "CURL-Fehler bei {$srv['name']}: $curl_error";
