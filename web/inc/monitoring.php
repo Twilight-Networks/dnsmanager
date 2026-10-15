@@ -46,7 +46,6 @@ function check_zone_conf_status(array $server): array {
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curl_error = curl_error($ch);
-    curl_close($ch);
 
     if (!empty($curl_error)) {
         return [
@@ -109,7 +108,6 @@ function check_zone_status(string $zone, array $server): array {
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curl_error = curl_error($ch);
-    curl_close($ch);
 
     if (!empty($curl_error)) {
         return [
@@ -171,7 +169,6 @@ function check_server_status(array $server): array {
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curl_error = curl_error($ch);
-    curl_close($ch);
 
     if (!empty($curl_error)) {
         return [

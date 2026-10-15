@@ -49,8 +49,6 @@ if ($response === false) {
     }
 }
 
-curl_close($ch);
-
 // Layout einbinden
 include __DIR__ . '/../templates/layout.php';
 ?>
