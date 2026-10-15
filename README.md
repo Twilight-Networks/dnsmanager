@@ -313,6 +313,29 @@ Die PHPMailer-Komponenten befinden sich unter `/web/vendor/phpmailer` und wurden
 
 - Nur `/web` bzw. `/agent` darf vom Webserver erreichbar sein.
 
+### PCRE JIT bei gehärtetem Apache (`MemoryDenyWriteExecute=yes`)
+
+Dieser Hinweis betrifft **nur** Installationen, bei denen Apache mit `MemoryDenyWriteExecute=yes` oder vergleichbaren Einschränkungen betrieben wird (z. B. durch systemd-Härtung der `apache2.service`). Auf allen anderen Systemen ist keine Anpassung nötig.
+
+PCRE JIT benötigt beschreibbaren und zugleich ausführbaren Speicher. Ist `pcre.jit` aktiv, kann PHP in diesem Fall Warnungen wie die folgende ausgeben:
+
+```
+preg_replace(): Allocation of JIT memory failed, PCRE JIT will be disabled.
+This is likely caused by security restrictions.
+```
+
+Empfohlen wird, die Härtung von Apache **aktiviert zu lassen** und stattdessen PCRE JIT für die Apache-PHP-SAPI zu deaktivieren. Dazu in der PHP-Konfiguration der Apache-SAPI setzen:
+
+```ini
+pcre.jit=0
+```
+
+Die Konfiguration liegt je nach Distribution und PHP-Version z. B. in `/etc/php/<Version>/apache2/php.ini` oder in einer Datei unter `/etc/php/<Version>/apache2/conf.d/`. Anschließend Apache neu laden, damit die Änderung wirksam wird:
+
+```bash
+systemctl reload apache2
+```
+
 ---
 
 ## Autor
