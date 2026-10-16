@@ -6,8 +6,8 @@
  * - Empfängt eine base64-kodierte Zonendatei (`db.zone`)
  * - Validiert sie mit named-checkzone
  * - Speichert sie unter /etc/bind/zones/
- * - Optional: Entfernt nicht mehr gültige db.*-Dateien
  * - Führt einen BIND-Reload durch
+ * - Entfernt KEINE anderen Zonendateien (Orphan-Cleanup erfolgt ausschließlich über zone_cleanup.php)
  *
  * Sicherheit:
  * - Zugriff nur mit gültigem Bearer-Token
@@ -68,7 +68,7 @@ if (!str_contains($check_output, 'loaded serial')) {
     ]);
 }
 
-// === Globalen exklusiven Lock erwerben (Übernahme, Cleanup und Reload serialisieren) ===
+// === Globalen exklusiven Lock erwerben (Übernahme und Reload serialisieren) ===
 $lockHandle = @fopen($lockPath, 'c');
 if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
     if (is_resource($lockHandle)) {
@@ -84,18 +84,6 @@ if (!rename($tmpPath, $finalPath)) {
     flock($lockHandle, LOCK_UN);
     fclose($lockHandle);
     sendJsonResponse(500, ['status' => 'error', 'message' => "Fehler beim Verschieben nach $finalPath"]);
-}
-
-// === Optional: veraltete Zonendateien entfernen ===
-if (isset($input['valid_zones']) && is_array($input['valid_zones'])) {
-    $validSafeZones = array_map('safeZoneName', $input['valid_zones']);
-    foreach (glob("$zoneDir/db.*") as $file) {
-        $zonePart = substr(basename($file), 3); // entfernt "db."
-        $safe = safeZoneName($zonePart);
-        if (!in_array($safe, $validSafeZones, true)) {
-            @unlink($file);
-        }
-    }
 }
 
 // === BIND reload durchführen ===

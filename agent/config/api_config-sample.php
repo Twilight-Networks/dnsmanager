@@ -21,9 +21,15 @@ return [
     ],
 
     // Pfad zum Verzeichnis mit .conf-Dateien für einzelne Zonen (BIND-include)
+    // Verwalteter Scope: Alle <zone>.conf in diesem Verzeichnis gehören dem DNS-Manager.
+    // zone_cleanup.php entfernt hier .conf-Dateien, deren Zone dem Server laut Sollzustand
+    // (Datenbank) nicht mehr zugewiesen ist. Keine fremden .conf-Dateien hier ablegen.
     'zone_conf_dir' => '/etc/bind/zones/conf',
 
     // Pfad zum Verzeichnis mit den Zonendateien (db.<zone>)
+    // Cleanup entfernt hier NUR db.<zone> als exakt gepaartes Artefakt einer verwaisten
+    // <zone>.conf aus zone_conf_dir. Sonstige db.*, .jnl und fremde Dateien werden nicht
+    // pauschal gelöscht.
     'zone_data_dir' => '/etc/bind/zones',
 
     // Pfad zur globalen zones.conf (wird automatisch generiert)

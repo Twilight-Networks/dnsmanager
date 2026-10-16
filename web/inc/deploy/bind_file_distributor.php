@@ -9,7 +9,8 @@
  * Architektur:
  * - Zonendateien und Konfigurationsdateien werden temporär erzeugt und base64-kodiert per HTTPS-POST an die jeweiligen Server übertragen.
  * - Die API-Endpunkte der Zielserver (zone_sync.php, conf_sync.php) nehmen die Dateien entgegen und verarbeiten sie lokal.
- * - Zusätzlich wird eine Liste gültiger Zonen übermittelt, damit der Zielserver veraltete Dateien selbst entfernen kann.
+ * - Normale Sync-Requests übertragen ausschließlich die konkrete Zone. Verwaiste Zonen werden einmal pro
+ *   Publish-Lauf über distribute_zone_cleanup() / zone_cleanup.php auf allen aktiven Servern entfernt.
  *
  * Merkmale:
  * - Es wird keine zentrale zones.conf mehr erzeugt.
@@ -32,7 +33,7 @@
  * - Für die angegebene Zone wird eine aktuelle Zonendatei erzeugt (sofern nicht vorab übergeben) und temporär gespeichert.
  * - Die Datei wird base64-kodiert über HTTPS an jeden aktiven Server übertragen, der dieser Zone in der Datenbank zugewiesen ist.
  * - Auch der lokale Server wird über 127.0.0.1 via API angesprochen.
- * - Zusätzlich wird eine Liste aller gültigen Zonen übermittelt, um auf Empfängerseite veraltete Zonendateien bereinigen zu können.
+ * - Es wird nur die konkrete Zone übertragen (kein Cleanup anderer Zonen auf Empfängerseite).
  *
  * Verhalten:
  * - Wenn $zone_path nicht angegeben ist, wird die Datei automatisch generiert.
@@ -120,22 +121,11 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         // API-Endpunkt für Zonensynchronisation auf dem Remote-Server
         $url = "https://{$srv['api_ip']}" . rtrim(REMOTE_API_BASE, '/') . '/zones/zone_sync.php';
 
-        // Liste aller gültigen Zonennamen für diesen Server (zur Gültigkeitsprüfung auf Empfängerseite)
-        $stmt_valid = $pdo->prepare("
-            SELECT z.name
-            FROM zones z
-            JOIN zone_servers zs ON z.id = zs.zone_id
-            WHERE zs.server_id = ?
-        ");
-        $stmt_valid->execute([$srv['server_id']]);
-        $valid_zones = $stmt_valid->fetchAll(PDO::FETCH_COLUMN);
-
-        // JSON-Payload für POST-Request vorbereiten
+        // JSON-Payload für POST-Request vorbereiten (nur die konkrete Zone)
         $payload = json_encode([
             'zone_id'     => $zone_id,
             'zone_name'   => $zone_name,
-            'zone_data'   => $zone_data,
-            'valid_zones' => $valid_zones
+            'zone_data'   => $zone_data
         ]);
 
         // CURL-Request an den Remote-Agenten senden
@@ -195,8 +185,7 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
  * - Die Konfiguration wird für jeden Server individuell erzeugt und über die API (conf_sync.php) übermittelt.
  * - Auch der lokale Server wird wie ein Remote-Server behandelt (API-Aufruf mit 127.0.0.1).
  * - Die Konfiguration wird temporär mit `generate_zone_conf_file()` erzeugt und anschließend als base64-encoded JSON-Payload übertragen.
- * - Zusätzlich wird eine Liste aller aktuell gültigen Zonennamen für diesen Server mitgesendet,
- *   damit der Empfänger veraltete `.conf`-Dateien ggf. selbst bereinigen kann.
+ * - Es wird nur die konkrete Zone übertragen (kein Cleanup anderer `.conf`-Dateien auf Empfängerseite).
  *
  * Verhalten:
  * - Wenn ein Server nicht erreichbar ist oder einen Fehler zurückliefert, wird dies gesammelt und als Fehlerstatus gemeldet.
@@ -245,21 +234,10 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         $conf_data = base64_encode(file_get_contents($conf_path));
         $url = "https://{$srv['api_ip']}" . rtrim(REMOTE_API_BASE, '/') . '/zones/conf_sync.php';
 
-        // Gültige Zonennamen
-        $stmt_valid = $pdo->prepare("
-            SELECT z.name
-            FROM zones z
-            JOIN zone_servers zs ON z.id = zs.zone_id
-            WHERE zs.server_id = ?
-        ");
-        $stmt_valid->execute([$srv['id']]);
-        $valid_zones = $stmt_valid->fetchAll(PDO::FETCH_COLUMN);
-
-        // API-Payload senden
+        // API-Payload senden (nur die konkrete Zone)
         $payload = json_encode([
             'zone_name' => $zone_name,
-            'conf_data' => $conf_data,
-            'valid_zones' => $valid_zones
+            'conf_data' => $conf_data
         ]);
 
         $ch = curl_init($url);
@@ -307,5 +285,107 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         'status' => $status,
         'errors' => $errors,
         'output' => $output
+    ];
+}
+
+/**
+ * Entfernt verwaiste Zonen auf ALLEN aktiven Servern (einmal pro Publish-Lauf) über die API (zone_cleanup.php).
+ *
+ * Zweck:
+ * - Pro aktivem Server (servers.active = 1) wird die vollständige Soll-Zonenliste aus der Datenbank ermittelt
+ *   (zones JOIN zone_servers) und an zone_cleanup.php gesendet.
+ * - Auch aktive Server ohne zugewiesene Zone werden angesprochen; dann mit leerer Liste und allow_empty = true.
+ *
+ * Verhalten:
+ * - Curl-, HTTP- und Agent-Fehler werden pro Server gesammelt.
+ * - status 'ok', wenn alle Cleanup-Requests erfolgreich waren, sonst 'warning'.
+ *
+ * @return array Assoziatives Array mit 'status', 'errors', 'output'
+ */
+function distribute_zone_cleanup(): array {
+    global $pdo;
+    $errors = [];
+    $outputs = [];
+
+    // Alle aktiven Server laden (nicht nur Server mit veröffentlichten Zonen)
+    try {
+        $servers = $pdo->query("SELECT id, name, api_ip, api_token FROM servers WHERE active = 1")->fetchAll(PDO::FETCH_ASSOC);
+        $stmt_valid = $pdo->prepare("
+            SELECT z.name
+            FROM zones z
+            JOIN zone_servers zs ON z.id = zs.zone_id
+            WHERE zs.server_id = ?
+        ");
+    } catch (Throwable $e) {
+        return [
+            'status' => 'warning',
+            'errors' => ["Aktive Server für Cleanup konnten nicht geladen werden: " . $e->getMessage()],
+            'output' => ''
+        ];
+    }
+
+    foreach ($servers as $srv) {
+        // Vollständige Soll-Zonenliste dieses Servers
+        try {
+            $stmt_valid->execute([$srv['id']]);
+            $valid_zones = $stmt_valid->fetchAll(PDO::FETCH_COLUMN);
+        } catch (Throwable $e) {
+            $errors[] = "Soll-Zonenliste für {$srv['name']} konnte nicht ermittelt werden: " . $e->getMessage();
+            continue;
+        }
+
+        // Leere Liste nur mit ausdrücklichem allow_empty = true (Server ohne zugewiesene Zone)
+        $payload = json_encode([
+            'valid_zones' => array_values($valid_zones),
+            'allow_empty' => empty($valid_zones)
+        ]);
+
+        $url = "https://{$srv['api_ip']}" . rtrim(REMOTE_API_BASE, '/') . '/zones/zone_cleanup.php';
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $srv['api_token'],
+                'Content-Type: application/json'
+            ],
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_SSL_VERIFYPEER => CURL_SSL_VERIFYPEER,
+            CURLOPT_SSL_VERIFYHOST => CURL_SSL_VERIFYHOST,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => 30,
+        ]);
+
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_error = curl_error($ch);
+
+        if (!empty($curl_error)) {
+            $errors[] = "CURL-Fehler bei Cleanup auf {$srv['name']} ({$srv['api_ip']}): $curl_error";
+            continue;
+        }
+
+        $json = json_decode((string)$response, true);
+        if ($http_code !== 200 || !is_array($json) || ($json['status'] ?? '') !== 'success') {
+            $msg = is_array($json) ? ($json['message'] ?? 'Unbekannter Fehler') : 'Ungültige Antwort';
+            $details = (is_array($json) && !empty($json['errors']) && is_array($json['errors']))
+                ? ' – ' . implode('; ', $json['errors'])
+                : '';
+            $errors[] = "Cleanup HTTP-$http_code bei {$srv['name']} ({$srv['api_ip']}): $msg$details";
+            continue;
+        }
+
+        $removed_conf = $json['removed_conf'] ?? [];
+        $removed_zone_files = $json['removed_zone_files'] ?? [];
+        if (!empty($removed_conf) || !empty($removed_zone_files)) {
+            $outputs[] = "[{$srv['name']}] entfernt: " . implode(', ', array_merge((array)$removed_conf, (array)$removed_zone_files));
+        }
+    }
+
+    return [
+        'status' => empty($errors) ? 'ok' : 'warning',
+        'errors' => $errors,
+        'output' => implode("\n", $outputs)
     ];
 }
