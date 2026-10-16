@@ -67,7 +67,7 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
 
     $zone_name = $zone['name'];
     $safe_zone_name = preg_replace('/[^a-zA-Z0-9._\-]/', '_', $zone_name);
-    $zone_file_path = rtrim($output_dir, '/') . "/db." . $safe_zone_name;
+    $zone_file_path = rtrim($output_dir, '/') . "/db." . $safe_zone_name . "." . bin2hex(random_bytes(8));
 
     // Neue Serialnummer bei publish (eigene Transaktion) und dyndns (Transaktion des Aufrufers) erzeugen
     $serial = $zone['soa_serial'];
