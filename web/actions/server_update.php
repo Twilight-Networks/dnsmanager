@@ -130,6 +130,57 @@ if (!$server_data_changed && !$nonCriticalChanged) {
     exit;
 }
 
+// Topologieänderung im Sinne von Publish All: ausschließlich servers.active
+$activeChanged = (int)$existing['active'] !== (int)$update_data['active'];
+$reactivated   = $activeChanged && (int)$update_data['active'] === 1;
+
+// Topologie-Lock: derselbe MariaDB-Advisory-Lock wie Publish All ('dnsmanager_publish_all',
+// GET_LOCK mit Timeout 0, kein Warten). Er wird vor jeder Transaktion bzw. schreibenden Operation
+// erworben und erst nach Commit/Rollback freigegeben. Bei hartem Prozessabbruch gibt MariaDB ihn
+// mit dem Verbindungsende frei.
+$publish_lock_name = 'dnsmanager_publish_all';
+$publish_lock_acquired = false;
+$releasePublishLock = function () use ($pdo, $publish_lock_name, &$publish_lock_acquired): void {
+    if (!$publish_lock_acquired) {
+        return;
+    }
+    try {
+        $stmt_release = $pdo->prepare("SELECT RELEASE_LOCK(?)");
+        $stmt_release->execute([$publish_lock_name]);
+        $release_result = $stmt_release->fetchColumn(); // 1 = freigegeben, 0 = nicht von dieser Verbindung gehalten, NULL = Lock existiert nicht
+        if ($release_result === null || $release_result === false || (int)$release_result !== 1) {
+            // Fachlicher Vorgang bleibt erfolgreich; Lock wird spätestens mit dem Verbindungsende frei
+            appLog('warning', "[server_update] Freigabe von Lock '$publish_lock_name' nicht bestätigt (RELEASE_LOCK = " . var_export($release_result, true) . ")");
+        }
+    } catch (Throwable $e) {
+        appLog('warning', "[server_update] Lock '$publish_lock_name' konnte nicht freigegeben werden (wird mit Verbindungsende frei): " . $e->getMessage());
+    } finally {
+        // Release-Versuch abgeschlossen: keine erneuten Freigabeversuche über diesen Helper
+        $publish_lock_acquired = false;
+    }
+};
+// Nur bei Änderung von active erworben (vor Master-Prüfung und Transaktion) und bis nach den
+// Zonen-Rebuilds gehalten, damit Publish All nicht dazwischen laufen kann.
+if ($activeChanged) {
+    try {
+        $stmt_lock = $pdo->prepare("SELECT GET_LOCK(?, 0)");
+        $stmt_lock->execute([$publish_lock_name]);
+        $lock_result = $stmt_lock->fetchColumn(); // 1 = erhalten, 0 = belegt, NULL = Fehler
+        $publish_lock_acquired = $lock_result !== null && (int)$lock_result === 1;
+    } catch (Throwable $e) {
+        appLog('error', "[server_update] Lock '$publish_lock_name' konnte nicht bezogen werden: " . $e->getMessage());
+    }
+    if (!$publish_lock_acquired) {
+        // Keine Transaktion, keine Schreiboperation
+        toastWarning(
+            $LANG['topology_locked'] ?? 'Eine Veröffentlichung oder strukturelle Änderung läuft gerade. Bitte in Kürze erneut versuchen.',
+            "[server_update] Server '{$name}' (ID {$id}) nicht aktualisiert: Lock '$publish_lock_name' nicht verfügbar"
+        );
+        header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
+        exit;
+    }
+}
+
 // Verhindern, dass ein aktiver Master-Server deaktiviert wird
 if ($active === 0) {
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM zone_servers WHERE server_id = ? AND is_master = 1");
@@ -141,14 +192,15 @@ if ($active === 0) {
             $LANG['server_error_master_deactivation_blocked'],
             "Aktiver Master-Server '{$name}' (ID {$id}) sollte deaktiviert werden – abgebrochen."
         );
+        $releasePublishLock();
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
         exit;
     }
 }
 
-$pdo->beginTransaction();
-
 try {
+    $pdo->beginTransaction();
+
     if ($is_local) {
         $stmt = $pdo->prepare("UPDATE servers SET is_local = 0 WHERE is_local = 1 AND id != ?");
         $stmt->execute([$id]);
@@ -166,6 +218,12 @@ try {
         WHERE id = :id
     ");
     $stmt->execute($update_data + [':id' => $id]);
+
+    // Reaktivierung (0 -> 1): Server kann einen älteren DNS-Stand besitzen → Full-Rebuild ausstehend
+    // (bind_dirty = 1, Tri-State 0/1/2 siehe publish_all.php). Deaktivierung setzt kein bind_dirty.
+    if ($reactivated) {
+        $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
+    }
 
     $pdo->commit();
 
@@ -196,13 +254,18 @@ try {
         sprintf($LANG['server_updated_success'], htmlspecialchars($name)),
         "Server '{$name}' (ID {$id}) erfolgreich aktualisiert mit neuen Daten."
     );
-} catch (Exception $e) {
-    $pdo->rollBack();
+} catch (Throwable $e) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
     toastError(
         $LANG['server_error_db_update_failed'],
         "Fehler beim Speichern von Server '{$name}' (ID {$id}): " . $e->getMessage()
     );
 }
+
+// Lock (falls erworben) nach Commit/Rollback und Zonen-Rebuilds freigeben
+$releasePublishLock();
 
 header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
 exit;

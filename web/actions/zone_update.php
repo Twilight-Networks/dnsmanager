@@ -115,6 +115,33 @@ $rollbackIfActive = function () use ($pdo): void {
     }
 };
 
+// Topologie-Lock: derselbe MariaDB-Advisory-Lock wie Publish All ('dnsmanager_publish_all',
+// GET_LOCK mit Timeout 0, kein Warten). Er wird vor jeder Transaktion bzw. schreibenden Operation
+// erworben und erst nach Commit/Rollback freigegeben. Bei hartem Prozessabbruch gibt MariaDB ihn
+// mit dem Verbindungsende frei.
+$publish_lock_name = 'dnsmanager_publish_all';
+$publish_lock_acquired = false;
+$releasePublishLock = function () use ($pdo, $publish_lock_name, &$publish_lock_acquired): void {
+    if (!$publish_lock_acquired) {
+        return;
+    }
+    try {
+        $stmt_release = $pdo->prepare("SELECT RELEASE_LOCK(?)");
+        $stmt_release->execute([$publish_lock_name]);
+        $release_result = $stmt_release->fetchColumn(); // 1 = freigegeben, 0 = nicht von dieser Verbindung gehalten, NULL = Lock existiert nicht
+        if ($release_result === null || $release_result === false || (int)$release_result !== 1) {
+            // Fachlicher Vorgang bleibt erfolgreich; Lock wird spätestens mit dem Verbindungsende frei
+            appLog('warning', "[zone_update] Freigabe von Lock '$publish_lock_name' nicht bestätigt (RELEASE_LOCK = " . var_export($release_result, true) . ")");
+        }
+    } catch (Throwable $e) {
+        appLog('warning', "[zone_update] Lock '$publish_lock_name' konnte nicht freigegeben werden (wird mit Verbindungsende frei): " . $e->getMessage());
+    } finally {
+        // Release-Versuch abgeschlossen: keine erneuten Freigabeversuche über diesen Helper
+        $publish_lock_acquired = false;
+    }
+};
+// Nur bei Änderung von Serverliste oder Master erworben und über die gesamte Transaktion gehalten.
+
 if ($_SESSION['role'] === 'admin') {
     // Validierung der Serverwahl
     if (!is_array($server_ids) || count($server_ids) < 1) {
@@ -188,6 +215,25 @@ if ($_SESSION['role'] === 'admin') {
     } else {
         // Server-Zuweisung hat sich geändert → neu schreiben + rebuild
         // (innerhalb der gemeinsamen Transaktion, Commit erst nach dem Metadaten-UPDATE)
+        // Topologie-Lock vor der Transaktion erwerben
+        try {
+            $stmt_lock = $pdo->prepare("SELECT GET_LOCK(?, 0)");
+            $stmt_lock->execute([$publish_lock_name]);
+            $lock_result = $stmt_lock->fetchColumn(); // 1 = erhalten, 0 = belegt, NULL = Fehler
+            $publish_lock_acquired = $lock_result !== null && (int)$lock_result === 1;
+        } catch (Throwable $e) {
+            appLog('error', "[zone_update] Lock '$publish_lock_name' konnte nicht bezogen werden: " . $e->getMessage());
+        }
+        if (!$publish_lock_acquired) {
+            // Keine Transaktion, keine Schreiboperation
+            toastWarning(
+                $LANG['topology_locked'] ?? 'Eine Veröffentlichung oder strukturelle Änderung läuft gerade. Bitte in Kürze erneut versuchen.',
+                "[zone_update] Serverzuweisung von Zone-ID {$id} nicht geändert: Lock '$publish_lock_name' nicht verfügbar"
+            );
+            header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
+            exit;
+        }
+
         try {
             $pdo->beginTransaction();
 
@@ -205,6 +251,7 @@ if ($_SESSION['role'] === 'admin') {
 
             if ($result['status'] === 'error') {
                 $rollbackIfActive();
+                $releasePublishLock();
                 toastError(
                     $LANG['zone_error_ns_glue_failed'],
                     $result['output']
@@ -226,6 +273,7 @@ if ($_SESSION['role'] === 'admin') {
             $soa_ns = $stmt->fetchColumn();
         } catch (Throwable $e) {
             $rollbackIfActive();
+            $releasePublishLock();
             toastError(
                 $LANG['zone_error_server_assignment_failed'],
                 "Fehler beim Aktualisieren von Zone-ID {$id}: " . $e->getMessage()
@@ -245,6 +293,7 @@ if ($_SESSION['role'] === 'admin') {
 
 if (!$old) {
     $rollbackIfActive();
+    $releasePublishLock();
     toastError(
         $LANG['zone_error_check_failed'],
         "Zone-ID {$id} existiert nicht mehr."
@@ -274,6 +323,7 @@ $hasNonCriticalChanges =
 // Wenn keine Änderungen → keine Aktion
 if (!$hasZoneRelevantChanges && !$serverListChanged && !$masterChanged && !$hasNonCriticalChanges) {
     $rollbackIfActive();
+    $releasePublishLock();
     toastSuccess($LANG['no_changes'], "Die Zonendaten sind unverändert.");
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
     exit;
@@ -313,6 +363,7 @@ try {
 
         if ($rebuild['status'] === 'error') {
             $pdo->rollBack();
+            $releasePublishLock();
             toastError(
                 $LANG['zone_error_zonefile_invalid'],
                 $rebuild['output']
@@ -332,6 +383,7 @@ try {
     $pdo->commit();
 } catch (Throwable $e) {
     $rollbackIfActive();
+    $releasePublishLock();
     toastError(
         $LANG['zone_error_db_save_failed'],
         "Zonen-Metadaten konnten für Zone '{$name}' (ID {$id}) nicht gespeichert werden: " . $e->getMessage()
@@ -339,6 +391,9 @@ try {
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
     exit;
 }
+
+// Erfolgreicher Commit: Topologie-Lock (falls erworben) freigeben
+$releasePublishLock();
 
 if (empty($_SESSION['toast_errors'])) {
     toastSuccess(

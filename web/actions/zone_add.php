@@ -113,6 +113,49 @@ $soa_ns         = ($type === 'reverse')
             : $master_name . '.' . $zone_base . '.'
     );
 
+// Topologie-Lock: derselbe MariaDB-Advisory-Lock wie Publish All ('dnsmanager_publish_all',
+// GET_LOCK mit Timeout 0, kein Warten). Er wird vor jeder Transaktion bzw. schreibenden Operation
+// erworben und erst nach Commit/Rollback freigegeben. Bei hartem Prozessabbruch gibt MariaDB ihn
+// mit dem Verbindungsende frei.
+$publish_lock_name = 'dnsmanager_publish_all';
+$publish_lock_acquired = false;
+$releasePublishLock = function () use ($pdo, $publish_lock_name, &$publish_lock_acquired): void {
+    if (!$publish_lock_acquired) {
+        return;
+    }
+    try {
+        $stmt_release = $pdo->prepare("SELECT RELEASE_LOCK(?)");
+        $stmt_release->execute([$publish_lock_name]);
+        $release_result = $stmt_release->fetchColumn(); // 1 = freigegeben, 0 = nicht von dieser Verbindung gehalten, NULL = Lock existiert nicht
+        if ($release_result === null || $release_result === false || (int)$release_result !== 1) {
+            // Fachlicher Vorgang bleibt erfolgreich; Lock wird spätestens mit dem Verbindungsende frei
+            appLog('warning', "[zone_add] Freigabe von Lock '$publish_lock_name' nicht bestätigt (RELEASE_LOCK = " . var_export($release_result, true) . ")");
+        }
+    } catch (Throwable $e) {
+        appLog('warning', "[zone_add] Lock '$publish_lock_name' konnte nicht freigegeben werden (wird mit Verbindungsende frei): " . $e->getMessage());
+    } finally {
+        // Release-Versuch abgeschlossen: keine erneuten Freigabeversuche über diesen Helper
+        $publish_lock_acquired = false;
+    }
+};
+try {
+    $stmt_lock = $pdo->prepare("SELECT GET_LOCK(?, 0)");
+    $stmt_lock->execute([$publish_lock_name]);
+    $lock_result = $stmt_lock->fetchColumn(); // 1 = erhalten, 0 = belegt, NULL = Fehler
+    $publish_lock_acquired = $lock_result !== null && (int)$lock_result === 1;
+} catch (Throwable $e) {
+    appLog('error', "[zone_add] Lock '$publish_lock_name' konnte nicht bezogen werden: " . $e->getMessage());
+}
+if (!$publish_lock_acquired) {
+    // Keine Transaktion, keine Schreiboperation
+    toastWarning(
+        $LANG['topology_locked'] ?? 'Eine Veröffentlichung oder strukturelle Änderung läuft gerade. Bitte in Kürze erneut versuchen.',
+        "[zone_add] Zone '{$name}' nicht angelegt: Lock '$publish_lock_name' nicht verfügbar"
+    );
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?add_new=1");
+    exit;
+}
+
 // Transaktion starten
 try {
     $pdo->beginTransaction();
@@ -212,6 +255,7 @@ try {
 
     if ($rebuild['status'] === 'error') {
         $pdo->rollBack();
+        $releasePublishLock();
         toastError(
             $LANG['zone_error_zonefile_invalid'],
             $rebuild['output']
@@ -228,6 +272,7 @@ try {
     }
 
     $pdo->commit();
+    $releasePublishLock();
     toastSuccess(
         sprintf($LANG['zone_created'], htmlspecialchars($name)),
         "Zone '{$name}' wurde erfolgreich erstellt und gespeichert."
@@ -235,8 +280,11 @@ try {
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
     exit;
 
-} catch (Exception $e) {
-    $pdo->rollBack();
+} catch (Throwable $e) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+    $releasePublishLock();
     toastError(
         $LANG['zone_error_db_save_failed'],
         "Datenbankfehler beim Speichern von Zone '{$name}': " . $e->getMessage()
