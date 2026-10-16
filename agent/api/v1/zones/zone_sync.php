@@ -42,11 +42,18 @@ if ($zoneData === false) {
 
 // === Dateipfade vorbereiten ===
 $zoneDir = $config['zone_data_dir'];
-$tmpPath = "/tmp/db.$safeName.tmp";
+try {
+    // Eindeutiger Temp-Name pro Request, damit parallele Requests sich nicht überschreiben
+    $tmpPath = "/tmp/db.$safeName." . bin2hex(random_bytes(8)) . ".tmp";
+} catch (Throwable $e) {
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erzeugen des temporären Dateinamens']);
+}
 $finalPath = "$zoneDir/db.$safeName";
+$lockPath = '/tmp/dnsmanager_zone_sync.lock';
 
 // === Temporäre Datei schreiben ===
 if (!writeTextFile($tmpPath, $zoneData)) {
+    @unlink($tmpPath);
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben der temporären Datei']);
 }
 
@@ -61,8 +68,21 @@ if (!str_contains($check_output, 'loaded serial')) {
     ]);
 }
 
+// === Globalen exklusiven Lock erwerben (Übernahme, Cleanup und Reload serialisieren) ===
+$lockHandle = @fopen($lockPath, 'c');
+if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
+    if (is_resource($lockHandle)) {
+        fclose($lockHandle);
+    }
+    @unlink($tmpPath);
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für die Zonenübernahme']);
+}
+
 // === Zonendatei übernehmen ===
 if (!rename($tmpPath, $finalPath)) {
+    @unlink($tmpPath);
+    flock($lockHandle, LOCK_UN);
+    fclose($lockHandle);
     sendJsonResponse(500, ['status' => 'error', 'message' => "Fehler beim Verschieben nach $finalPath"]);
 }
 
@@ -80,6 +100,10 @@ if (isset($input['valid_zones']) && is_array($input['valid_zones'])) {
 
 // === BIND reload durchführen ===
 $rndcOutput = reloadBind();
+
+// === Lock freigeben ===
+flock($lockHandle, LOCK_UN);
+fclose($lockHandle);
 
 // === Erfolgsantwort senden ===
 sendJsonResponse(200, [
