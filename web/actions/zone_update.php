@@ -219,6 +219,13 @@ if ($_SESSION['role'] === 'admin') {
             exit;
         }
     }
+} else {
+    // zoneadmin darf keine Serverzuweisung ändern; SOA-NS von Forward-Zonen bleibt unverändert
+    $serverListChanged = false;
+    $masterChanged = false;
+    $soa_ns = $type === 'forward'
+        ? $old['soa_ns']
+        : trim($_POST['soa_ns'] ?? '');
 }
 
 if (!$old) {
