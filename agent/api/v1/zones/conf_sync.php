@@ -5,8 +5,8 @@
  * Zweck:
  * - Empfängt eine zonenspezifische .conf-Datei als base64-kodierten Inhalt
  * - Speichert die Datei unter /etc/bind/zones/conf/
- * - Entfernt optional veraltete .conf-Dateien
- * - Rekonstruiert die zentrale /etc/bind/zones/zones.conf
+ * - Rekonstruiert die zentrale /etc/bind/zones/zones.conf (atomar)
+ * - Entfernt KEINE anderen .conf-Dateien (Orphan-Cleanup erfolgt ausschließlich über zone_cleanup.php)
  * - Führt einen BIND-Reload via rndc durch
  *
  * Sicherheit:
@@ -67,17 +67,6 @@ $releaseLock = function () use (&$lockHandle): void {
 
 // === Zielverzeichnis sicherstellen ===
 ensureDirectory($confDir);
-
-// === Optional: veraltete .conf-Dateien entfernen ===
-if (isset($input['valid_zones']) && is_array($input['valid_zones'])) {
-    $validNames = array_map('safeZoneName', $input['valid_zones']);
-    foreach (glob("$confDir/*.conf") as $file) {
-        $basename = basename($file, '.conf');
-        if (!in_array($basename, $validNames, true)) {
-            @unlink($file);
-        }
-    }
-}
 
 // === Neue .conf-Datei schreiben ===
 if (!writeTextFile($confPath, $confData)) {

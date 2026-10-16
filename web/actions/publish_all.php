@@ -12,6 +12,8 @@
  *   - Zonendatei erzeugen + named-checkzone-Validierung (via generate_zone_file)
  *   - Zonendatei an zugewiesene Server verteilen (lokal und remote)
  *   - Konfigurationsdatei (.conf) erzeugen und verteilen
+ * - Nach vollständig erfolgreicher Verteilung (keine Fehler, keine Teilverteilung):
+ *   - Orphan-Cleanup auf allen aktiven Servern (distribute_zone_cleanup → zone_cleanup.php)
  * - Nach erfolgreicher Verteilung:
  *   - BIND reload (lokal)
  *   - Von diesem Lauf übernommene Flags (Status 2) zurücksetzen
@@ -202,6 +204,32 @@ try {
     }
 
     if (empty($errors)) {
+
+        if (empty($partial_zone_ids)) {
+            // Orphan-Cleanup nur nach vollständig erfolgreicher Verteilung aller Zonen dieses Laufs
+            // (läuft auch bei leerer Zonenliste, z. B. nachdem die letzte Zone gelöscht wurde).
+            $cleanup_result = distribute_zone_cleanup();
+            if (($cleanup_result['status'] ?? '') !== 'ok') {
+                // Cleanup-Fehler = Warnung, kein Publish-Fehler. bind_dirty = 1 erzwingt Retry (Full-Rebuild + Cleanup)
+                // beim nächsten Publish; der folgende Reset (WHERE bind_dirty = 2) lässt die 1 unberührt.
+                $cleanup_errors = $cleanup_result['errors'] ?? [];
+                if (empty($cleanup_errors)) {
+                    $cleanup_errors = ['Zonen-Cleanup nicht vollständig erfolgreich'];
+                }
+                foreach ($cleanup_errors as $e) {
+                    $warnings[] = "Cleanup: $e";
+                    appLog('warning', "[publish] Cleanup: $e");
+                }
+                $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
+            } elseif (!empty($cleanup_result['output'])) {
+                appLog('info', "[publish] Cleanup: " . $cleanup_result['output']);
+            }
+        } elseif ($bind_dirty_claimed) {
+            // Sonderfall: übernommener Full-Rebuild (bind_dirty = 2) mit Teilverteilung → Cleanup wurde
+            // nicht ausgeführt. bind_dirty wieder auf 1 setzen, damit der Reset unten (2 -> 0) ihn nicht
+            // löscht und Full-Rebuild + Cleanup beim nächsten Publish ausstehen.
+            $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
+        }
 
         // Flags zurücksetzen: ausschließlich den übernommenen Status 2 (2 -> 0).
         // Ein während des Laufs neu gesetztes 1 bleibt stehen.
