@@ -21,11 +21,13 @@ if (isset($_SESSION['user_id'])) {
     $stmt = $pdo->prepare("
         SELECT
             (SELECT bind_dirty FROM system_status WHERE id = :id) AS bind_dirty,
-            (SELECT COUNT(*) FROM zones WHERE changed = :changed) AS changed_zones
+            (SELECT COUNT(*) FROM zones WHERE changed <> :clean) AS changed_zones
     ");
+    // changed/bind_dirty: 0 = sauber, 1 = wartet auf Publish, 2 = von Publish übernommen bzw.
+    // nicht sicher abgeschlossen (siehe publish_all.php). 1 und 2 gelten als dirty.
     $stmt->execute([
         'id' => 1,
-        'changed' => 1
+        'clean' => 0
     ]);
     $status = $stmt->fetch(PDO::FETCH_ASSOC);
 

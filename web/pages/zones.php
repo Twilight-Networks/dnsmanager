@@ -95,7 +95,8 @@ foreach ($zones as &$zone) {
     }
 
     // Geänderte Zonen markieren, sofern keine Fehler vorliegen
-    if ($zone['status'] === 'ok' && $zone['changed'] == 1) {
+    // changed: 0 = sauber, 1 = wartet auf Publish, 2 = von Publish übernommen bzw. nicht sicher abgeschlossen
+    if ($zone['status'] === 'ok' && (int)$zone['changed'] !== 0) {
         $zone['status'] = 'changed';
     }
 
