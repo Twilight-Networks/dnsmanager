@@ -44,6 +44,27 @@ $confDir = $config['zone_conf_dir'];
 $confPath = "$confDir/$safeName.conf";
 $zonesConfPath = $config['zones_conf_file'];
 
+// === Gemeinsamen Agent-Lock erwerben (identisch zu zone_sync.php, blockierend) ===
+// Serialisiert zone_sync und conf_sync gegenseitig: alle Änderungen an verwalteten BIND-Dateien
+// und der BIND-Reload erfolgen unter diesem Lock. Erst nach reloadBind() freigeben.
+$lockPath = '/tmp/dnsmanager_zone_sync.lock';
+$lockHandle = @fopen($lockPath, 'c');
+if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
+    if (is_resource($lockHandle)) {
+        fclose($lockHandle);
+    }
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für die Konfigurationsübernahme']);
+}
+
+// Lock freigeben (vor jedem sendJsonResponse nach Lock-Erwerb; mehrfacher Aufruf unschädlich)
+$releaseLock = function () use (&$lockHandle): void {
+    if (is_resource($lockHandle)) {
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+    }
+    $lockHandle = null;
+};
+
 // === Zielverzeichnis sicherstellen ===
 ensureDirectory($confDir);
 
@@ -60,6 +81,7 @@ if (isset($input['valid_zones']) && is_array($input['valid_zones'])) {
 
 // === Neue .conf-Datei schreiben ===
 if (!writeTextFile($confPath, $confData)) {
+    $releaseLock();
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben der .conf-Datei']);
 }
 
@@ -71,12 +93,42 @@ foreach (glob("$confDir/*.conf") as $file) {
     }
 }
 
-if (!writeTextFile($zonesConfPath, implode("\n", $includes) . "\n")) {
+$zonesConfContent = implode("\n", $includes) . "\n";
+
+// zones.conf atomar ersetzen: vollständig in eine eindeutige Temp-Datei im selben Verzeichnis
+// schreiben (gleiches Dateisystem) und erst danach per rename() übernehmen.
+try {
+    $zonesConfTmpPath = $zonesConfPath . '.' . bin2hex(random_bytes(8)) . '.tmp';
+} catch (Throwable $e) {
+    $releaseLock();
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erzeugen des temporären Dateinamens für zones.conf']);
+}
+
+if (file_put_contents($zonesConfTmpPath, $zonesConfContent) !== strlen($zonesConfContent)) {
+    @unlink($zonesConfTmpPath);
+    $releaseLock();
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben von zones.conf']);
+}
+
+// Bisherige Zugriffsrechte von zones.conf übernehmen (best effort; Owner/Gruppe bleiben die des Agenten)
+if (is_file($zonesConfPath)) {
+    $existingPerms = @fileperms($zonesConfPath);
+    if ($existingPerms !== false) {
+        @chmod($zonesConfTmpPath, $existingPerms & 0777);
+    }
+}
+
+if (!rename($zonesConfTmpPath, $zonesConfPath)) {
+    @unlink($zonesConfTmpPath);
+    $releaseLock();
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben von zones.conf']);
 }
 
 // === BIND reload ===
 $rndcOutput = reloadBind();
+
+// === Lock freigeben (nach dem Reload) ===
+$releaseLock();
 
 // === Antwort senden ===
 sendJsonResponse(200, [
