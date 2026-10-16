@@ -47,36 +47,68 @@ require_once __DIR__ . '/../soa_serial.php';
 function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $mode = 'validate'): array {
     global $pdo;
 
-    // Zoneninformationen laden
-    $stmt = $pdo->prepare("SELECT * FROM zones WHERE id = ?");
-    $stmt->execute([$zone_id]);
-    $zone = $stmt->fetch();
-
-    if (!$zone) {
-        return [
-            'status' => 'error',
-            'output' => "Zonendatenbankeintrag für ID $zone_id nicht gefunden.",
-            'errors' => ["Keine Zone mit ID $zone_id vorhanden."],
-        ];
-    }
-
-    // Records der Zone laden
-    $stmt = $pdo->prepare("SELECT * FROM records WHERE zone_id = ?");
-    $stmt->execute([$zone_id]);
-    $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $zone_name = $zone['name'];
-    $safe_zone_name = preg_replace('/[^a-zA-Z0-9._\-]/', '_', $zone_name);
-    $zone_file_path = rtrim($output_dir, '/') . "/db." . $safe_zone_name . "." . bin2hex(random_bytes(8));
-
-    // Neue Serialnummer bei publish (eigene Transaktion) und dyndns (Transaktion des Aufrufers) erzeugen
-    $serial = $zone['soa_serial'];
     $tx_started = false; // true nur, wenn diese Funktion die Transaktion selbst gestartet hat
-    $dyndns_serial = false; // true, wenn der Serial in der äußeren Transaktion des Aufrufers (DynDNS) erhöht wird
+
+    // publish: Transaktion starten und Zone sperren, BEVOR Zone, Serial und Records gelesen werden.
+    // Der Lock muss die erste Abfrage der Transaktion sein, damit der Read-Snapshot erst nach dem
+    // Warten auf parallele Schreiber (z. B. DynDNS) entsteht.
     if ($mode === 'publish') {
         try {
             $pdo->beginTransaction();
             $tx_started = true;
+            $stmt_lock = $pdo->prepare("SELECT id FROM zones WHERE id = ? FOR UPDATE");
+            $stmt_lock->execute([$zone_id]);
+        } catch (Throwable $e) {
+            if ($tx_started && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            return [
+                'status' => 'error',
+                'output' => "Fehler beim Initialisieren des Publish-Locks: " . $e->getMessage(),
+                'errors' => ["DB: " . $e->getMessage()]
+            ];
+        }
+    }
+
+    try {
+        // Zoneninformationen laden
+        $stmt = $pdo->prepare("SELECT * FROM zones WHERE id = ?");
+        $stmt->execute([$zone_id]);
+        $zone = $stmt->fetch();
+
+        if (!$zone) {
+            if ($tx_started && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            return [
+                'status' => 'error',
+                'output' => "Zonendatenbankeintrag für ID $zone_id nicht gefunden.",
+                'errors' => ["Keine Zone mit ID $zone_id vorhanden."],
+            ];
+        }
+
+        // Records der Zone laden
+        $stmt = $pdo->prepare("SELECT * FROM records WHERE zone_id = ?");
+        $stmt->execute([$zone_id]);
+        $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $zone_name = $zone['name'];
+        $safe_zone_name = preg_replace('/[^a-zA-Z0-9._\-]/', '_', $zone_name);
+        $zone_file_path = rtrim($output_dir, '/') . "/db." . $safe_zone_name . "." . bin2hex(random_bytes(8));
+    } catch (Throwable $e) {
+        // Eigene Transaktion zurückrollen; Exception unverändert weiterreichen (bisheriges Verhalten)
+        if ($tx_started && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+
+    // Neue Serialnummer bei publish (eigene Transaktion) und dyndns (Transaktion des Aufrufers) erzeugen
+    $serial = $zone['soa_serial'];
+    $dyndns_serial = false; // true, wenn der Serial in der äußeren Transaktion des Aufrufers (DynDNS) erhöht wird
+    if ($mode === 'publish') {
+        // Transaktion und Zonen-Lock bestehen bereits; $serial stammt aus dem unter Lock gelesenen Stand.
+        try {
             $serial = generate_next_serial($serial);
         } catch (Throwable $e) {
             if ($tx_started && $pdo->inTransaction()) {
@@ -84,7 +116,7 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
             }
             return [
                 'status' => 'error',
-                'output' => "Fehler beim Starten der Transaktion: " . $e->getMessage(),
+                'output' => "Fehler beim Ermitteln der Serialnummer: " . $e->getMessage(),
                 'errors' => ["DB: " . $e->getMessage()]
             ];
         }
