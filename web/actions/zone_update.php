@@ -105,6 +105,16 @@ if ($type === 'reverse' && ($prefix_length < 8 || $prefix_length > 128)) {
 $server_ids = $_POST['server_ids'] ?? [];
 $master_id  = $_POST['master_server_id'] ?? null;
 
+// Transaktionsgrenze: Ein erfolgreicher Zone-Update läuft in genau einer DB-Transaktion.
+// Bei geänderter Serverzuweisung beginnt sie vor dem Schreiben von zone_servers und umfasst
+// Zuweisung, NS/Glue-Rebuild, Validierung, changed-Flag und das anschließende Metadaten-UPDATE.
+// Jeder Abbruch nach Beginn der Transaktion muss sie vor Redirect/exit zurückrollen.
+$rollbackIfActive = function () use ($pdo): void {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+};
+
 if ($_SESSION['role'] === 'admin') {
     // Validierung der Serverwahl
     if (!is_array($server_ids) || count($server_ids) < 1) {
@@ -177,7 +187,10 @@ if ($_SESSION['role'] === 'admin') {
         $soa_ns = $zone['type'] === 'forward' ? $old['soa_ns'] : trim($_POST['soa_ns'] ?? '');
     } else {
         // Server-Zuweisung hat sich geändert → neu schreiben + rebuild
+        // (innerhalb der gemeinsamen Transaktion, Commit erst nach dem Metadaten-UPDATE)
         try {
+            $pdo->beginTransaction();
+
             // Alte Zuweisungen löschen
             $pdo->prepare("DELETE FROM zone_servers WHERE zone_id = ?")->execute([$id]);
 
@@ -191,6 +204,7 @@ if ($_SESSION['role'] === 'admin') {
             $result = rebuild_ns_and_glue_for_zone_and_flag_if_valid($pdo, $id);
 
             if ($result['status'] === 'error') {
+                $rollbackIfActive();
                 toastError(
                     $LANG['zone_error_ns_glue_failed'],
                     $result['output']
@@ -210,7 +224,8 @@ if ($_SESSION['role'] === 'admin') {
             $stmt = $pdo->prepare("SELECT soa_ns FROM zones WHERE id = ?");
             $stmt->execute([$id]);
             $soa_ns = $stmt->fetchColumn();
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
+            $rollbackIfActive();
             toastError(
                 $LANG['zone_error_server_assignment_failed'],
                 "Fehler beim Aktualisieren von Zone-ID {$id}: " . $e->getMessage()
@@ -229,6 +244,7 @@ if ($_SESSION['role'] === 'admin') {
 }
 
 if (!$old) {
+    $rollbackIfActive();
     toastError(
         $LANG['zone_error_check_failed'],
         "Zone-ID {$id} existiert nicht mehr."
@@ -257,6 +273,7 @@ $hasNonCriticalChanges =
 
 // Wenn keine Änderungen → keine Aktion
 if (!$hasZoneRelevantChanges && !$serverListChanged && !$masterChanged && !$hasNonCriticalChanges) {
+    $rollbackIfActive();
     toastSuccess($LANG['no_changes'], "Die Zonendaten sind unverändert.");
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
     exit;
@@ -264,7 +281,10 @@ if (!$hasZoneRelevantChanges && !$serverListChanged && !$masterChanged && !$hasN
 
 // --- Nur wenn Änderungen vorhanden: Metadaten-Update + Rebuild ---
 
-$pdo->beginTransaction();
+// Transaktion nur starten, wenn sie nicht bereits durch eine Änderung der Serverzuweisung begonnen wurde
+if (!$pdo->inTransaction()) {
+    $pdo->beginTransaction();
+}
 try {
     $stmt = $pdo->prepare("
         UPDATE zones SET
@@ -311,7 +331,7 @@ try {
 
     $pdo->commit();
 } catch (Throwable $e) {
-    $pdo->rollBack();
+    $rollbackIfActive();
     toastError(
         $LANG['zone_error_db_save_failed'],
         "Zonen-Metadaten konnten für Zone '{$name}' (ID {$id}) nicht gespeichert werden: " . $e->getMessage()
