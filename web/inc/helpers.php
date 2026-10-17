@@ -109,11 +109,12 @@ function csrf_input(): string
  * - ['status' => 'error', 'output' => '...'] – Generierung oder Prüfung schlug fehl
  *
  * @param int $zone_id ID der zu validierenden Zone
+ * @param ?PDO $pdo Optional: zu verwendende Datenbankverbindung (Legacy-Fallback: globale Verbindung)
  * @return array ['status' => 'ok'|'error', 'output' => string]
- */function rebuild_zone_and_validate(int $zone_id): array
+ */function rebuild_zone_and_validate(int $zone_id, ?PDO $pdo = null): array
 {
     // Nur temporär zur Validierung → kein produktives Schreiben
-    $result = generate_zone_file($zone_id, '/tmp', 'validate');
+    $result = generate_zone_file($zone_id, '/tmp', 'validate', $pdo);
 
     if (!is_array($result) || $result['status'] === 'error') {
         return [
@@ -145,11 +146,12 @@ function csrf_input(): string
  * - ['status' => 'error', 'output' => '...'] – Validierung fehlgeschlagen oder DB-Fehler
  *
  * @param int $zone_id ID der betroffenen Zone
+ * @param ?PDO $pdo Optional: zu verwendende Datenbankverbindung (Legacy-Fallback: globale Verbindung)
  * @return array ['status' => 'ok'|'error', 'output' => string]
  */
-function rebuild_zone_and_flag_if_valid(int $zone_id): array
+function rebuild_zone_and_flag_if_valid(int $zone_id, ?PDO $pdo = null): array
 {
-    $result = rebuild_zone_and_validate($zone_id);
+    $result = rebuild_zone_and_validate($zone_id, $pdo);
 
     if (!is_array($result) || $result['status'] === 'error') {
         return [
@@ -160,7 +162,7 @@ function rebuild_zone_and_flag_if_valid(int $zone_id): array
 
     // Zone als geändert markieren
     try {
-        $stmt = $GLOBALS['pdo']->prepare("UPDATE zones SET changed = 1 WHERE id = ?");
+        $stmt = ($pdo ?? $GLOBALS['pdo'])->prepare("UPDATE zones SET changed = 1 WHERE id = ?");
         $stmt->execute([$zone_id]);
     } catch (Throwable $e) {
         return [
@@ -269,6 +271,6 @@ function rebuild_ns_and_glue_for_zone_and_flag_if_valid(PDO $pdo, int $zone_id):
     }
 
     // Zonendatei neu generieren und prüfen
-    return rebuild_zone_and_flag_if_valid($zone_id);
+    return rebuild_zone_and_flag_if_valid($zone_id, $pdo);
 }
 ?>
