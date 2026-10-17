@@ -4,6 +4,12 @@ Alle Änderungen am Projekt werden in diesem Dokument nach semantischer Versioni
 
 ## [Unreleased]
 
+## [1.2.5] – 2026-10-17
+
+Stabilitäts- und Sicherheitsrelease: Das Veröffentlichen (Publish) und die Synchronisation mit den BIND-Agenten wurden
+gegen Race Conditions und Teilfehler abgesichert, BIND-Änderungen werden vor dem Reload geprüft, und die `sudo`-Rechte
+des Agenten wurden auf das notwendige Minimum reduziert.
+
 ### Security
 - Least-Privilege-Härtung der `sudo`-Rechte (`sudoers.d/dnsmanager-agent`):
   - `www-data` darf als root nur noch exakt `/usr/sbin/rndc reload` und `/usr/sbin/rndc status` ausführen
@@ -13,12 +19,90 @@ Alle Änderungen am Projekt werden in diesem Dokument nach semantischer Versioni
   - Agent ruft `rndc` mit `sudo -n` auf (kein Passwort-Prompt bei fehlender Berechtigung)
   - `api/v1/system/status.php` verwendet für `rndc status` den konfigurierten absoluten Pfad `bind_rndc`
     statt eines relativen `rndc`
+- Server hinzufügen, ändern und löschen (`server_add.php`, `server_update.php`, `server_delete.php`) ist nur noch
+  Benutzern mit der Rolle `admin` erlaubt
+- Fail2Ban-Filter (`fail2ban/filter.d/dnsmanager.conf`) an das tatsächliche Log-Format angepasst: `login_failure` und
+  `access_denied` werden wieder zuverlässig erkannt (Zeitstempelfeld `time="..."`)
+
+### Fixed
+- **Publish: Race Conditions und Concurrency**
+  - Publish All läuft global serialisiert (MariaDB-Advisory-Lock `dnsmanager_publish_all`); parallele Läufe
+    werden verhindert
+  - Beim Publish werden Zone, SOA-Serial und Records beim Generieren in einer gesperrten Transaktion konsistent
+    gelesen; konkurrierende DynDNS-Updates können dadurch den erzeugten Snapshot nicht mehr während der Generierung
+    verfälschen
+  - Beim Fehlschlagen der Zonenprüfung (`named-checkzone`) wird die Publish-Transaktion zurückgerollt
+  - Die temporäre Zonendatei der UI erhält einen eindeutigen Namen (keine Kollisionen bei parallelen Requests)
+- **`changed`-/`bind_dirty`-Semantik**
+  - Die Flags sind ein Tri-State (`0` = sauber, `1` = wartet auf Publish, `2` = von einem Publish-Lauf übernommen bzw.
+    nicht sicher abgeschlossen); ein Lauf setzt nur `2` → `0` zurück, Änderungen während eines Laufs gehen nicht mehr
+    verloren, nach einem Abbruch wird erneut veröffentlicht
+  - Die Oberfläche (Zonenliste, Layout) wertet `1` und `2` als „Änderung ausstehend“
+  - Bei teilweise fehlgeschlagener Verteilung (Zone oder Conf) bleibt `changed` gesetzt (`publish_all.php`,
+    `publish_single.php`)
+- **Atomare Änderungen**
+  - Zone-Update (`zone_update.php`) läuft in genau einer Transaktion (Serverzuweisung, NS-/Glue-Rebuild, Validierung,
+    `changed`-Flag, Metadaten) und wird bei jedem Abbruch zurückgerollt
+  - Topologieänderungen (Zone anlegen/löschen, Änderung von Serverzuweisung oder Master, Aktivieren/Deaktivieren von
+    Servern) werden mit Publish All über denselben Lock serialisiert; die Reaktivierung eines Servers markiert einen
+    ausstehenden Full-Rebuild (`bind_dirty = 1`)
+  - Aktualisierung von Zonen durch `zoneadmin`: Serverzuweisung und SOA-NS von Forward-Zonen bleiben unverändert
+- **DynDNS**
+  - Parallele Updates derselben Zone werden serialisiert
+  - Der SOA-Serial wird innerhalb der DynDNS-Transaktion erhöht und ist damit atomar mit der Record-Änderung
+- **Agent: Synchronisation und BIND-Reload**
+  - `zone_sync.php`, `conf_sync.php`, `zone_cleanup.php` und `system/control.php` (`reload-bind`) laufen unter einem
+    gemeinsamen exklusiven Agent-Lock; Dateiänderungen und BIND-Reload sind serialisiert
+  - `zone_sync.php` verwendet eindeutige temporäre Dateinamen pro Request
+  - `zones.conf` und `<zone>.conf` werden atomar ersetzt (Temp-Datei im selben Verzeichnis + `rename()`)
+  - `conf_sync.php`: Bei kontrollierten Fehlern nach einer Live-Änderung wird der vorherige Zustand wiederhergestellt
+    (zuerst `zones.conf`, dann `<zone>.conf`); es erfolgt kein Reload
+- **Fehlerbehandlung bei der Agent-/BIND-Synchronisation**
+  - Verbindlicher `named-checkconf`-Preflight (Exit-Code-basiert, fail closed) vor jedem BIND-Reload; bei Fehler wird
+    nichts übernommen bzw. zurückgerollt und kein Reload ausgeführt
+  - `conf_check.php` bewertet den Exit-Code von `named-checkconf` (`error` bei Exit-Code ≠ 0, ggf. `warning`)
+  - Agent-, HTTP- und Netzwerkfehler bei der Verteilung werden als Status `warning` gemeldet; der Verteilungsstatus
+    wird zuverlässig gesetzt
+  - Anfragen der UI an die Agenten bei der Verteilung von Zonen und Konfiguration haben Timeouts (Verbindungsaufbau
+    5 s, gesamt 30 s)
+  - Warnungs-Toasts werden unter eigenem Session-Schlüssel (`toast_warnings`) geführt
+- Cache-Busting-Pfade der Assets auf der Login-Seite korrigiert
+
+### Added
+- **Bereinigung verwaister Zonen (Orphaned-Zone-Cleanup)**
+  - Neuer Agent-Endpunkt `api/v1/zones/zone_cleanup.php`: gleicht die Zonen eines Servers mit dem Sollzustand aus der
+    Datenbank ab und entfernt verwaiste `<zone>.conf` samt exakt gepaarter `db.<zone>`
+  - `zones.conf` wird vorher atomar ohne die verwaisten Includes ersetzt und mit `named-checkconf` geprüft; danach
+    erfolgt genau ein Reload (ohne verwaiste Dateien: No-op, kein Reload)
+  - Eine leere Sollliste ist nur mit explizitem `allow_empty` zulässig
+  - Die UI führt den Cleanup einmal pro Publish-Lauf auf allen aktiven Servern aus, nur nach vollständig erfolgreicher
+    Verteilung; Cleanup-Fehler werden als Warnung gemeldet und lösen beim nächsten Publish einen erneuten Versuch aus
+
+### Changed
+- Veraltete `curl_close()`-Aufrufe entfernt (in PHP 8.5 deprecated)
+- Dokumentation (README, Config-Samples):
+  - Namen der Apache-Konfiguration korrigiert (`dnsmanager-ui.conf`)
+  - Hinweis zu PCRE JIT bei gehärtetem Apache (`MemoryDenyWriteExecute=yes`)
+  - Installations- und Upgrade-Hinweise zu den `sudo`-Rechten
+  - Beispielwerte für die Datenbank in `ui_config-sample.php` korrigiert
+  - Hinweise zum verwalteten Bereich von `zone_conf_dir`/`zone_data_dir` in `api_config-sample.php`
+  - Kommentar in `cron/dnsmanager_monitoring` zu `sudo` korrigiert
+- `LICENSE` durch den vollständigen Text der GNU GPL v3 ersetzt
 
 ### Migration Notes
-Bestehende Installationen werden durch ein Update **nicht** automatisch angepasst:
-- `/etc/sudoers.d/dnsmanager-agent` durch die neue Fassung ersetzen (vorher `visudo -cf` prüfen)
-- eine vorhandene `/etc/sudoers.d/dnsmanager-ui` manuell entfernen
-- Details siehe README, Abschnitt „Upgrade bestehender Installationen: `sudo`-Rechte (Least Privilege)“
+- **`sudo`-Rechte:** Bestehende Installationen werden durch ein Update **nicht** automatisch angepasst:
+  - `/etc/sudoers.d/dnsmanager-agent` durch die neue Fassung ersetzen (vorher `visudo -cf` prüfen,
+    danach `visudo -c`)
+  - erst danach eine vorhandene `/etc/sudoers.d/dnsmanager-ui` manuell entfernen
+  - `bind_rndc` in `api_config.php` muss `/usr/sbin/rndc` lauten, sonst greift die neue Regel nicht
+  - Details siehe README, Abschnitt „Upgrade bestehender Installationen: `sudo`-Rechte (Least Privilege)“
+- **Agenten aktualisieren:** UI und Agenten sollten gemeinsam aktualisiert werden. Die UI ruft nach dem Publish den neuen
+  Endpunkt `zone_cleanup.php` auf; ein Agent ohne diesen Endpunkt führt zu einer Cleanup-Warnung.
+- **Verwalteter Bereich auf dem Agenten:** Alle `<zone>.conf` in `zone_conf_dir` gehören dem DNS-Manager. Der
+  Orphaned-Zone-Cleanup entfernt dort `.conf`-Dateien, deren Zone dem Server laut Datenbank nicht zugewiesen ist.
+  Keine fremden `.conf`-Dateien in diesem Verzeichnis ablegen.
+- **Datenbank:** Keine Schemaänderung erforderlich (`changed` und `bind_dirty` bleiben `TINYINT(1)` und nehmen
+  zusätzlich den Wert `2` an).
 
 ## [1.1.0] – 2025-05-31
 
