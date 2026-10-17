@@ -12,9 +12,9 @@
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
-require_once __DIR__ . '/../inc/glue_check.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/records/RecordService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -32,86 +32,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit('Keine gültigen Record-IDs übergeben.');
     }
 
-    $pdo->beginTransaction();
+    $recordService = new RecordService($pdo, $zoneAccess);
+    $result        = $recordService->deleteRecords($actor, $ids);
 
-    try {
-        $affected_zones = [];
+    // ServiceMessages in Reihenfolge in bestehende Toasts/Logs übersetzen
+    foreach ($result->messages as $message) {
+        $ctx = $message->context;
 
-        foreach ($ids as $id) {
-            $stmt = $pdo->prepare("SELECT * FROM records WHERE id = ?");
-            $stmt->execute([$id]);
-            $record = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$record) {
-                throw new RuntimeException("Record mit ID $id nicht gefunden.");
-            }
-
-            $zone_id = (int)$record['zone_id'];
-            $zone_name = getZoneName($pdo, $zone_id);
-
-            // Rechte prüfen
-            if (!$zoneAccess->canWriteZone($actor, $zone_id)) {
-                logAccessDenied('record_delete', "Benutzer-ID {$actor->userId} wollte Record-ID $id in Zone-ID $zone_id löschen.");
-                throw new RuntimeException("Keine Berechtigung für Record-ID $id.");
-            }
-
-            // Glue-Check
-            $all_records = getAllZoneRecords($pdo, $zone_id);
-            if (isGlueRecord($record, $all_records, $zone_name)) {
-                toastError(
-                    sprintf($LANG['record_error_glue_protected'], "<strong>" . htmlspecialchars($record['name']) . "</strong>"),
-                    "Löschversuch für Glue-Record '{$record['name']}' in Zone '{$zone_name}' blockiert."
+        switch ($message->code) {
+            case 'record.delete.access_denied':
+                logAccessDenied(
+                    'record_delete',
+                    "Benutzer-ID {$ctx['userId']} wollte Record-ID {$ctx['recordId']} in Zone-ID {$ctx['zoneId']} löschen."
                 );
-                throw new RuntimeException("Löschen von Glue-Record nicht erlaubt.");
-            }
+                break;
 
-            // Geschützte NS-Records dürfen nicht gelöscht werden
-            if ($record['type'] === 'NS' && isProtectedNsRecord($record, $all_records, $zone_name, $pdo, $zone_id)) {
+            case 'record.delete.glue_protected':
                 toastError(
-                    sprintf($LANG['record_error_ns_protected'], "<strong>" . htmlspecialchars($record['content']) . "</strong>"),
-                    "Löschversuch für NS-Record in Zone '{$zone_name}' blockiert."
+                    sprintf($LANG['record_error_glue_protected'], "<strong>" . htmlspecialchars($ctx['recordName']) . "</strong>"),
+                    "Löschversuch für Glue-Record '{$ctx['recordName']}' in Zone '{$ctx['zoneName']}' blockiert."
                 );
-                throw new RuntimeException("Löschen von geschütztem NS-Record nicht erlaubt.");
-            }
+                break;
 
-            // Löschen
-            $stmt = $pdo->prepare("DELETE FROM records WHERE id = ?");
-            $stmt->execute([$id]);
+            case 'record.delete.ns_protected':
+                toastError(
+                    sprintf($LANG['record_error_ns_protected'], "<strong>" . htmlspecialchars($ctx['recordContent']) . "</strong>"),
+                    "Löschversuch für NS-Record in Zone '{$ctx['zoneName']}' blockiert."
+                );
+                break;
 
-            // Merken, welche Zonen betroffen sind
-            $affected_zones[$zone_id] = $zone_name;
-        }
-
-        // Zonendateien prüfen
-        foreach ($affected_zones as $zone_id => $zone_name) {
-            $rebuild = rebuild_zone_and_flag_if_valid($zone_id);
-
-            if ($rebuild['status'] === 'error') {
-                throw new RuntimeException("Zonendatei-Fehler nach Löschung in Zone '{$zone_name}': {$rebuild['output']}");
-            }
-
-            if ($rebuild['status'] === 'warning') {
+            case 'record.delete.zonefile_warning':
                 toastWarning(
-                    sprintf($LANG['record_warning_zonefile_check_after_delete'], "<strong>{$zone_name}</strong>"),
-                    $rebuild['output']
+                    sprintf($LANG['record_warning_zonefile_check_after_delete'], "<strong>{$ctx['zoneName']}</strong>"),
+                    $ctx['output']
                 );
-            }
-        }
+                break;
 
-        $pdo->commit();
-        toastSuccess(
-            $LANG['record_deleted_success'],
-            "Alle ausgewählten Records wurden erfolgreich entfernt."
-        );
-    } catch (Throwable $e) {
-        $pdo->rollBack();
-        toastError(
-            $LANG['record_error_delete_failed'],
-            "Transaktion abgebrochen: " . $e->getMessage()
-        );
+            case 'record.delete.failed':
+                toastError(
+                    $LANG['record_error_delete_failed'],
+                    "Transaktion abgebrochen: " . $ctx['detail']
+                );
+                break;
+
+            case 'record.delete.success':
+                toastSuccess(
+                    $LANG['record_deleted_success'],
+                    "Alle ausgewählten Records wurden erfolgreich entfernt."
+                );
+                break;
+        }
     }
 
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . ($zone_id ?? 0));
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . ($result->lastZoneId ?? 0));
     exit;
 }
 ?>
