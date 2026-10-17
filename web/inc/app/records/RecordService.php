@@ -18,6 +18,8 @@ require_once __DIR__ . '/../ZoneAccess.php';
 require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../../glue_check.php';
+require_once __DIR__ . '/../../validators.php';
+require_once __DIR__ . '/RecordInput.php';
 
 final class RecordService
 {
@@ -133,5 +135,194 @@ final class RecordService
 
             return new ServiceResult(false, $messages, $lastZoneId);
         }
+    }
+
+    /**
+     * Aktualisiert einen bestehenden Record.
+     *
+     * Ablauf: Berechtigung -> Validierung -> Record laden -> No-Change-Prüfung
+     * -> Glue-Schutz -> NS-Schutz -> Transaktion (UPDATE, Rebuild, Commit).
+     * Die Transaktion beginnt erst nach allen Vorprüfungen.
+     *
+     * @param Actor       $actor
+     * @param int         $recordId
+     * @param int         $zoneId
+     * @param RecordInput $input
+     *
+     * @return ServiceResult
+     */
+    public function updateRecord(Actor $actor, int $recordId, int $zoneId, RecordInput $input): ServiceResult
+    {
+        $pdo = $this->pdo;
+        $messages = [];
+
+        $type    = $input->type;
+        $name    = $input->name;
+        $content = $input->content;
+        $ttl     = $input->ttl;
+
+        // Berechtigung prüfen
+        if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
+            $messages[] = new ServiceMessage('audit', 'record.update.access_denied', [
+                'userId' => $actor->userId,
+                'zoneId' => $zoneId,
+            ]);
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        // Zonenname (für Meldungen ohne abschließenden Punkt, für Helper unverändert)
+        $zoneNameRaw = getZoneName($pdo, $zoneId);
+        $zoneName    = rtrim($zoneNameRaw, '.');
+
+        // Validierung
+        $validatorType = ($type === 'TXT' && $input->isDkim) ? 'DKIM' : $type;
+        $errors = validateDnsRecord($validatorType, $name, $content, $ttl);
+        if (!empty($errors)) {
+            foreach ($errors as $error) {
+                $messages[] = new ServiceMessage('error', 'record.update.validation_error', [
+                    'errorCode' => $error,
+                    'type'      => $type,
+                    'name'      => $name,
+                    'zoneName'  => $zoneName,
+                ]);
+            }
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        // Record holen
+        $stmt = $pdo->prepare("SELECT * FROM records WHERE id = ? AND zone_id = ?");
+        $stmt->execute([$recordId, $zoneId]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$existing) {
+            $messages[] = new ServiceMessage('error', 'record.update.not_found', [
+                'recordId' => $recordId,
+                'zoneId'   => $zoneId,
+            ]);
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        // Änderungen vergleichen: Wenn sich nichts geändert hat, abbrechen
+        $hasChanged = false;
+        $hasChanged |= trim($existing['name']) !== trim($name);
+        $hasChanged |= trim($existing['type']) !== trim($type);
+        $hasChanged |= trim($existing['content']) !== trim($content);
+        $hasChanged |= (int)$existing['ttl'] !== (int)$ttl;
+
+        if (!$hasChanged) {
+            $messages[] = new ServiceMessage('success', 'record.update.no_changes', [
+                'zoneId' => $zoneId,
+            ]);
+
+            return new ServiceResult(true, $messages, $zoneId);
+        }
+
+        // Glue-Check
+        if (isGlueRecord($existing, getAllZoneRecords($pdo, $zoneId), $zoneNameRaw)) {
+            $violation = false;
+
+            if ($existing['name'] !== $name) {
+                $messages[] = new ServiceMessage('error', 'record.update.glue_name_change', [
+                    'existingName' => $existing['name'],
+                    'zoneName'     => $zoneName,
+                ]);
+                $violation = true;
+            }
+            if ($existing['type'] !== $type) {
+                $messages[] = new ServiceMessage('error', 'record.update.glue_type_change', [
+                    'existingType' => $existing['type'],
+                    'zoneName'     => $zoneName,
+                ]);
+                $violation = true;
+            }
+            if ($violation) {
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+        }
+
+        // Geschützte NS-Records dürfen nicht bearbeitet werden
+        if (
+            $existing['type'] === 'NS' &&
+            isProtectedNsRecord($existing, getAllZoneRecords($pdo, $zoneId), $zoneNameRaw, $pdo, $zoneId)
+        ) {
+            $violation = false;
+
+            if ($existing['name'] !== $name) {
+                $messages[] = new ServiceMessage('error', 'record.update.ns_name_change', [
+                    'existingName' => $existing['name'],
+                    'zoneName'     => $zoneName,
+                ]);
+                $violation = true;
+            }
+            if ($existing['content'] !== $content) {
+                $messages[] = new ServiceMessage('error', 'record.update.ns_content_change', [
+                    'existingContent' => $existing['content'],
+                    'zoneName'        => $zoneName,
+                ]);
+                $violation = true;
+            }
+            if ($violation) {
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+        }
+
+        // Update durchführen
+        // Transaktion starten
+        $pdo->beginTransaction();
+
+        try {
+            // Record aktualisieren
+            $stmt = $pdo->prepare("
+                UPDATE records
+                SET name = ?, type = ?, content = ?, ttl = ?
+                WHERE id = ?
+            ");
+            $stmt->execute([$name, $type, $content, $ttl, $recordId]);
+
+            // Zonendatei testen
+            $rebuild = rebuild_zone_and_flag_if_valid($zoneId);
+
+            if ($rebuild['status'] === 'error') {
+                $pdo->rollBack();
+                $messages[] = new ServiceMessage('error', 'record.update.zonefile_invalid', [
+                    'output' => $rebuild['output'],
+                    'zoneId' => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            if ($rebuild['status'] === 'warning') {
+                $messages[] = new ServiceMessage('warning', 'record.update.zonefile_warning', [
+                    'output' => $rebuild['output'],
+                    'zoneId' => $zoneId,
+                ]);
+            }
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            $messages[] = new ServiceMessage('error', 'record.update.db_save_failed', [
+                'type'     => $type,
+                'name'     => $name,
+                'zoneName' => $zoneName,
+                'recordId' => $recordId,
+                'detail'   => $e->getMessage(),
+            ]);
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        $messages[] = new ServiceMessage('success', 'record.update.success', [
+            'type'     => $type,
+            'name'     => $name,
+            'zoneName' => $zoneName,
+            'recordId' => $recordId,
+        ]);
+
+        return new ServiceResult(true, $messages, $zoneId);
     }
 }
