@@ -32,7 +32,8 @@ $load = sys_getloadavg();
 $bindPid = shell_exec('pgrep named');
 $bindRunning = !empty(trim($bindPid));
 
-$rndcStatus = shell_exec('sudo rndc status 2>&1');
+$rndcBinary = $config['bind_rndc'] ?? '/usr/sbin/rndc';
+$rndcStatus = shell_exec('sudo -n ' . escapeshellcmd($rndcBinary) . ' status 2>&1');
 $rndcOk = !str_contains($rndcStatus, 'not running');
 
 // === DNS-Testabfrage via dig (localhost) ===

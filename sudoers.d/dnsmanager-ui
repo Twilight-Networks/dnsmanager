@@ -1,4 +1,0 @@
-# Sudo-Rechte für den DNSManager-Webprozess (www-data)
-# Erlaubt kontrollierten Zugriff auf notwendige BIND-Kommandos ohne Passwortabfrage
-
-www-data ALL=(ALL) NOPASSWD: /usr/bin/named-checkzone

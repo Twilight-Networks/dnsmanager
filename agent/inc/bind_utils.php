@@ -113,6 +113,6 @@ function validateZoneConfFile(): string {
 function reloadBind(): string {
     global $config;
     $binary = $config['bind_rndc'] ?? '/usr/sbin/rndc';
-    $cmd = 'sudo ' . escapeshellcmd($binary) . ' reload 2>&1';
+    $cmd = 'sudo -n ' . escapeshellcmd($binary) . ' reload 2>&1';
     return shell_exec($cmd) ?? '';
 }
