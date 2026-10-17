@@ -15,7 +15,8 @@
 #
 # Ausführungskontext:
 # - Beide Skripte werden vom Benutzer „www-data“ ausgeführt, passend zum Webserver-Kontext
-# - Wichtig: Dieser Benutzer benötigt ggf. sudo-Rechte für rndc/named-Befehle
+# - Für das Monitoring sind keine sudo-Rechte erforderlich: named-checkconf/named-checkzone
+#   werden über die Agent-API ausgeführt (dort ebenfalls ohne sudo)
 #
 # Format: <Min> <Std> <Tag> <Monat> <Wochentag> <Benutzer> <Befehl>
 

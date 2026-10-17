@@ -182,12 +182,11 @@ Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
    nano /etc/dnsmanager/ui_config.php
    ```
 
-11. **`sudo`-Rechte für benötigte BIND-Kommandos einrichten:**
+11. **Keine `sudo`-Rechte erforderlich:**
 
-   ```bash
-   cp /usr/share/dnsmanager/sudoers.d/dnsmanager-ui /etc/sudoers.d/
-   chmod 0440 /etc/sudoers.d/dnsmanager-ui
-   ```
+   Das Webinterface benötigt keine `sudo`-Rechte. Eine Datei `/etc/sudoers.d/dnsmanager-ui` wird nicht mehr
+   ausgeliefert und darf nicht angelegt werden. Läuft auf demselben Host auch der Agent, gilt ausschließlich
+   die Agent-Regel (siehe „Installation Agent“, Schritt 7).
 
 12. **Webinterface aufrufen und anmelden:**
 
@@ -252,12 +251,24 @@ Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
    systemctl reload apache2
    ```
 
-7. **`sudo`-Rechte für benötigte BIND-Kommandos einrichten:**
+7. **`sudo`-Rechte für `rndc reload` und `rndc status` einrichten:**
+
+   Der Agent erhält ausschließlich exakt diese beiden Befehle als root
+   (`named-checkconf` und `named-checkzone` laufen ohne `sudo`):
+
+   ```
+   www-data ALL=(root) NOPASSWD: /usr/sbin/rndc reload, /usr/sbin/rndc status
+   ```
+
+   Datei vor der Installation mit `visudo` prüfen und erst dann installieren:
 
    ```bash
-   cp /usr/share/dnsmanager/sudoers.d/dnsmanager-agent /etc/sudoers.d/
-   chmod 0440 /etc/sudoers.d/dnsmanager-agent
+   visudo -cf /usr/share/dnsmanager/sudoers.d/dnsmanager-agent
+   install -o root -g root -m 0440 /usr/share/dnsmanager/sudoers.d/dnsmanager-agent /etc/sudoers.d/dnsmanager-agent
+   visudo -c
    ```
+
+   Der Wert `bind_rndc` in `api_config.php` muss exakt `/usr/sbin/rndc` lauten, sonst greift die Regel nicht.
 
 8. **Ordner für Zonendateien erstellen und Rechte setzen:**
 
@@ -282,6 +293,75 @@ Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
 
    ```bash
    systemctl reload bind9
+   ```
+
+### Upgrade bestehender Installationen: `sudo`-Rechte (Least Privilege)
+
+Ein Update des Repositorys bzw. von `/usr/share/dnsmanager` ändert **nichts** an bereits installierten Dateien unter
+`/etc/sudoers.d/`. Die bisherigen, deutlich weiter gefassten Regeln bleiben aktiv, bis sie manuell ersetzt bzw.
+entfernt werden. Auf jedem Host mit Agent und/oder Webinterface als root ausführen:
+
+1. **Bestandsaufnahme:**
+
+   ```bash
+   grep -rn www-data /etc/sudoers /etc/sudoers.d/
+   ```
+
+Die Reihenfolge ist verbindlich: Die alte UI-Regel wird erst entfernt, nachdem die neu installierte Agent-Regel
+erfolgreich in der gesamten sudoers-Konfiguration geprüft wurde. Während der Umstellung eine Root-Shell offen halten.
+
+2. **Neue Agent-Regel prüfen** (Hosts mit Agent):
+
+   ```bash
+   visudo -cf /usr/share/dnsmanager/sudoers.d/dnsmanager-agent
+   ```
+
+3. **Neue Agent-Regel installieren** (die bestehende `/etc/sudoers.d/dnsmanager-agent` wird ersetzt):
+
+   ```bash
+   install -o root -g root -m 0440 /usr/share/dnsmanager/sudoers.d/dnsmanager-agent /etc/sudoers.d/dnsmanager-agent
+   ```
+
+4. **Sofort die Gesamtkonfiguration prüfen:**
+
+   ```bash
+   visudo -c
+   ```
+
+   Nur wenn diese Prüfung fehlerfrei ist, mit dem nächsten Schritt fortfahren.
+
+5. **Erst danach die veraltete UI-Regel manuell entfernen** (Hosts mit Webinterface; die Datei wird nicht mehr
+   ausgeliefert):
+
+   ```bash
+   rm -f /etc/sudoers.d/dnsmanager-ui
+   ```
+
+6. **Gesamtkonfiguration erneut prüfen:**
+
+   ```bash
+   visudo -c
+   ```
+
+7. **Effektive Rechte anzeigen:**
+
+   ```bash
+   sudo -u www-data sudo -n -l
+   ```
+
+   Erwartet wird für `www-data` ausschließlich `(root) NOPASSWD: /usr/sbin/rndc reload, /usr/sbin/rndc status`.
+
+8. **Funktion prüfen:**
+
+   ```bash
+   # müssen erfolgreich sein
+   sudo -u www-data sudo -n /usr/sbin/rndc status
+   sudo -u www-data sudo -n /usr/sbin/rndc reload
+   # müssen abgelehnt werden
+   sudo -u www-data sudo -n /usr/sbin/rndc stop
+   sudo -u www-data sudo -n /usr/sbin/rndc reload example.tld
+   sudo -u www-data sudo -n /usr/bin/named-checkconf
+   sudo -u www-data sudo -n /usr/bin/named-checkzone example.tld /dev/null
    ```
 
 ---

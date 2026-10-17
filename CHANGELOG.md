@@ -2,6 +2,24 @@
 
 Alle Änderungen am Projekt werden in diesem Dokument nach semantischer Versionierung (semver.org) festgehalten.
 
+## [Unreleased]
+
+### Security
+- Least-Privilege-Härtung der `sudo`-Rechte (`sudoers.d/dnsmanager-agent`):
+  - `www-data` darf als root nur noch exakt `/usr/sbin/rndc reload` und `/usr/sbin/rndc status` ausführen
+    (bisher: beliebige `rndc`-Subcommands sowie `named-checkconf`/`named-checkzone` mit `(ALL)`)
+  - `named-checkconf` und `named-checkzone` erhalten keine `sudo`-Rechte mehr (laufen ohne `sudo`)
+  - `sudoers.d/dnsmanager-ui` entfernt – das Webinterface benötigt keine `sudo`-Rechte
+  - Agent ruft `rndc` mit `sudo -n` auf (kein Passwort-Prompt bei fehlender Berechtigung)
+  - `api/v1/system/status.php` verwendet für `rndc status` den konfigurierten absoluten Pfad `bind_rndc`
+    statt eines relativen `rndc`
+
+### Migration Notes
+Bestehende Installationen werden durch ein Update **nicht** automatisch angepasst:
+- `/etc/sudoers.d/dnsmanager-agent` durch die neue Fassung ersetzen (vorher `visudo -cf` prüfen)
+- eine vorhandene `/etc/sudoers.d/dnsmanager-ui` manuell entfernen
+- Details siehe README, Abschnitt „Upgrade bestehender Installationen: `sudo`-Rechte (Least Privilege)“
+
 ## [1.1.0] – 2025-05-31
 
 ### Added
