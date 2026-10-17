@@ -141,7 +141,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $recordService = new RecordService(
         $pdo,
         $zoneAccess,
-        static fn (int $zoneId): array => rebuild_zone_and_flag_if_valid($zoneId)
+        static fn (int $zoneId): array => rebuild_zone_and_flag_if_valid($zoneId, $pdo)
     );
     $serviceResult = $recordService->createRecord($actor, $zone_id, $input, $autoPtr);
 

@@ -42,10 +42,12 @@ require_once __DIR__ . '/../soa_serial.php';
  * @param int $zone_id ID der zu verarbeitenden Zone
  * @param string $output_dir Zielverzeichnis für die erzeugte Datei (z. B. /tmp)
  * @param string $mode 'validate' (nur prüfen) oder 'publish' (für Verteilung)
+ * @param ?PDO $db Optional: zu verwendende Datenbankverbindung (z. B. die des aufrufenden Service).
+ *                 Ohne Angabe wird wie bisher die globale Verbindung ($GLOBALS['pdo']) verwendet.
  * @return array Assoziatives Ergebnis mit 'status', 'path', 'output' und optional 'errors'
  */
-function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $mode = 'validate'): array {
-    global $pdo;
+function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $mode = 'validate', ?PDO $db = null): array {
+    $pdo = $db ?? $GLOBALS['pdo']; // Legacy-Fallback: globale Verbindung
 
     $tx_started = false; // true nur, wenn diese Funktion die Transaktion selbst gestartet hat
 
