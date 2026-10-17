@@ -13,4 +13,4 @@
  */
 
 // Aktuelle Software-Version
-define('DNSMANAGER_VERSION', '1.2.4');
+define('DNSMANAGER_VERSION', '1.2.5');
