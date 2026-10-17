@@ -138,7 +138,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $input      = new RecordInput($type, $name, $content, $ttl, $is_dkim, $validator_type);
     $autoPtr    = ($_POST['auto_ptr'] ?? '') === 'on';
 
-    $recordService = new RecordService($pdo, $zoneAccess);
+    $recordService = new RecordService(
+        $pdo,
+        $zoneAccess,
+        static fn (int $zoneId): array => rebuild_zone_and_flag_if_valid($zoneId)
+    );
     $serviceResult = $recordService->createRecord($actor, $zone_id, $input, $autoPtr);
 
     // ServiceMessages in Reihenfolge in bestehende Toasts/Logs/HTTP-Antworten übersetzen
