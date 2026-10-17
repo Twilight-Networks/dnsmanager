@@ -22,123 +22,11 @@ require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 require_once __DIR__ . '/../inc/record_content_builder.php';
 require_once __DIR__ . '/../inc/dkim_helpers.php';
-require_once __DIR__ . '/../inc/validators.php';
-
-/**
- * Versucht, für einen A- oder AAAA-Record automatisch einen PTR-Record anzulegen.
- *
- * Voraussetzungen:
- * - Die zugehörige Reverse-Zone muss bereits existieren.
- * - Es darf kein PTR mit gleichem Namen in der Reverse-Zone existieren.
- *
- * @param PDO $pdo
- * @param int $zone_id Forward-Zonen-ID
- * @param string $type 'A' oder 'AAAA'
- * @param string $ip Ziel-IP-Adresse
- * @param string $name Eingetragener Name des A/AAAA-Records
- * @param int $ttl TTL-Wert
- *
- * @return bool true bei Erfolg, false bei Fehler (Fehlermeldungen werden als Toast gesetzt)
- */
-function tryAutoPtr(PDO $pdo, int $zone_id, string $type, string $ip, string $name, int $ttl): bool
-{
-    global $LANG;
-
-    // Zonenname laden
-    $stmt = $pdo->prepare("SELECT name FROM zones WHERE id = ?");
-    $stmt->execute([$zone_id]);
-    $zone_name = rtrim($stmt->fetchColumn(), '.');
-
-    // Hostname ermitteln
-    $hostname = ($name === '@' || trim($name) === '')
-        ? $zone_name . '.'
-        : rtrim($name, '.') . '.' . $zone_name . '.';
-
-    // Reverse-Zone und Name berechnen
-    $ptr_zone = null;
-    $ptr_name = null;
-
-    if ($type === 'A' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-        $parts = explode('.', $ip);
-        if (count($parts) === 4) {
-            $ptr_zone = "{$parts[2]}.{$parts[1]}.{$parts[0]}.in-addr.arpa";
-            $ptr_name = $parts[3];
-        }
-    } elseif ($type === 'AAAA' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-        $bin = inet_pton($ip);
-        $hex = unpack('H*', $bin)[1];
-        $nibbles = str_split($hex);
-        $reverse = array_reverse($nibbles);
-        $ptr_zone = implode('.', array_slice($reverse, 1)) . '.ip6.arpa';
-        $ptr_name = $reverse[0];
-    }
-
-    if (!$ptr_zone || !$ptr_name) {
-        toastError(
-            $LANG['record_error_auto_ptr_invalid_ip'],
-            "Fehler bei PTR-Berechnung für {$type} {$ip} → Zone-ID {$zone_id}, Name '{$name}'"
-        );
-        return false;
-    }
-
-    // Reverse-Zone muss existieren
-    $stmt = $pdo->prepare("SELECT id FROM zones WHERE name = ? AND type = 'reverse'");
-    $stmt->execute([$ptr_zone]);
-    $ptr_zone_id = $stmt->fetchColumn();
-
-    if (!$ptr_zone_id) {
-        toastError(
-            sprintf($LANG['record_error_auto_ptr_no_zone'], "<code>{$ptr_zone}</code>"),
-            "PTR-Zuordnung fehlgeschlagen: keine Reverse-Zone '{$ptr_zone}' für IP {$ip}"
-        );
-        return false;
-    }
-
-    // Zonenberechtigung für die Reverse-Zone prüfen (zoneadmin benötigt user_zones-Eintrag)
-    if ($_SESSION['role'] !== 'admin') {
-        $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
-        $stmt->execute([(int)$ptr_zone_id, $_SESSION['user_id']]);
-        if (!$stmt->fetch()) {
-            logAccessDenied(
-                'record_add_auto_ptr',
-                'Benutzer-ID ' . $_SESSION['user_id'] . ' hat keine Berechtigung für Reverse-Zone-ID ' . (int)$ptr_zone_id . ' (' . $ptr_zone . ') – automatischer PTR wurde nicht angelegt'
-            );
-            toastError(
-                sprintf($LANG['record_error_auto_ptr_denied'], "<code>{$ptr_zone}</code>"),
-                "PTR-Zuordnung verweigert: keine Berechtigung für Reverse-Zone '{$ptr_zone}' (ID " . (int)$ptr_zone_id . ")"
-            );
-            return false;
-        }
-    }
-
-    // Prüfen auf Duplikat
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM records WHERE zone_id = ? AND name = ? AND type = 'PTR'");
-    $stmt->execute([$ptr_zone_id, $ptr_name]);
-    if ((int)$stmt->fetchColumn() > 0) {
-        toastError(
-            sprintf($LANG['record_error_auto_ptr_duplicate'], "<code>{$ptr_zone}</code>", "<code>{$ptr_name}</code>"),
-            "PTR-Duplikat erkannt: PTR {$ptr_name}.{$ptr_zone} existiert bereits"
-        );
-        return false;
-    }
-
-    // Einfügen
-    try {
-        $stmt = $pdo->prepare("INSERT INTO records (zone_id, name, type, content, ttl) VALUES (?, ?, 'PTR', ?, ?)");
-        $stmt->execute([$ptr_zone_id, $ptr_name, $hostname, $ttl]);
-
-        $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
-        rebuild_zone_and_flag_if_valid((int)$ptr_zone_id);
-
-        return true;
-    } catch (PDOException $e) {
-        toastError(
-            $LANG['record_error_auto_ptr_db'],
-            "Datenbankfehler beim Einfügen von PTR {$ptr_name}.{$ptr_zone}: " . $e->getMessage()
-        );
-        return false;
-    }
-}
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/records/RecordInput.php';
+require_once __DIR__ . '/../inc/app/records/RecordService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 // Nur POST-Anfragen zulassen
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -146,28 +34,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     requireRole(['admin', 'zoneadmin']);
 
     $zone_id = (int)($_POST['zone_id'] ?? 0);
-    $ptr_created = false;
 
-    // Zonenberechtigung prüfen
-    if ($_SESSION['role'] !== 'admin') {
-        $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
-        $stmt->execute([$zone_id, $_SESSION['user_id']]);
-        if (!$stmt->fetch()) {
-            logAccessDenied('record_add', 'Benutzer-ID ' . $_SESSION['user_id'] . ' versucht unbefugten Zugriff auf Zone-ID ' . $zone_id);
-            http_response_code(403);
-            exit('Zugriff verweigert.');
-        }
+    // Zonenberechtigung früh prüfen (vor Upload/Formularverarbeitung, wie bisher).
+    // Die autoritative fachliche Prüfung erfolgt zusätzlich in RecordService::createRecord().
+    $actor      = actorFromSession();
+    $zoneAccess = new ZoneAccess($pdo);
+
+    if (!$zoneAccess->canWriteZone($actor, $zone_id)) {
+        logAccessDenied('record_add', 'Benutzer-ID ' . $actor->userId . ' versucht unbefugten Zugriff auf Zone-ID ' . $zone_id);
+        http_response_code(403);
+        exit('Zugriff verweigert.');
     }
-
-    // Zonennamen der Forward-Zone für die Toast-Ausgabe
-    $stmt = $pdo->prepare("SELECT name FROM zones WHERE id = ?");
-    $stmt->execute([$zone_id]);
-    $zone_name = rtrim($stmt->fetchColumn(), '.');
 
     $raw_type = $_POST['type'] ?? '';
     $is_dkim = !empty($_POST['is_dkim']); // z. B. aus hidden input
 
     // Sonderfall: Wenn DKIM als TXT gespeichert wird, aber speziell validiert werden muss
+    // (Validator-Typ wird vor buildRecordContent() aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
     $validator_type = ($raw_type === 'TXT' && $is_dkim) ? 'DKIM' : $raw_type;
 
     // Überprüfen, ob eine DKIM-Datei hochgeladen wurde
@@ -251,84 +134,118 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $content = $result['content'];
     $ttl     = intval($_POST['ttl']) ?: 3600;
 
-    // Validierung
-    $errors = validateDnsRecord($validator_type, $name, $content, $ttl);
-    if (!empty($errors)) {
-        foreach ($errors as $error) {
-            toastError(
-                $LANG[$error] ?? $LANG['generic_validation_error'],
-                "Fehler bei der Validierung von Record '{$type} {$name}': {$error}"
-            );
+    // Fachliche Anlage (inkl. optionalem AutoPTR) im RecordService
+    $input      = new RecordInput($type, $name, $content, $ttl, $is_dkim, $validator_type);
+    $autoPtr    = ($_POST['auto_ptr'] ?? '') === 'on';
+
+    $recordService = new RecordService($pdo, $zoneAccess);
+    $serviceResult = $recordService->createRecord($actor, $zone_id, $input, $autoPtr);
+
+    // ServiceMessages in Reihenfolge in bestehende Toasts/Logs/HTTP-Antworten übersetzen
+    $successContext = null;
+
+    foreach ($serviceResult->messages as $message) {
+        $ctx = $message->context;
+
+        switch ($message->code) {
+            case 'record.create.access_denied':
+                logAccessDenied('record_add', 'Benutzer-ID ' . $ctx['userId'] . ' versucht unbefugten Zugriff auf Zone-ID ' . $ctx['zoneId']);
+                http_response_code(403);
+                exit('Zugriff verweigert.');
+
+            case 'record.create.validation_error':
+                toastError(
+                    $LANG[$ctx['errorCode']] ?? $LANG['generic_validation_error'],
+                    "Fehler bei der Validierung von Record '{$ctx['type']} {$ctx['name']}': {$ctx['errorCode']}"
+                );
+                break;
+
+            case 'record.create.duplicate':
+                toastError(
+                    sprintf($LANG['record_error_duplicate'], htmlspecialchars($ctx['name']), $ctx['type']),
+                    "Record-Duplikat erkannt: {$ctx['type']} {$ctx['name']} bereits vorhanden in Zone {$ctx['zoneName']} (ID {$ctx['zoneId']})"
+                );
+                break;
+
+            case 'record.create.zonefile_invalid':
+                toastError(
+                    $LANG['record_error_zonefile_invalid'],
+                    $ctx['output']
+                );
+                break;
+
+            case 'record.create.zonefile_warning':
+                toastWarning(
+                    $LANG['record_warning_zonefile_check'],
+                    $ctx['output']
+                );
+                break;
+
+            case 'record.create.db_save_failed':
+                toastError(
+                    $LANG['record_error_db_save_failed'],
+                    "Datenbankfehler beim Speichern von {$ctx['type']} {$ctx['name']} in Zone-ID {$ctx['zoneId']}: " . $ctx['detail']
+                );
+                break;
+
+            case 'record.create.success':
+                // Erfolgs-Toast erst nach den AutoPTR-Meldungen (nur ohne Fehler-Toasts)
+                $successContext = $ctx;
+                break;
+
+            case 'record.create.ptr_invalid_ip':
+                toastError(
+                    $LANG['record_error_auto_ptr_invalid_ip'],
+                    "Fehler bei PTR-Berechnung für {$ctx['type']} {$ctx['ip']} → Zone-ID {$ctx['zoneId']}, Name '{$ctx['name']}'"
+                );
+                break;
+
+            case 'record.create.ptr_zone_missing':
+                toastError(
+                    sprintf($LANG['record_error_auto_ptr_no_zone'], "<code>{$ctx['ptrZone']}</code>"),
+                    "PTR-Zuordnung fehlgeschlagen: keine Reverse-Zone '{$ctx['ptrZone']}' für IP {$ctx['ip']}"
+                );
+                break;
+
+            case 'record.create.ptr_access_denied':
+                logAccessDenied(
+                    'record_add_auto_ptr',
+                    'Benutzer-ID ' . $ctx['userId'] . ' hat keine Berechtigung für Reverse-Zone-ID ' . $ctx['ptrZoneId'] . ' (' . $ctx['ptrZone'] . ') – automatischer PTR wurde nicht angelegt'
+                );
+                toastError(
+                    sprintf($LANG['record_error_auto_ptr_denied'], "<code>{$ctx['ptrZone']}</code>"),
+                    "PTR-Zuordnung verweigert: keine Berechtigung für Reverse-Zone '{$ctx['ptrZone']}' (ID " . $ctx['ptrZoneId'] . ")"
+                );
+                break;
+
+            case 'record.create.ptr_duplicate':
+                toastError(
+                    sprintf($LANG['record_error_auto_ptr_duplicate'], "<code>{$ctx['ptrZone']}</code>", "<code>{$ctx['ptrName']}</code>"),
+                    "PTR-Duplikat erkannt: PTR {$ctx['ptrName']}.{$ctx['ptrZone']} existiert bereits"
+                );
+                break;
+
+            case 'record.create.ptr_db_failed':
+                toastError(
+                    $LANG['record_error_auto_ptr_db'],
+                    "Datenbankfehler beim Einfügen von PTR {$ctx['ptrName']}.{$ctx['ptrZone']}: " . $ctx['detail']
+                );
+                break;
+
+            case 'record.create.ptr_created':
+                // Bisher keine eigene Ausgabe
+                break;
         }
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
-        exit;
     }
 
-    // Auf Duplikate prüfen
-    if (isDuplicateRecord($pdo, $zone_id, $name, $type, $content)) {
-        toastError(
-            sprintf($LANG['record_error_duplicate'], htmlspecialchars($name), $type),
-            "Record-Duplikat erkannt: {$type} {$name} bereits vorhanden in Zone {$zone_name} (ID {$zone_id})"
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
-        exit;
-    }
-
-    // Transaktion starten
-    $pdo->beginTransaction();
-
-    try {
-        // Record schreiben
-        $stmt = $pdo->prepare("INSERT INTO records (zone_id, name, type, content, ttl) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([$zone_id, $name, $type, $content, $ttl]);
-
-        // Zonendatei testen
-        $rebuild = rebuild_zone_and_flag_if_valid($zone_id);
-
-        if ($rebuild['status'] === 'error') {
-            $pdo->rollBack();
-            toastError(
-                $LANG['record_error_zonefile_invalid'],
-                $rebuild['output']
-            );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
-            exit;
-        }
-
-        if ($rebuild['status'] === 'warning') {
-            toastWarning(
-                $LANG['record_warning_zonefile_check'],
-                $rebuild['output']
-            );
-        }
-
-        $pdo->commit();
-    } catch (Throwable $e) {
-        $pdo->rollBack();
-        toastError(
-            $LANG['record_error_db_save_failed'],
-            "Datenbankfehler beim Speichern von {$type} {$name} in Zone-ID {$zone_id}: " . $e->getMessage()
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
-        exit;
-    }
-
-    // Automatischen PTR erzeugen (optional)
-    if (($type === 'A' || $type === 'AAAA') && ($_POST['auto_ptr'] ?? '') === 'on') {
-        if (!tryAutoPtr($pdo, $zone_id, $type, $content, $name, $ttl)) {
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
-            exit;
-        }
-    }
-
-    if (empty($_SESSION['toast_errors'])) {
+    if ($successContext !== null && empty($_SESSION['toast_errors'])) {
         toastSuccess(
-            sprintf($LANG['record_created'], htmlspecialchars($type), htmlspecialchars($name), htmlspecialchars($zone_name)),
-            "Neuer DNS-Record {$type} {$name} erfolgreich gespeichert in Zone '{$zone_name}' (ID {$zone_id})"
+            sprintf($LANG['record_created'], htmlspecialchars($successContext['type']), htmlspecialchars($successContext['name']), htmlspecialchars($successContext['zoneName'])),
+            "Neuer DNS-Record {$successContext['type']} {$successContext['name']} erfolgreich gespeichert in Zone '{$successContext['zoneName']}' (ID {$successContext['zoneId']})"
         );
     }
 
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . ($serviceResult->lastZoneId ?? $zone_id));
     exit;
 }
 ?>

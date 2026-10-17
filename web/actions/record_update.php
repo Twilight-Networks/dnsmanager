@@ -28,6 +28,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $raw_type = $_POST['type'] ?? '';
     $is_dkim = !empty($_POST['is_dkim']); // z. B. aus hidden input
 
+    // Sonderfall: Wenn DKIM als TXT gespeichert wird, aber speziell validiert werden muss
+    // (Validator-Typ wird vor buildRecordContent() aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
+    $validator_type = ($raw_type === 'TXT' && $is_dkim) ? 'DKIM' : $raw_type;
+
     // Content zusammensetzen (inkl. spezieller Typ-Logik)
     $result = buildRecordContent($raw_type, $_POST);
 
@@ -50,7 +54,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Fachliche Update-Operation im RecordService
     $actor      = actorFromSession();
     $zoneAccess = new ZoneAccess($pdo);
-    $input      = new RecordInput($type, $name, $content, $ttl, $is_dkim);
+    $input      = new RecordInput($type, $name, $content, $ttl, $is_dkim, $validator_type);
 
     $recordService = new RecordService($pdo, $zoneAccess);
     $serviceResult = $recordService->updateRecord($actor, $id, $zone_id, $input);
