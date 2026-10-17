@@ -13,9 +13,15 @@
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 require_once __DIR__ . '/../inc/glue_check.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     requireRole(['admin', 'zoneadmin']);
+
+    $actor      = actorFromSession();
+    $zoneAccess = new ZoneAccess($pdo);
 
     $bulk_ids   = isset($_POST['bulk_ids']) ? explode(',', $_POST['bulk_ids']) : [];
     $single_id  = isset($_POST['id']) ? [(int)$_POST['id']] : [];
@@ -44,13 +50,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $zone_name = getZoneName($pdo, $zone_id);
 
             // Rechte prüfen
-            if ($_SESSION['role'] !== 'admin') {
-                $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
-                $stmt->execute([$zone_id, $_SESSION['user_id']]);
-                if (!$stmt->fetch()) {
-                    logAccessDenied('record_delete', "Benutzer-ID {$_SESSION['user_id']} wollte Record-ID $id in Zone-ID $zone_id löschen.");
-                    throw new RuntimeException("Keine Berechtigung für Record-ID $id.");
-                }
+            if (!$zoneAccess->canWriteZone($actor, $zone_id)) {
+                logAccessDenied('record_delete', "Benutzer-ID {$actor->userId} wollte Record-ID $id in Zone-ID $zone_id löschen.");
+                throw new RuntimeException("Keine Berechtigung für Record-ID $id.");
             }
 
             // Glue-Check
