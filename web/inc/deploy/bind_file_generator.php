@@ -13,6 +13,13 @@
  * - Eine zentrale `zones.conf` oder lokaler Cleanup wird nicht mehr durchgeführt.
  * - Die SOA-Serialnummer wird nur im Modus `publish` erhöht.
  *
+ * Abhängigkeiten:
+ * - Diese Datei lädt keinen Web-Bootstrap (common.php) mehr selbst.
+ * - `generate_zone_file()` benötigt eine explizit übergebene PDO-Verbindung (Parameter `$db`)
+ *   oder den bestehenden Legacy-Fallback `$GLOBALS['pdo']` (gesetzt durch inc/db.php).
+ * - `generate_zone_conf_file()` setzt weiterhin geladene Konfiguration (z. B. BIND_BASE_DIR)
+ *   und die globale Verbindung `$pdo` voraus; Aufrufer laden dazu common.php.
+ *
  * Sicherheit:
  * - Keine Verarbeitung externer Benutzereingaben.
  * - Alle Dateipfade sind kontrolliert und auf übergebene Zielverzeichnisse beschränkt.
@@ -23,7 +30,6 @@
  * - generate_zone_conf_file(): Erstellt gezielt `.conf`-Dateien für eine Zone und einen Zielserver.
  */
 
-require_once __DIR__ . '/../../common.php';
 require_once __DIR__ . '/../soa_serial.php';
 
 /**
