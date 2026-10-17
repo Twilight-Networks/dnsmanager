@@ -8,7 +8,9 @@
  * - Verwaist ist eine vorhandene zone_conf_dir/<safe-zone-name>.conf, deren Basename nicht in valid_zones steht
  * - Entfernt verwaiste .conf-Dateien und je verwaister .conf ausschließlich die exakt gepaarte
  *   Zonendatei zone_data_dir/db.<safe-zone-name> (keine sonstigen db.*, keine .jnl, keine fremden Dateien)
- * - Ersetzt vorher zones.conf atomar (ohne die verwaisten Includes) und führt danach genau einen BIND-Reload aus
+ * - Ersetzt vorher zones.conf atomar (ohne die verwaisten Includes), prüft sie mit named-checkconf
+ *   (bei Fehler: alte zones.conf wiederherstellen, nichts löschen, kein Reload) und führt danach genau einen
+ *   BIND-Reload aus
  * - Ohne verwaiste .conf: keine Änderung, kein Reload (No-op)
  *
  * Request (JSON):
@@ -120,32 +122,68 @@ foreach ($keepConfFiles as $file) {
 }
 $zonesConfContent = implode("\n", $includes) . "\n";
 
-// === C: zones.conf atomar ersetzen (Temp-Datei im selben Verzeichnis + rename) ===
-try {
-    $zonesConfTmpPath = $zonesConfPath . '.' . bin2hex(random_bytes(8)) . '.tmp';
-} catch (Throwable $e) {
-    $releaseLock();
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erzeugen des temporären Dateinamens für zones.conf']);
-}
-
-if (file_put_contents($zonesConfTmpPath, $zonesConfContent) !== strlen($zonesConfContent)) {
-    @unlink($zonesConfTmpPath);
-    $releaseLock();
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben von zones.conf']);
-}
-
-// Bisherige Zugriffsrechte von zones.conf übernehmen (best effort; Owner/Gruppe bleiben die des Agenten)
-if (is_file($zonesConfPath)) {
-    $existingPerms = @fileperms($zonesConfPath);
-    if ($existingPerms !== false) {
-        @chmod($zonesConfTmpPath, $existingPerms & 0777);
+// === Bisherigen Zustand von zones.conf sichern (für Rollback); bei Lesefehler ohne Änderung abbrechen ===
+$zonesConfExisted = file_exists($zonesConfPath);
+$oldZonesConf = null;
+$oldZonesConfPerms = null;
+if ($zonesConfExisted) {
+    $oldZonesConf = is_file($zonesConfPath) ? @file_get_contents($zonesConfPath) : false;
+    if ($oldZonesConf === false) {
+        $releaseLock();
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
     }
+    $perms = @fileperms($zonesConfPath);
+    $oldZonesConfPerms = $perms !== false ? ($perms & 0777) : null;
 }
 
-if (!rename($zonesConfTmpPath, $zonesConfPath)) {
-    @unlink($zonesConfTmpPath);
+// === C: zones.conf atomar ersetzen (Temp-Datei im selben Verzeichnis + rename) ===
+// Bei Fehler bleibt die bisherige zones.conf unverändert (kein Rollback nötig).
+if (!writeTextFileAtomic($zonesConfPath, $zonesConfContent)) {
     $releaseLock();
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben von zones.conf']);
+}
+
+// === Verbindlicher named-checkconf-Preflight – VOR dem Löschen der Orphans und vor dem Reload ===
+$preflight = checkBindConfig();
+if (!$preflight['ok']) {
+    // Alte zones.conf wiederherstellen (atomar) bzw. entfernen, falls sie vorher nicht existierte.
+    // Es wurden noch keine Orphan-Dateien gelöscht; kein Reload.
+    $restored = $zonesConfExisted
+        ? writeTextFileAtomic($zonesConfPath, $oldZonesConf, $oldZonesConfPerms)
+        : (!file_exists($zonesConfPath) || @unlink($zonesConfPath));
+
+    if (!$restored) {
+        error_log('[zone_cleanup] ROLLBACK FEHLGESCHLAGEN: zones.conf konnte nach named-checkconf-Fehler nicht wiederhergestellt werden');
+        $releaseLock();
+        sendJsonResponse(500, [
+            'status' => 'error',
+            'message' => 'named-checkconf fehlgeschlagen und Wiederherstellung der zones.conf fehlgeschlagen – manuelle Prüfung der BIND-Konfiguration erforderlich. Keine Orphans entfernt, kein Reload.',
+            'rollback' => 'failed',
+            'check_output' => trim($preflight['output']),
+            'exit_code' => $preflight['exit_code']
+        ]);
+    }
+
+    // Diagnose: Ist der wiederhergestellte vorherige Zustand gültig? (löst keinen Reload aus)
+    $previous = checkBindConfig();
+    $message = 'BIND-Konfigurationsprüfung (named-checkconf) fehlgeschlagen – zones.conf wiederhergestellt, keine Orphans entfernt, kein Reload';
+    $response = [
+        'status' => 'error',
+        'check_output' => trim($preflight['output']),
+        'exit_code' => $preflight['exit_code'],
+        'rollback' => 'ok',
+        'previous_config_valid' => $previous['ok'],
+        'removed_conf' => [],
+        'removed_zone_files' => []
+    ];
+    if (!$previous['ok']) {
+        $message .= ' (Hinweis: auch der wiederhergestellte vorherige Zustand ist laut named-checkconf ungültig)';
+        $response['previous_check_output'] = trim($previous['output']);
+    }
+    $response['message'] = $message;
+
+    $releaseLock();
+    sendJsonResponse(422, $response);
 }
 
 // === D: erst jetzt pro Orphan zuerst die exakt gepaarte db.<zone>, danach die verwaiste .conf entfernen ===

@@ -65,18 +65,112 @@ $releaseLock = function () use (&$lockHandle): void {
     $lockHandle = null;
 };
 
+// === Zustand vor der ersten Änderung sichern (für Rollback) ===
+// Schlägt ein Backup-Lesevorgang fehl, wird ohne jede Änderung abgebrochen.
+$confExisted = file_exists($confPath);
+$oldConf = null;
+$oldConfPerms = null;
+if ($confExisted) {
+    $oldConf = is_file($confPath) ? @file_get_contents($confPath) : false;
+    if ($oldConf === false) {
+        $releaseLock();
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden .conf-Datei fehlgeschlagen – keine Änderung vorgenommen']);
+    }
+    $perms = @fileperms($confPath);
+    $oldConfPerms = $perms !== false ? ($perms & 0777) : null;
+}
+
+$zonesConfExisted = file_exists($zonesConfPath);
+$oldZonesConf = null;
+$oldZonesConfPerms = null;
+if ($zonesConfExisted) {
+    $oldZonesConf = is_file($zonesConfPath) ? @file_get_contents($zonesConfPath) : false;
+    if ($oldZonesConf === false) {
+        $releaseLock();
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
+    }
+    $perms = @fileperms($zonesConfPath);
+    $oldZonesConfPerms = $perms !== false ? ($perms & 0777) : null;
+}
+
+// Rollback auf den gesicherten Zustand. Reihenfolge: zuerst zones.conf, danach <zone>.conf,
+// damit zones.conf nie auf eine bereits entfernte .conf zeigt.
+$rollback = function () use (
+    $confPath, $confExisted, $oldConf, $oldConfPerms,
+    $zonesConfPath, $zonesConfExisted, $oldZonesConf, $oldZonesConfPerms
+): bool {
+    $ok = true;
+
+    // 1. zones.conf wiederherstellen (atomar) bzw. entfernen, falls sie vorher nicht existierte
+    if ($zonesConfExisted) {
+        if (!writeTextFileAtomic($zonesConfPath, $oldZonesConf, $oldZonesConfPerms)) {
+            $ok = false;
+        }
+    } elseif (file_exists($zonesConfPath) && !@unlink($zonesConfPath)) {
+        $ok = false;
+    }
+
+    // 2. <zone>.conf wiederherstellen bzw. entfernen, falls sie neu angelegt wurde
+    if ($confExisted) {
+        if (!writeTextFileAtomic($confPath, $oldConf, $oldConfPerms)) {
+            $ok = false;
+        }
+    } elseif (file_exists($confPath)) {
+        // Neue .conf nur entfernen, wenn zones.conf erfolgreich wiederhergestellt wurde;
+        // sonst würde die (Kandidaten-)zones.conf auf eine fehlende Datei zeigen.
+        if (!$ok || !@unlink($confPath)) {
+            $ok = false;
+        }
+    }
+
+    return $ok;
+};
+
+// Kontrollierter Fehler nach einer Live-Änderung: Rollback versuchen, kein Reload, Lock freigeben, antworten.
+$failWithRollback = function (int $httpCode, string $message, array $extra = []) use ($rollback, $releaseLock): never {
+    if (!$rollback()) {
+        error_log("[conf_sync] ROLLBACK FEHLGESCHLAGEN nach: $message");
+        $releaseLock();
+        sendJsonResponse(500, [
+            'status' => 'error',
+            'message' => "$message – Rollback fehlgeschlagen: manuelle Prüfung der BIND-Konfiguration erforderlich. Kein Reload durchgeführt.",
+            'rollback' => 'failed'
+        ] + $extra);
+    }
+
+    // Diagnose: Ist der wiederhergestellte vorherige Zustand gültig? (löst keinen Reload aus)
+    $previous = checkBindConfig();
+    $extra['rollback'] = 'ok';
+    $extra['previous_config_valid'] = $previous['ok'];
+    if (!$previous['ok']) {
+        $extra['previous_check_output'] = trim($previous['output']);
+        $message .= ' (Hinweis: auch der wiederhergestellte vorherige Zustand ist laut named-checkconf ungültig)';
+        error_log("[conf_sync] Vorheriger Konfigurationszustand ist ebenfalls ungültig: " . trim($previous['output']));
+    }
+
+    $releaseLock();
+    sendJsonResponse($httpCode, ['status' => 'error', 'message' => $message] + $extra);
+};
+
 // === Zielverzeichnis sicherstellen ===
 ensureDirectory($confDir);
 
-// === Neue .conf-Datei schreiben ===
-if (!writeTextFile($confPath, $confData)) {
+// === Neue .conf-Datei schreiben (atomar) ===
+// Bei Fehler bleibt die Zieldatei unverändert (writeTextFileAtomic): keine Live-Änderung → kein Rollback, kein Reload.
+if (!writeTextFileAtomic($confPath, $confData)) {
     $releaseLock();
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben der .conf-Datei']);
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben der .conf-Datei – keine Änderung vorgenommen']);
 }
 
+// === Ab hier wurde eine Live-Datei verändert: jeder kontrollierte Fehler führt zum Rollback ===
+
 // === Neue zones.conf generieren ===
+$confFiles = glob("$confDir/*.conf");
+if ($confFiles === false) {
+    $failWithRollback(500, 'Fehler beim Lesen des Konfigurationsverzeichnisses');
+}
 $includes = [];
-foreach (glob("$confDir/*.conf") as $file) {
+foreach ($confFiles as $file) {
     if (is_file($file)) {
         $includes[] = 'include "' . realpath($file) . '";';
     }
@@ -84,36 +178,21 @@ foreach (glob("$confDir/*.conf") as $file) {
 
 $zonesConfContent = implode("\n", $includes) . "\n";
 
-// zones.conf atomar ersetzen: vollständig in eine eindeutige Temp-Datei im selben Verzeichnis
-// schreiben (gleiches Dateisystem) und erst danach per rename() übernehmen.
-try {
-    $zonesConfTmpPath = $zonesConfPath . '.' . bin2hex(random_bytes(8)) . '.tmp';
-} catch (Throwable $e) {
-    $releaseLock();
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erzeugen des temporären Dateinamens für zones.conf']);
+// zones.conf atomar ersetzen (Temp-Datei im selben Verzeichnis + rename, bisherige Rechte best effort)
+if (!writeTextFileAtomic($zonesConfPath, $zonesConfContent)) {
+    $failWithRollback(500, 'Fehler beim Schreiben von zones.conf');
 }
 
-if (file_put_contents($zonesConfTmpPath, $zonesConfContent) !== strlen($zonesConfContent)) {
-    @unlink($zonesConfTmpPath);
-    $releaseLock();
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben von zones.conf']);
+// === Verbindlicher named-checkconf-Preflight vor dem Reload ===
+$preflight = checkBindConfig();
+if (!$preflight['ok']) {
+    $failWithRollback(422, 'BIND-Konfigurationsprüfung (named-checkconf) fehlgeschlagen – Änderung zurückgerollt, kein Reload', [
+        'check_output' => trim($preflight['output']),
+        'exit_code' => $preflight['exit_code']
+    ]);
 }
 
-// Bisherige Zugriffsrechte von zones.conf übernehmen (best effort; Owner/Gruppe bleiben die des Agenten)
-if (is_file($zonesConfPath)) {
-    $existingPerms = @fileperms($zonesConfPath);
-    if ($existingPerms !== false) {
-        @chmod($zonesConfTmpPath, $existingPerms & 0777);
-    }
-}
-
-if (!rename($zonesConfTmpPath, $zonesConfPath)) {
-    @unlink($zonesConfTmpPath);
-    $releaseLock();
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben von zones.conf']);
-}
-
-// === BIND reload ===
+// === BIND reload (nur nach erfolgreichem Preflight) ===
 $rndcOutput = reloadBind();
 
 // === Lock freigeben (nach dem Reload) ===
