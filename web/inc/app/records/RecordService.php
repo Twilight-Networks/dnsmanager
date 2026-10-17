@@ -8,9 +8,12 @@
  * ZoneAccess-Komponente und meldet Ereignisse als ServiceMessage-Objekte
  * innerhalb eines ServiceResult zurück.
  *
- * Voraussetzung (Legacy): Die Funktionen aus inc/helpers.php
- * (rebuild_zone_and_flag_if_valid) müssen geladen sein; sie arbeiten weiterhin
- * über $GLOBALS['pdo']. Der Aufrufer übergibt daher dasselbe PDO-Objekt.
+ * Zonen-Rebuild/-Validierung wird als explizite, zwingende Dependency
+ * (callable $zoneRebuilder) injiziert. Der Service kennt keine konkrete
+ * Rebuild-Implementierung. Der Rebuilder erhält eine Zonen-ID und liefert
+ * das bestehende Ergebnis-Array (u. a. 'status'). Er muss auf derselben
+ * DB-Connection/Transaktion arbeiten wie das übergebene PDO-Objekt, damit noch
+ * nicht committete Record-Änderungen sichtbar sind.
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -25,11 +28,25 @@ final class RecordService
 {
     private PDO $pdo;
     private ZoneAccess $zoneAccess;
+    private Closure $zoneRebuilder;
 
-    public function __construct(PDO $pdo, ZoneAccess $zoneAccess)
-    {
+    public function __construct(
+        PDO $pdo,
+        ZoneAccess $zoneAccess,
+        callable $zoneRebuilder
+    ) {
         $this->pdo = $pdo;
         $this->zoneAccess = $zoneAccess;
+        $this->zoneRebuilder = Closure::fromCallable($zoneRebuilder);
+    }
+
+    /**
+     * Ruft ausschließlich den injizierten Zone-Rebuilder auf und gibt dessen
+     * Ergebnis unverändert zurück.
+     */
+    private function rebuildZone(int $zoneId): array
+    {
+        return ($this->zoneRebuilder)($zoneId);
     }
 
     /**
@@ -109,7 +126,7 @@ final class RecordService
                 // Wie bisher: die Schleifenvariable bestimmt auch die letzte Zone
                 $lastZoneId = $zone_id;
 
-                $rebuild = rebuild_zone_and_flag_if_valid($zone_id);
+                $rebuild = $this->rebuildZone($zone_id);
 
                 if ($rebuild['status'] === 'error') {
                     throw new RuntimeException("Zonendatei-Fehler nach Löschung in Zone '{$zone_name}': {$rebuild['output']}");
@@ -283,7 +300,7 @@ final class RecordService
             $stmt->execute([$name, $type, $content, $ttl, $recordId]);
 
             // Zonendatei testen
-            $rebuild = rebuild_zone_and_flag_if_valid($zoneId);
+            $rebuild = $this->rebuildZone($zoneId);
 
             if ($rebuild['status'] === 'error') {
                 $pdo->rollBack();
@@ -405,7 +422,7 @@ final class RecordService
             $stmt->execute([$zoneId, $name, $type, $content, $ttl]);
 
             // Zonendatei testen
-            $rebuild = rebuild_zone_and_flag_if_valid($zoneId);
+            $rebuild = $this->rebuildZone($zoneId);
 
             if ($rebuild['status'] === 'error') {
                 $pdo->rollBack();
@@ -551,7 +568,7 @@ final class RecordService
             $stmt->execute([$ptr_zone_id, $ptr_name, $hostname, $ttl]);
 
             $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
-            rebuild_zone_and_flag_if_valid((int)$ptr_zone_id);
+            $this->rebuildZone((int)$ptr_zone_id);
 
             $messages[] = new ServiceMessage('success', 'record.create.ptr_created', [
                 'ptrZone' => $ptr_zone,

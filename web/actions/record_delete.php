@@ -32,7 +32,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit('Keine gültigen Record-IDs übergeben.');
     }
 
-    $recordService = new RecordService($pdo, $zoneAccess);
+    $recordService = new RecordService(
+        $pdo,
+        $zoneAccess,
+        static fn (int $zoneId): array => rebuild_zone_and_flag_if_valid($zoneId)
+    );
     $result        = $recordService->deleteRecords($actor, $ids);
 
     // ServiceMessages in Reihenfolge in bestehende Toasts/Logs übersetzen

@@ -56,7 +56,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $zoneAccess = new ZoneAccess($pdo);
     $input      = new RecordInput($type, $name, $content, $ttl, $is_dkim, $validator_type);
 
-    $recordService = new RecordService($pdo, $zoneAccess);
+    $recordService = new RecordService(
+        $pdo,
+        $zoneAccess,
+        static fn (int $zoneId): array => rebuild_zone_and_flag_if_valid($zoneId)
+    );
     $serviceResult = $recordService->updateRecord($actor, $id, $zone_id, $input);
 
     // ServiceMessages in Reihenfolge in bestehende Toasts/Logs/HTTP-Antworten übersetzen
