@@ -6,6 +6,10 @@
  * Wird von Adaptern (Web, später z. B. MCP) erzeugt und an den RecordService
  * übergeben. Enthält keine POST-Daten, keine Session, keine Übersetzung und
  * keine Validierung; die fachliche Prüfung erfolgt im RecordService.
+ *
+ * validationType (optional): Typ, mit dem validiert wird, falls er vom
+ * gespeicherten Typ abweicht (z. B. SPF oder DKIM, gespeichert als TXT).
+ * Ohne Angabe gilt das bisherige Verhalten.
  */
 
 final class RecordInput
@@ -15,7 +19,8 @@ final class RecordInput
         public readonly string $name,
         public readonly string $content,
         public readonly int $ttl,
-        public readonly bool $isDkim = false
+        public readonly bool $isDkim = false,
+        public readonly ?string $validationType = null
     ) {
     }
 }

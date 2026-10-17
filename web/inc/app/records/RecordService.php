@@ -176,7 +176,7 @@ final class RecordService
         $zoneName    = rtrim($zoneNameRaw, '.');
 
         // Validierung
-        $validatorType = ($type === 'TXT' && $input->isDkim) ? 'DKIM' : $type;
+        $validatorType = $input->validationType ?? (($type === 'TXT' && $input->isDkim) ? 'DKIM' : $type);
         $errors = validateDnsRecord($validatorType, $name, $content, $ttl);
         if (!empty($errors)) {
             foreach ($errors as $error) {
@@ -324,5 +324,245 @@ final class RecordService
         ]);
 
         return new ServiceResult(true, $messages, $zoneId);
+    }
+
+    /**
+     * Legt einen neuen Record an und versucht optional einen automatischen PTR.
+     *
+     * Ablauf Forward-Record: Berechtigung -> Validierung -> Duplikat-Prüfung
+     * -> Transaktion (INSERT, Rebuild, Commit).
+     *
+     * AutoPTR (nur A/AAAA und $autoPtr === true) läuft bewusst erst NACH dem
+     * Commit des Forward-Records und in einer eigenen Verarbeitung: Scheitert
+     * der PTR, bleibt der Forward-Record bestehen. Das Ergebnis ist dann
+     * weiterhin ok=true; der PTR-Ausgang steht in den ServiceMessages
+     * (record.create.ptr_*).
+     *
+     * @param Actor       $actor
+     * @param int         $zoneId  Forward-Zone
+     * @param RecordInput $input
+     * @param bool        $autoPtr PTR automatisch anlegen (nur A/AAAA)
+     *
+     * @return ServiceResult
+     */
+    public function createRecord(Actor $actor, int $zoneId, RecordInput $input, bool $autoPtr = false): ServiceResult
+    {
+        $pdo = $this->pdo;
+        $messages = [];
+
+        $type    = $input->type;
+        $name    = $input->name;
+        $content = $input->content;
+        $ttl     = $input->ttl;
+
+        // Berechtigung prüfen
+        if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
+            $messages[] = new ServiceMessage('audit', 'record.create.access_denied', [
+                'userId' => $actor->userId,
+                'zoneId' => $zoneId,
+            ]);
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        // Zonenname (für Meldungen ohne abschließenden Punkt)
+        $zoneName = rtrim(getZoneName($pdo, $zoneId), '.');
+
+        // Validierung
+        $validatorType = $input->validationType ?? (($type === 'TXT' && $input->isDkim) ? 'DKIM' : $type);
+        $errors = validateDnsRecord($validatorType, $name, $content, $ttl);
+        if (!empty($errors)) {
+            foreach ($errors as $error) {
+                $messages[] = new ServiceMessage('error', 'record.create.validation_error', [
+                    'errorCode' => $error,
+                    'type'      => $type,
+                    'name'      => $name,
+                    'zoneName'  => $zoneName,
+                ]);
+            }
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        // Auf Duplikate prüfen
+        if (isDuplicateRecord($pdo, $zoneId, $name, $type, $content)) {
+            $messages[] = new ServiceMessage('error', 'record.create.duplicate', [
+                'type'     => $type,
+                'name'     => $name,
+                'zoneName' => $zoneName,
+                'zoneId'   => $zoneId,
+            ]);
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        // Transaktion starten
+        $pdo->beginTransaction();
+
+        try {
+            // Record schreiben
+            $stmt = $pdo->prepare("INSERT INTO records (zone_id, name, type, content, ttl) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute([$zoneId, $name, $type, $content, $ttl]);
+
+            // Zonendatei testen
+            $rebuild = rebuild_zone_and_flag_if_valid($zoneId);
+
+            if ($rebuild['status'] === 'error') {
+                $pdo->rollBack();
+                $messages[] = new ServiceMessage('error', 'record.create.zonefile_invalid', [
+                    'output' => $rebuild['output'],
+                    'zoneId' => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            if ($rebuild['status'] === 'warning') {
+                $messages[] = new ServiceMessage('warning', 'record.create.zonefile_warning', [
+                    'output' => $rebuild['output'],
+                    'zoneId' => $zoneId,
+                ]);
+            }
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $messages[] = new ServiceMessage('error', 'record.create.db_save_failed', [
+                'type'   => $type,
+                'name'   => $name,
+                'zoneId' => $zoneId,
+                'detail' => $e->getMessage(),
+            ]);
+
+            return new ServiceResult(false, $messages, $zoneId);
+        }
+
+        // Forward-Record ist committed
+        $messages[] = new ServiceMessage('success', 'record.create.success', [
+            'type'     => $type,
+            'name'     => $name,
+            'zoneName' => $zoneName,
+            'zoneId'   => $zoneId,
+        ]);
+
+        // Automatischen PTR erzeugen (optional, nach dem Commit; Fehler rollen den Forward-Record nicht zurück)
+        if (($type === 'A' || $type === 'AAAA') && $autoPtr) {
+            $this->createAutoPtr($actor, $zoneId, $zoneName, $type, $content, $name, $ttl, $messages);
+        }
+
+        return new ServiceResult(true, $messages, $zoneId);
+    }
+
+    /**
+     * Versucht, für einen A- oder AAAA-Record automatisch einen PTR-Record anzulegen.
+     *
+     * Voraussetzungen: Reverse-Zone existiert, Actor darf in die Reverse-Zone
+     * schreiben, kein PTR mit gleichem Namen vorhanden. Der Ausgang wird als
+     * ServiceMessages an $messages angehängt (Erfolg: record.create.ptr_created).
+     * Bewusst ohne eigene Transaktion (bestehendes Verhalten).
+     *
+     * @param ServiceMessage[] $messages
+     */
+    private function createAutoPtr(
+        Actor $actor,
+        int $zoneId,
+        string $zoneName,
+        string $type,
+        string $ip,
+        string $name,
+        int $ttl,
+        array &$messages
+    ): void {
+        $pdo = $this->pdo;
+
+        // Hostname ermitteln
+        $hostname = ($name === '@' || trim($name) === '')
+            ? $zoneName . '.'
+            : rtrim($name, '.') . '.' . $zoneName . '.';
+
+        // Reverse-Zone und Name berechnen
+        $ptr_zone = null;
+        $ptr_name = null;
+
+        if ($type === 'A' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $parts = explode('.', $ip);
+            if (count($parts) === 4) {
+                $ptr_zone = "{$parts[2]}.{$parts[1]}.{$parts[0]}.in-addr.arpa";
+                $ptr_name = $parts[3];
+            }
+        } elseif ($type === 'AAAA' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $bin = inet_pton($ip);
+            $hex = unpack('H*', $bin)[1];
+            $nibbles = str_split($hex);
+            $reverse = array_reverse($nibbles);
+            $ptr_zone = implode('.', array_slice($reverse, 1)) . '.ip6.arpa';
+            $ptr_name = $reverse[0];
+        }
+
+        if (!$ptr_zone || !$ptr_name) {
+            $messages[] = new ServiceMessage('error', 'record.create.ptr_invalid_ip', [
+                'type'   => $type,
+                'ip'     => $ip,
+                'zoneId' => $zoneId,
+                'name'   => $name,
+            ]);
+            return;
+        }
+
+        // Reverse-Zone muss existieren
+        $stmt = $pdo->prepare("SELECT id FROM zones WHERE name = ? AND type = 'reverse'");
+        $stmt->execute([$ptr_zone]);
+        $ptr_zone_id = $stmt->fetchColumn();
+
+        if (!$ptr_zone_id) {
+            $messages[] = new ServiceMessage('error', 'record.create.ptr_zone_missing', [
+                'ptrZone' => $ptr_zone,
+                'ip'      => $ip,
+            ]);
+            return;
+        }
+
+        // Zonenberechtigung für die Reverse-Zone prüfen (zoneadmin benötigt user_zones-Eintrag)
+        if (!$this->zoneAccess->canWriteZone($actor, (int)$ptr_zone_id)) {
+            $messages[] = new ServiceMessage('audit', 'record.create.ptr_access_denied', [
+                'userId'    => $actor->userId,
+                'ptrZoneId' => (int)$ptr_zone_id,
+                'ptrZone'   => $ptr_zone,
+            ]);
+            return;
+        }
+
+        // Prüfen auf Duplikat
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM records WHERE zone_id = ? AND name = ? AND type = 'PTR'");
+        $stmt->execute([$ptr_zone_id, $ptr_name]);
+        if ((int)$stmt->fetchColumn() > 0) {
+            $messages[] = new ServiceMessage('error', 'record.create.ptr_duplicate', [
+                'ptrZone' => $ptr_zone,
+                'ptrName' => $ptr_name,
+            ]);
+            return;
+        }
+
+        // Einfügen
+        try {
+            $stmt = $pdo->prepare("INSERT INTO records (zone_id, name, type, content, ttl) VALUES (?, ?, 'PTR', ?, ?)");
+            $stmt->execute([$ptr_zone_id, $ptr_name, $hostname, $ttl]);
+
+            $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
+            rebuild_zone_and_flag_if_valid((int)$ptr_zone_id);
+
+            $messages[] = new ServiceMessage('success', 'record.create.ptr_created', [
+                'ptrZone' => $ptr_zone,
+                'ptrName' => $ptr_name,
+            ]);
+        } catch (PDOException $e) {
+            $messages[] = new ServiceMessage('error', 'record.create.ptr_db_failed', [
+                'ptrZone' => $ptr_zone,
+                'ptrName' => $ptr_name,
+                'detail'  => $e->getMessage(),
+            ]);
+        }
     }
 }
