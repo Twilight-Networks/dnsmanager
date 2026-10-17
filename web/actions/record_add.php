@@ -42,6 +42,8 @@ require_once __DIR__ . '/../inc/validators.php';
  */
 function tryAutoPtr(PDO $pdo, int $zone_id, string $type, string $ip, string $name, int $ttl): bool
 {
+    global $LANG;
+
     // Zonenname laden
     $stmt = $pdo->prepare("SELECT name FROM zones WHERE id = ?");
     $stmt->execute([$zone_id]);
@@ -92,6 +94,23 @@ function tryAutoPtr(PDO $pdo, int $zone_id, string $type, string $ip, string $na
         return false;
     }
 
+    // Zonenberechtigung für die Reverse-Zone prüfen (zoneadmin benötigt user_zones-Eintrag)
+    if ($_SESSION['role'] !== 'admin') {
+        $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
+        $stmt->execute([(int)$ptr_zone_id, $_SESSION['user_id']]);
+        if (!$stmt->fetch()) {
+            logAccessDenied(
+                'record_add_auto_ptr',
+                'Benutzer-ID ' . $_SESSION['user_id'] . ' hat keine Berechtigung für Reverse-Zone-ID ' . (int)$ptr_zone_id . ' (' . $ptr_zone . ') – automatischer PTR wurde nicht angelegt'
+            );
+            toastError(
+                sprintf($LANG['record_error_auto_ptr_denied'], "<code>{$ptr_zone}</code>"),
+                "PTR-Zuordnung verweigert: keine Berechtigung für Reverse-Zone '{$ptr_zone}' (ID " . (int)$ptr_zone_id . ")"
+            );
+            return false;
+        }
+    }
+
     // Prüfen auf Duplikat
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM records WHERE zone_id = ? AND name = ? AND type = 'PTR'");
     $stmt->execute([$ptr_zone_id, $ptr_name]);
@@ -134,7 +153,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
         $stmt->execute([$zone_id, $_SESSION['user_id']]);
         if (!$stmt->fetch()) {
-            logAccessDenied('Benutzer-ID ' . $_SESSION['user_id'] . ' versucht unbefugten Zugriff auf Zone-ID ' . $zone_id);
+            logAccessDenied('record_add', 'Benutzer-ID ' . $_SESSION['user_id'] . ' versucht unbefugten Zugriff auf Zone-ID ' . $zone_id);
             http_response_code(403);
             exit('Zugriff verweigert.');
         }
@@ -233,7 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ttl     = intval($_POST['ttl']) ?: 3600;
 
     // Validierung
-    $errors = validateDnsRecord($validator_type, $name, $content, null, $ttl);
+    $errors = validateDnsRecord($validator_type, $name, $content, $ttl);
     if (!empty($errors)) {
         foreach ($errors as $error) {
             toastError(

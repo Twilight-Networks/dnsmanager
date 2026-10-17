@@ -48,7 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
                 $stmt->execute([$zone_id, $_SESSION['user_id']]);
                 if (!$stmt->fetch()) {
-                    logAccessDenied("Benutzer-ID {$_SESSION['user_id']} wollte Record-ID $id in Zone-ID $zone_id löschen.");
+                    logAccessDenied('record_delete', "Benutzer-ID {$_SESSION['user_id']} wollte Record-ID $id in Zone-ID $zone_id löschen.");
                     throw new RuntimeException("Keine Berechtigung für Record-ID $id.");
                 }
             }
