@@ -6,6 +6,7 @@
  * Diese Datei stellt Funktionen zur Verfügung, um
  * - Zonennamen sicher zu bereinigen
  * - Zonendateien mittels named-checkzone zu validieren
+ * - die BIND-Konfiguration mittels named-checkconf (mit Exit-Code) zu prüfen
  * - einen BIND-Reload über rndc auszuführen
  *
  * Eingesetzt in:
@@ -48,18 +49,59 @@ function validateZoneFile(string $zoneName, string $filePath): string {
 }
 
 /**
- * Führt eine syntaktische Prüfung der BIND-Konfiguration durch.
- * Gibt immer die vollständige Ausgabe von named-checkconf zurück.
+ * Prüft die BIND-Konfiguration mit named-checkconf (ohne sudo, ohne -z) und wertet den Exit-Code aus.
  *
- * @return string Konsolenausgabe (auch bei Erfolg)
+ * - Exit-Code 0 = gültig (auch wenn Warnungen ausgegeben werden)
+ * - Jeder andere Exit-Code = ungültig (fail closed), ebenso fehlendes Binary oder Ausführungsfehler
+ * - stderr wird nach stdout umgeleitet und als 'output' zurückgegeben
+ *
+ * Verbindlicher Preflight vor jedem reloadBind().
+ *
+ * @return array{ok: bool, exit_code: int, output: string}
  */
-function validateZoneConfFile(): string {
+function checkBindConfig(): array {
     global $config;
     $binary = $config['bind_named_checkconf'] ?? '/usr/bin/named-checkconf';
     $conf   = $config['bind_named_conf_path'] ?? '/etc/bind/named.conf';
 
-    $cmd = $binary . ' ' . escapeshellarg($conf) . ' 2>&1';
-    return shell_exec($cmd) ?? '';
+    $cmd = escapeshellarg($binary) . ' ' . escapeshellarg($conf) . ' 2>&1';
+    $lines = [];
+    $exitCode = -1;
+
+    try {
+        $result = exec($cmd, $lines, $exitCode);
+    } catch (Throwable $e) {
+        // z. B. exec() deaktiviert → fail closed
+        return ['ok' => false, 'exit_code' => -1, 'output' => 'named-checkconf konnte nicht ausgeführt werden: ' . $e->getMessage()];
+    }
+
+    $exitCode = (int)$exitCode;
+    $output = implode("\n", $lines);
+
+    if ($result === false) {
+        // Ausführung fehlgeschlagen → fail closed
+        return [
+            'ok' => false,
+            'exit_code' => $exitCode !== 0 ? $exitCode : -1,
+            'output' => $output !== '' ? $output : 'named-checkconf konnte nicht ausgeführt werden.'
+        ];
+    }
+
+    return [
+        'ok' => $exitCode === 0,
+        'exit_code' => $exitCode,
+        'output' => $output
+    ];
+}
+
+/**
+ * Führt eine syntaktische Prüfung der BIND-Konfiguration durch.
+ * Gibt die vollständige Ausgabe von named-checkconf zurück (Kompatibilität; intern checkBindConfig()).
+ *
+ * @return string Konsolenausgabe (auch bei Erfolg)
+ */
+function validateZoneConfFile(): string {
+    return checkBindConfig()['output'];
 }
 
 /**

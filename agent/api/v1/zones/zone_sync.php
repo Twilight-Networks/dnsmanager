@@ -78,6 +78,20 @@ if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für die Zonenübernahme']);
 }
 
+// === named-checkconf-Preflight (unter dem Lock, vor Übernahme und Reload) ===
+$preflight = checkBindConfig();
+if (!$preflight['ok']) {
+    @unlink($tmpPath);
+    flock($lockHandle, LOCK_UN);
+    fclose($lockHandle);
+    sendJsonResponse(422, [
+        'status' => 'error',
+        'message' => 'BIND-Konfigurationsprüfung (named-checkconf) fehlgeschlagen – Zonendatei nicht übernommen, kein Reload',
+        'check_output' => trim($preflight['output']),
+        'exit_code' => $preflight['exit_code']
+    ]);
+}
+
 // === Zonendatei übernehmen ===
 if (!rename($tmpPath, $finalPath)) {
     @unlink($tmpPath);

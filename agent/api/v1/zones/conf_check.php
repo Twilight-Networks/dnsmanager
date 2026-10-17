@@ -22,24 +22,22 @@ $config = require __DIR__ . '/../../../config/api_config.php';
 $validTokens = loadApiTokens($config['token_file']);
 requireValidToken($validTokens);
 
-// === named-checkconf ausführen ===
-$output = trim(validateZoneConfFile());
+// === named-checkconf ausführen (Exit-Code-basiert) ===
+$check = checkBindConfig();
+$output = trim($check['output']);
 
-// === Status ermitteln (robust) ===
-$lower = strtolower($output);
-$hasError = !empty($output) && (
-    strpos($lower, 'unknown') !== false ||
-    strpos($lower, 'unexpected') !== false ||
-    strpos($lower, 'permission') !== false ||
-    strpos($lower, 'failed') !== false ||
-    preg_match('/:\d+:/', $output) // typische Form: /pfad/datei:zeile: fehlertext
-);
-$hasWarning = stripos($output, 'warning:') !== false;
+// === Status ermitteln: Exit-Code != 0 = error; bei Exit-Code 0 ggf. warning ===
+if (!$check['ok']) {
+    $status = 'error';
+} elseif (stripos($output, 'warning:') !== false) {
+    $status = 'warning';
+} else {
+    $status = 'ok';
+}
 
-$status = $hasError ? 'error' : ($hasWarning ? 'warning' : 'ok');
-
-// === Antwort senden ===
+// === Antwort senden (HTTP 200 wie bisher; Status im JSON) ===
 sendJsonResponse(200, [
     'status' => $status,
-    'check_output' => $output
+    'check_output' => $output,
+    'exit_code' => $check['exit_code']
 ]);
