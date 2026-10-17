@@ -34,7 +34,7 @@ if ($_SESSION['role'] !== 'admin') {
     $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
     $stmt->execute([$id, $_SESSION['user_id']]);
     if (!$stmt->fetch()) {
-        logAccessDenied("Unbefugter Zugriff auf Zone-ID $id");
+        logAccessDenied('zone_update', "Unbefugter Zugriff auf Zone-ID $id");
         http_response_code(403);
         exit('Zugriff verweigert.');
     }

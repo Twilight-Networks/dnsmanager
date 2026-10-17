@@ -176,6 +176,7 @@ return [
     'record_error_auto_ptr_no_zone'     => 'PTR record not possible – corresponding reverse zone %s does not exist.',
     'record_error_auto_ptr_duplicate'   => 'PTR record not possible – PTR for %s already exists in zone %s.',
     'record_error_auto_ptr_db'          => 'Error while creating PTR record automatically.',
+    'record_error_auto_ptr_denied'      => 'PTR record not created – no permission for reverse zone %s.',
 
     'record_error_dkim_file_too_large'    => 'The file is too large. Maximum allowed size is 2 KB.',
     'record_error_dkim_invalid_extension' => 'Only .txt files are allowed.',

@@ -52,14 +52,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
         $stmt->execute([$zone_id, $_SESSION['user_id']]);
         if (!$stmt->fetch()) {
-            logAccessDenied("Unbefugter Update-Versuch durch UID {$_SESSION['user_id']} auf ZID $zone_id");
+            logAccessDenied('record_update', "Unbefugter Update-Versuch durch UID {$_SESSION['user_id']} auf ZID $zone_id");
             http_response_code(403);
             exit('Zugriff verweigert: Keine Berechtigung für diese Zone.');
         }
     }
 
     // Validierung
-    $errors = validateDnsRecord($validator_type, $name, $content, null, $ttl);
+    $errors = validateDnsRecord($validator_type, $name, $content, $ttl);
     if (!empty($errors)) {
         foreach ($errors as $error) {
             toastError(

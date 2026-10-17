@@ -176,6 +176,7 @@ return [
     'record_error_auto_ptr_no_zone'     => 'Registro PTR no posible – la zona inversa correspondiente %s no existe.',
     'record_error_auto_ptr_duplicate'   => 'Registro PTR no posible – ya existe un PTR para %s en la zona %s.',
     'record_error_auto_ptr_db'          => 'Error al crear automáticamente el registro PTR.',
+    'record_error_auto_ptr_denied'      => 'Registro PTR no creado – sin permiso para la zona inversa %s.',
 
     'record_error_dkim_file_too_large'    => 'El archivo es demasiado grande. El tamaño máximo permitido es de 2 KB.',
     'record_error_dkim_invalid_extension' => 'Solo se permiten archivos con extensión .txt.',

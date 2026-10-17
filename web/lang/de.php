@@ -176,6 +176,7 @@ return [
     'record_error_auto_ptr_no_zone'     => 'PTR-Eintrag nicht möglich – passende Reverse-Zone %s ist nicht vorhanden.',
     'record_error_auto_ptr_duplicate'   => 'PTR-Eintrag nicht möglich – in der Zone %s existiert bereits ein PTR für %s.',
     'record_error_auto_ptr_db'          => 'Fehler beim automatischen PTR-Eintrag.',
+    'record_error_auto_ptr_denied'      => 'PTR-Eintrag nicht angelegt – keine Berechtigung für die Reverse-Zone %s.',
 
     'record_error_dkim_file_too_large'    => 'Die Datei ist zu groß. Die maximale Dateigröße beträgt 2 KB.',
     'record_error_dkim_invalid_extension' => 'Nur .txt-Dateien sind erlaubt.',

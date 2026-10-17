@@ -42,7 +42,7 @@ if ($_SESSION['role'] === 'admin') {
 $zone = $stmt->fetch();
 
 if (!$zone) {
-    logAccessDenied('Benutzer-ID ' . ($_SESSION['user_id'] ?? 'unbekannt') . ' versucht unbefugten Zugriff auf Zone-ID ' . $zone_id);
+    logAccessDenied('records', 'Benutzer-ID ' . ($_SESSION['user_id'] ?? 'unbekannt') . ' versucht unbefugten Zugriff auf Zone-ID ' . $zone_id);
     http_response_code(403);
     exit('Zugriff verweigert: Keine Berechtigung für diese Zone.');
 }
