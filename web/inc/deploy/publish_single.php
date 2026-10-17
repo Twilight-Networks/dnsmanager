@@ -6,6 +6,8 @@
  * Hinweis: Nur verwenden, wenn vorher rebuild_zone_and_flag_if_valid() erfolgreich war!
  */
 
+// Web-Bootstrap explizit laden (Konfiguration, globale DB-Verbindung): Der Generator tut das nicht mehr selbst.
+require_once __DIR__ . '/../../common.php';
 require_once __DIR__ . '/bind_file_generator.php';
 require_once __DIR__ . '/bind_file_distributor.php';
 
