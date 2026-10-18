@@ -14,6 +14,10 @@
  * Verhalten:
  * - Bei erfolgreicher Löschung: Erfolgsmeldung per Toast
  * - Bei Fehlern: Fehler-Toast mit Exception-Details
+ * - Wurden A-/AAAA-Records gelöscht, wird die Zone innerhalb derselben Transaktion
+ *   validiert und für das Publizieren markiert (changed=1). Schlägt die Validierung
+ *   fehl, wird alles (Records und Account) zurückgerollt.
+ * - Es wird nicht sofort publiziert (Veröffentlichung später über „Alle publizieren“)
  * - Redirect zurück zur Verwaltungsseite `dyndns.php`
  */
 
@@ -54,17 +58,35 @@ try {
           AND type IN ('A', 'AAAA')
     ");
     $stmt->execute([$account['zone_id'], $account['hostname']]);
+    $deletedRecords = $stmt->rowCount();
 
     // DynDNS-Account löschen
     $stmt = $pdo->prepare("DELETE FROM dyndns_accounts WHERE id = ?");
     $stmt->execute([$id]);
+
+    // Zone nur validieren/markieren, wenn tatsächlich Records gelöscht wurden.
+    // Gleiche Transaktion (explizites PDO): bei Fehler wird alles zurückgerollt.
+    if ($deletedRecords > 0) {
+        $zid    = (int)$account['zone_id'];
+        $result = rebuild_zone_and_flag_if_valid($zid, $pdo);
+        if ($result['status'] === 'error') {
+            $pdo->rollBack();
+            toastError(sprintf($LANG['zone_rebuild_failed'], $zid), $result['output']);
+            header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php');
+            exit;
+        } elseif ($result['status'] === 'warning') {
+            toastWarning(sprintf($LANG['zone_rebuild_warning'], $zid), $result['output']);
+        }
+    }
 
     $pdo->commit();
 
     toastSuccess($LANG['dyndns_delete_success']);
 
 } catch (Throwable $e) {
-    $pdo->rollBack();
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
     toastError($LANG['dyndns_error_delete'] . ': ' . $e->getMessage());
 }
 

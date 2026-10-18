@@ -49,7 +49,7 @@ $stmt = $pdo->prepare("SELECT id FROM zones WHERE id = ? AND allow_dyndns = 1");
 $stmt->execute([$zone_id]);
 if (!$stmt->fetch()) {
     toastError($LANG['dyndns_error_zone_not_allowed']);
-    ("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?add_new=1');
+    header("Location: " . rtrim(BASE_URL, '/') . '/pages/dyndns.php?add_new=1');
     exit;
 }
 
