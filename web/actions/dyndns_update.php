@@ -96,7 +96,9 @@ try {
         $stmt->execute([$hostname, $zone_id, $username, $id]);
     }
 
-    $affected_zones = [];
+    $zonesToRebuild      = [];
+    $deletedOldRecords   = 0;
+    $hasInsertedAny      = false;
 
     // Wenn Hostname oder Zone geändert wurde, DNS-Records entsprechend anpassen
     if ($hostnameChanged || $zoneChanged) {
@@ -105,10 +107,14 @@ try {
             DELETE FROM records WHERE zone_id = ? AND name = ? AND type IN ('A', 'AAAA')
         ");
         $stmt->execute([$existing['zone_id'], $existing['hostname']]);
-        $affected_zones[] = $existing['zone_id'];
+        $deletedOldRecords = $stmt->rowCount();
+
+        // Alte Zone nur markieren, wenn dort tatsächlich Records gelöscht wurden
+        if ($deletedOldRecords > 0) {
+            $zonesToRebuild[] = (int)$existing['zone_id'];
+        }
 
         // Neue A/AAAA-Records in neuer Zone anlegen – mit bestehenden IPs
-        $hasInsertedAny = false;
 
         if (!empty($current_ipv4)) {
             $stmt = $pdo->prepare("
@@ -132,14 +138,17 @@ try {
             toastWarning($LANG['dyndns_no_ip_warning'], 'Es wurden keine A-/AAAA-Records gesetzt, da keine aktuelle IP vorliegt.');
         }
 
-        $affected_zones[] = $zone_id;
+        // Neue Zone nur markieren, wenn dort tatsächlich Records angelegt wurden
+        if ($hasInsertedAny) {
+            $zonesToRebuild[] = (int)$zone_id;
+        }
     }
 
-    // Zonen neu bauen – aber nur, wenn mindestens ein Record geschrieben wurde
-    if (!empty($affected_zones) && $hasInsertedAny) {
-        $affected_zones = array_unique($affected_zones);
-        foreach ($affected_zones as $zid) {
-            $result = rebuild_zone_and_flag_if_valid((int)$zid);
+    // Betroffene Zonen (je einmal) in derselben Transaktion validieren und markieren
+    $zonesToRebuild = array_values(array_unique($zonesToRebuild));
+    if (!empty($zonesToRebuild)) {
+        foreach ($zonesToRebuild as $zid) {
+            $result = rebuild_zone_and_flag_if_valid((int)$zid, $pdo);
             if ($result['status'] === 'error') {
                 $pdo->rollBack();
                 toastError(sprintf($LANG['zone_rebuild_failed'], $zid), $result['output']);
@@ -152,13 +161,15 @@ try {
     }
 
     $pdo->commit();
-    if (!empty($affected_zones) && $hasInsertedAny) {
+    if (!empty($zonesToRebuild)) {
         toastSuccess($LANG['dyndns_updated'], 'Änderungen gespeichert und betroffene Zonen rebuildet.');
     } else {
         toastSuccess($LANG['dyndns_updated'], 'Änderungen gespeichert – kein Zonen-Rebuild notwendig.');
     }
 } catch (Throwable $e) {
-    $pdo->rollBack();
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
     toastError($LANG['dyndns_error_update'] . ': ' . $e->getMessage());
 }
 
