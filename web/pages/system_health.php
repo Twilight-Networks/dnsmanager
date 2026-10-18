@@ -13,13 +13,14 @@
 
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/diagnostics.php';
-include __DIR__ . '/../templates/layout.php';
 
-// Zugriffsbeschränkung: Nur Administratoren dürfen diese Seite aufrufen
-if ($_SESSION['role'] !== 'admin') {
-    http_response_code(403);
-    exit('Zugriff verweigert.');
-}
+// Zugriffsbeschränkung: Nur Administratoren dürfen diese Seite aufrufen (vor jeder Layout-Ausgabe)
+requireRole(['admin']);
+
+// POST (z. B. "Status jetzt aktualisieren") nur mit gültigem CSRF-Token; GET bleibt unberührt
+verify_csrf_token();
+
+include __DIR__ . '/../templates/layout.php';
 
 // Systemstatus
 $php_version = get_php_version();
@@ -137,6 +138,7 @@ foreach ($conf_results as $entry) {
 <h2 class="mb-4"><?= $LANG['system_status'] ?></h2>
 
 <form method="post" action="pages/system_health.php" class="mb-3">
+    <?= csrf_input() ?>
     <input type="hidden" name="force_update" value="1">
     <button type="submit" class="btn btn-sm btn-outline-primary">
         🔄 <?= $LANG['system_update_now'] ?>

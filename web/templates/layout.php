@@ -124,11 +124,13 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
 
     <!-- "Veröffentlichen"-Button, falls Zonen geändert wurden -->
     <?php if (isset($_SESSION['user_id']) && $dirty): ?>
-        <a id="publishButton"
-           href="actions/publish_all.php?return=<?= urlencode($_SERVER['REQUEST_URI']) ?>"
-           class="nav-link dirty">
-           🔄 <?= $btn_text ?>
-        </a>
+        <form method="post" action="actions/publish_all.php" class="m-0">
+            <?= csrf_input() ?>
+            <input type="hidden" name="return" value="<?= htmlspecialchars($_SERVER['REQUEST_URI'] ?? '') ?>">
+            <button type="submit" id="publishButton" class="nav-link dirty">
+               🔄 <?= $btn_text ?>
+            </button>
+        </form>
     <?php endif; ?>
 
     <!-- Benutzerinfos + Logout -->
