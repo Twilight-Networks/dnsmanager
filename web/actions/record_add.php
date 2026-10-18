@@ -171,6 +171,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
                 break;
 
+            case 'record.create.dyndns_reserved':
+                toastError(
+                    sprintf(
+                        $LANG['record_error_dyndns_' . strtolower((string)$ctx['reason'])] ?? $LANG['record_error_dyndns_generic'],
+                        '<code>' . htmlspecialchars((string)$ctx['name']) . '</code>'
+                    ),
+                    "Anlegen von {$ctx['type']} {$ctx['name']} in Zone {$ctx['zoneName']} (ID {$ctx['zoneId']}) durch DynDNS-Reservierung blockiert: {$ctx['reason']} (Hostname '{$ctx['hostname']}')"
+                );
+                break;
+
             case 'record.create.zonefile_invalid':
                 toastError(
                     $LANG['record_error_zonefile_invalid'],
@@ -238,6 +248,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             case 'record.create.ptr_created':
                 // Bisher keine eigene Ausgabe
+                break;
+
+            default:
+                // Unbekannte ServiceMessages nie still verwerfen
+                if ($message->kind === 'error') {
+                    toastError(
+                        $LANG['record_error_unhandled'],
+                        "Unbehandelte ServiceMessage '{$message->code}' (record_add)"
+                    );
+                } else {
+                    appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (record_add)");
+                }
                 break;
         }
     }

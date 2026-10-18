@@ -65,6 +65,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
                 break;
 
+            case 'record.delete.dyndns_managed':
+                toastError(
+                    sprintf(
+                        $LANG['record_error_dyndns_' . strtolower((string)$ctx['reason'])] ?? $LANG['record_error_dyndns_generic'],
+                        '<code>' . htmlspecialchars((string)$ctx['recordName']) . '</code>'
+                    ),
+                    "Löschversuch für {$ctx['recordType']} {$ctx['recordName']} in Zone '{$ctx['zoneName']}' durch DynDNS-Schutz blockiert: {$ctx['reason']} (Hostname '{$ctx['hostname']}')"
+                );
+                break;
+
             case 'record.delete.zonefile_warning':
                 toastWarning(
                     sprintf($LANG['record_warning_zonefile_check_after_delete'], "<strong>{$ctx['zoneName']}</strong>"),
@@ -84,6 +94,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $LANG['record_deleted_success'],
                     "Alle ausgewählten Records wurden erfolgreich entfernt."
                 );
+                break;
+
+            default:
+                // Unbekannte ServiceMessages nie still verwerfen
+                if ($message->kind === 'error') {
+                    toastError(
+                        $LANG['record_error_unhandled'],
+                        "Unbehandelte ServiceMessage '{$message->code}' (record_delete)"
+                    );
+                } else {
+                    appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (record_delete)");
+                }
                 break;
         }
     }

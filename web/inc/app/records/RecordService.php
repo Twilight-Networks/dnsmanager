@@ -14,6 +14,13 @@
  * das bestehende Ergebnis-Array (u. a. 'status'). Er muss auf derselben
  * DB-Connection/Transaktion arbeiten wie das übergebene PDO-Objekt, damit noch
  * nicht committete Record-Änderungen sichtbar sind.
+ *
+ * Nebenläufigkeit (zone-first): Create, Update und Delete beginnen ihre Transaktion mit dem
+ * Sperren der betroffenen Zonenzeile(n) (dyndnsLockZones, aufsteigende Zonen-ID, erste Abfrage
+ * der Transaktion) - dieselbe Reihenfolge wie DynDNS-Verwaltung und DynDNS-API. Alle
+ * zustandsabhängigen Lesezugriffe und Prüfungen erfolgen erst unter dieser Sperre. Die Garantie
+ * gilt nur für Schreibpfade, die dieselbe Zonensperre verwenden; createAutoPtr() ist davon
+ * bewusst nicht erfasst.
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -22,6 +29,7 @@ require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../../glue_check.php';
 require_once __DIR__ . '/../../validators.php';
+require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/RecordInput.php';
 
 final class RecordService
@@ -50,10 +58,29 @@ final class RecordService
     }
 
     /**
+     * Rollback nur, wenn noch eine Transaktion aktiv ist (z. B. nicht nach einem
+     * von InnoDB bereits zurückgerollten Deadlock/Lock-Timeout).
+     */
+    private function rollbackIfActive(): void
+    {
+        if ($this->pdo->inTransaction()) {
+            $this->pdo->rollBack();
+        }
+    }
+
+    /**
      * Löscht die angegebenen Records atomar in einer Transaktion.
      *
      * Ein Fehler bei einem Record (fehlender Record, fehlende Berechtigung,
      * Glue-/NS-Schutz, Rebuild-Fehler) führt zum vollständigen Rollback.
+     *
+     * Ablauf (zone-first): Die Zonen der Records werden zunächst ohne Sperre ermittelt.
+     * Danach beginnt die Transaktion mit dem Sperren ALLER betroffenen Zonen, in denen der
+     * Akteur schreiben darf, in aufsteigender ID-Reihenfolge (dyndnsLockZones, erste Abfrage
+     * der Transaktion). Erst unter diesen
+     * Sperren werden Records, Zonenname, Berechtigung und Schutzregeln geprüft (jeweils frisch
+     * gelesen) und gelöscht. Die Verarbeitungsreihenfolge der IDs und alle Meldungen bleiben
+     * wie bisher.
      *
      * @param Actor $actor
      * @param int[] $ids Record-IDs
@@ -66,9 +93,36 @@ final class RecordService
         $messages = [];
         $lastZoneId = null;
 
-        $pdo->beginTransaction();
-
         try {
+            // Zonen der Records ohne Sperre ermitteln (nur zur Bestimmung der Sperrmenge).
+            // Fehlende Records werden erst in der Verarbeitungsreihenfolge unter der Sperre gemeldet.
+            $expectedZone = [];
+            $zoneIds = [];
+            $stmt = $pdo->prepare("SELECT zone_id FROM records WHERE id = ?");
+            foreach ($ids as $id) {
+                $stmt->execute([$id]);
+                $zid = $stmt->fetchColumn();
+                $stmt->closeCursor();
+                $expectedZone[$id] = ($zid === false) ? null : (int)$zid;
+                if ($zid !== false) {
+                    $zoneIds[] = (int)$zid;
+                }
+            }
+
+            // Nur Zonen sperren, in denen der Akteur schreiben darf: Unberechtigte können keine
+            // Zonensperren anfordern. Die Berechtigung wird unter der Sperre erneut geprüft.
+            $lockIds = [];
+            foreach (array_unique($zoneIds) as $zid) {
+                if ($this->zoneAccess->canWriteZone($actor, $zid)) {
+                    $lockIds[] = $zid;
+                }
+            }
+
+            $pdo->beginTransaction();
+
+            // Erste Abfrage der Transaktion: alle betroffenen Zonen aufsteigend sperren
+            $zones = dyndnsLockZones($pdo, $lockIds);
+
             $affected_zones = [];
 
             foreach ($ids as $id) {
@@ -76,15 +130,15 @@ final class RecordService
                 $stmt->execute([$id]);
                 $record = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                if (!$record) {
+                // Record muss noch existieren und weiterhin in der erwarteten Zone liegen
+                if (!$record || $expectedZone[$id] === null || (int)$record['zone_id'] !== $expectedZone[$id]) {
                     throw new RuntimeException("Record mit ID $id nicht gefunden.");
                 }
 
                 $zone_id = (int)$record['zone_id'];
                 $lastZoneId = $zone_id;
-                $zone_name = getZoneName($pdo, $zone_id);
 
-                // Rechte prüfen
+                // Rechte prüfen (unter der Zonensperre bzw. ohne Sperre für nicht berechtigte Zonen)
                 if (!$this->zoneAccess->canWriteZone($actor, $zone_id)) {
                     $messages[] = new ServiceMessage('audit', 'record.delete.access_denied', [
                         'userId'   => $actor->userId,
@@ -93,6 +147,15 @@ final class RecordService
                     ]);
                     throw new RuntimeException("Keine Berechtigung für Record-ID $id.");
                 }
+
+                // Nur gesperrte Zonen dürfen verändert werden (fail-closed, z. B. bei zwischenzeitlich
+                // erteilter Berechtigung oder gelöschter Zone)
+                if (!isset($zones[$zone_id])) {
+                    throw new RuntimeException("Zone $zone_id zu Record-ID $id nicht gesperrt oder nicht gefunden.");
+                }
+
+                // Aktueller Zonenname unter der Sperre
+                $zone_name = (string)$zones[$zone_id]['name'];
 
                 // Glue-Check
                 $all_records = getAllZoneRecords($pdo, $zone_id);
@@ -113,15 +176,51 @@ final class RecordService
                     throw new RuntimeException("Löschen von geschütztem NS-Record nicht erlaubt.");
                 }
 
-                // Löschen
-                $stmt = $pdo->prepare("DELETE FROM records WHERE id = ?");
-                $stmt->execute([$id]);
+                // DynDNS-Schutz: Verwaltete oder nicht zuordenbare A/AAAA-Records an reservierten
+                // Hostnamen dürfen nicht über den RecordService gelöscht werden
+                $violation = dyndnsCheckRecordChange($pdo, $zone_id, $zone_name, $record, null);
+                if ($violation !== null) {
+                    $messages[] = new ServiceMessage('error', 'record.delete.dyndns_managed', [
+                        'reason'     => $violation['code'],
+                        'recordName' => $record['name'],
+                        'recordType' => $record['type'],
+                        'hostname'   => $violation['hostname'],
+                        'zoneName'   => $zone_name,
+                    ]);
+                    throw new RuntimeException("Löschen eines von DynDNS verwalteten Records nicht erlaubt ({$violation['code']}).");
+                }
+
+                // Löschen bedingt auf den zuvor unter der Sperre gelesenen Zustand
+                // (analog zum bedingten UPDATE in updateRecord(); NULL-sicher für ttl/server_id)
+                $stmt = $pdo->prepare("
+                    DELETE FROM records
+                    WHERE id = ?
+                      AND zone_id = ?
+                      AND BINARY name = ?
+                      AND type = ?
+                      AND BINARY content = ?
+                      AND ttl <=> ?
+                      AND server_id <=> ?
+                ");
+                $stmt->execute([
+                    $id,
+                    $zone_id,
+                    (string)$record['name'],
+                    (string)$record['type'],
+                    (string)$record['content'],
+                    $record['ttl'],
+                    $record['server_id'],
+                ]);
+
+                if ($stmt->rowCount() !== 1) {
+                    throw new RuntimeException("Record mit ID $id wurde zwischenzeitlich geändert.");
+                }
 
                 // Merken, welche Zonen betroffen sind
                 $affected_zones[$zone_id] = $zone_name;
             }
 
-            // Zonendateien prüfen
+            // Zonendateien prüfen (alle Zonen sind bereits gesperrt; die Reihenfolge ist wie bisher)
             foreach ($affected_zones as $zone_id => $zone_name) {
                 // Wie bisher: die Schleifenvariable bestimmt auch die letzte Zone
                 $lastZoneId = $zone_id;
@@ -145,7 +244,7 @@ final class RecordService
 
             return new ServiceResult(true, $messages, $lastZoneId);
         } catch (Throwable $e) {
-            $pdo->rollBack();
+            $this->rollbackIfActive();
             $messages[] = new ServiceMessage('error', 'record.delete.failed', [
                 'detail' => $e->getMessage(),
             ]);
@@ -157,9 +256,12 @@ final class RecordService
     /**
      * Aktualisiert einen bestehenden Record.
      *
-     * Ablauf: Berechtigung -> Validierung -> Record laden -> No-Change-Prüfung
-     * -> Glue-Schutz -> NS-Schutz -> Transaktion (UPDATE, Rebuild, Commit).
-     * Die Transaktion beginnt erst nach allen Vorprüfungen.
+     * Ablauf (zone-first): Berechtigung -> Validierung (ohne Datenbankzustand) -> Transaktion.
+     * Die erste Abfrage der Transaktion sperrt die Zone (dyndnsLockZones). Erst danach werden
+     * alle zustandsabhängigen Informationen frisch gelesen und geprüft: Zonenname,
+     * Schreibberechtigung, Record samt Zonenzuordnung, No-Change-Prüfung, Glue-Schutz,
+     * NS-Schutz und DynDNS-Reservierungen. Das UPDATE ist bedingt auf den zuvor gelesenen
+     * Zustand des Records.
      *
      * @param Actor       $actor
      * @param int         $recordId
@@ -178,7 +280,7 @@ final class RecordService
         $content = $input->content;
         $ttl     = $input->ttl;
 
-        // Berechtigung prüfen
+        // Berechtigung prüfen (frühe Ablehnung; wird unter der Zonensperre erneut geprüft)
         if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
             $messages[] = new ServiceMessage('audit', 'record.update.access_denied', [
                 'userId' => $actor->userId,
@@ -188,11 +290,11 @@ final class RecordService
             return new ServiceResult(false, $messages, $zoneId);
         }
 
-        // Zonenname (für Meldungen ohne abschließenden Punkt, für Helper unverändert)
+        // Zonenname für Validierungsmeldungen (maßgeblich ist der Name unter der Zonensperre)
         $zoneNameRaw = getZoneName($pdo, $zoneId);
         $zoneName    = rtrim($zoneNameRaw, '.');
 
-        // Validierung
+        // Validierung (unabhängig vom Datenbankzustand)
         $validatorType = $input->validationType ?? (($type === 'TXT' && $input->isDkim) ? 'DKIM' : $type);
         $errors = validateDnsRecord($validatorType, $name, $content, $ttl);
         if (!empty($errors)) {
@@ -208,102 +310,187 @@ final class RecordService
             return new ServiceResult(false, $messages, $zoneId);
         }
 
-        // Record holen
-        $stmt = $pdo->prepare("SELECT * FROM records WHERE id = ? AND zone_id = ?");
-        $stmt->execute([$recordId, $zoneId]);
-        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$existing) {
-            $messages[] = new ServiceMessage('error', 'record.update.not_found', [
-                'recordId' => $recordId,
-                'zoneId'   => $zoneId,
-            ]);
-
-            return new ServiceResult(false, $messages, $zoneId);
-        }
-
-        // Änderungen vergleichen: Wenn sich nichts geändert hat, abbrechen
-        $hasChanged = false;
-        $hasChanged |= trim($existing['name']) !== trim($name);
-        $hasChanged |= trim($existing['type']) !== trim($type);
-        $hasChanged |= trim($existing['content']) !== trim($content);
-        $hasChanged |= (int)$existing['ttl'] !== (int)$ttl;
-
-        if (!$hasChanged) {
-            $messages[] = new ServiceMessage('success', 'record.update.no_changes', [
-                'zoneId' => $zoneId,
-            ]);
-
-            return new ServiceResult(true, $messages, $zoneId);
-        }
-
-        // Glue-Check
-        if (isGlueRecord($existing, getAllZoneRecords($pdo, $zoneId), $zoneNameRaw)) {
-            $violation = false;
-
-            if ($existing['name'] !== $name) {
-                $messages[] = new ServiceMessage('error', 'record.update.glue_name_change', [
-                    'existingName' => $existing['name'],
-                    'zoneName'     => $zoneName,
-                ]);
-                $violation = true;
-            }
-            if ($existing['type'] !== $type) {
-                $messages[] = new ServiceMessage('error', 'record.update.glue_type_change', [
-                    'existingType' => $existing['type'],
-                    'zoneName'     => $zoneName,
-                ]);
-                $violation = true;
-            }
-            if ($violation) {
-                return new ServiceResult(false, $messages, $zoneId);
-            }
-        }
-
-        // Geschützte NS-Records dürfen nicht bearbeitet werden
-        if (
-            $existing['type'] === 'NS' &&
-            isProtectedNsRecord($existing, getAllZoneRecords($pdo, $zoneId), $zoneNameRaw, $pdo, $zoneId)
-        ) {
-            $violation = false;
-
-            if ($existing['name'] !== $name) {
-                $messages[] = new ServiceMessage('error', 'record.update.ns_name_change', [
-                    'existingName' => $existing['name'],
-                    'zoneName'     => $zoneName,
-                ]);
-                $violation = true;
-            }
-            if ($existing['content'] !== $content) {
-                $messages[] = new ServiceMessage('error', 'record.update.ns_content_change', [
-                    'existingContent' => $existing['content'],
-                    'zoneName'        => $zoneName,
-                ]);
-                $violation = true;
-            }
-            if ($violation) {
-                return new ServiceResult(false, $messages, $zoneId);
-            }
-        }
-
-        // Update durchführen
-        // Transaktion starten
-        $pdo->beginTransaction();
-
         try {
-            // Record aktualisieren
+            $pdo->beginTransaction();
+
+            // Erste Abfrage der Transaktion: Zone sperren
+            $zones = dyndnsLockZones($pdo, [$zoneId]);
+
+            if (!isset($zones[$zoneId])) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('error', 'record.update.not_found', [
+                    'recordId' => $recordId,
+                    'zoneId'   => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            // Aktueller Zonenname unter der Sperre (die Zone kann zwischenzeitlich umbenannt worden sein)
+            $zoneNameRaw = (string)$zones[$zoneId]['name'];
+            $zoneName    = rtrim($zoneNameRaw, '.');
+
+            // Berechtigung unter der Sperre erneut prüfen (z. B. Entzug der Zonenzuweisung)
+            if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('audit', 'record.update.access_denied', [
+                    'userId' => $actor->userId,
+                    'zoneId' => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            // Record frisch laden; die Zonenzuordnung wird über zone_id mitgeprüft
+            $stmt = $pdo->prepare("SELECT * FROM records WHERE id = ? AND zone_id = ?");
+            $stmt->execute([$recordId, $zoneId]);
+            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$existing) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('error', 'record.update.not_found', [
+                    'recordId' => $recordId,
+                    'zoneId'   => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            // Änderungen vergleichen: Wenn sich nichts geändert hat, abbrechen
+            $hasChanged = false;
+            $hasChanged |= trim($existing['name']) !== trim($name);
+            $hasChanged |= trim($existing['type']) !== trim($type);
+            $hasChanged |= trim($existing['content']) !== trim($content);
+            $hasChanged |= (int)$existing['ttl'] !== (int)$ttl;
+
+            if (!$hasChanged) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('success', 'record.update.no_changes', [
+                    'zoneId' => $zoneId,
+                ]);
+
+                return new ServiceResult(true, $messages, $zoneId);
+            }
+
+            // Glue-Check
+            $allRecords = getAllZoneRecords($pdo, $zoneId);
+            if (isGlueRecord($existing, $allRecords, $zoneNameRaw)) {
+                $violation = false;
+
+                if ($existing['name'] !== $name) {
+                    $messages[] = new ServiceMessage('error', 'record.update.glue_name_change', [
+                        'existingName' => $existing['name'],
+                        'zoneName'     => $zoneName,
+                    ]);
+                    $violation = true;
+                }
+                if ($existing['type'] !== $type) {
+                    $messages[] = new ServiceMessage('error', 'record.update.glue_type_change', [
+                        'existingType' => $existing['type'],
+                        'zoneName'     => $zoneName,
+                    ]);
+                    $violation = true;
+                }
+                if ($violation) {
+                    $this->rollbackIfActive();
+
+                    return new ServiceResult(false, $messages, $zoneId);
+                }
+            }
+
+            // Geschützte NS-Records dürfen nicht bearbeitet werden
+            if (
+                $existing['type'] === 'NS' &&
+                isProtectedNsRecord($existing, $allRecords, $zoneNameRaw, $pdo, $zoneId)
+            ) {
+                $violation = false;
+
+                if ($existing['name'] !== $name) {
+                    $messages[] = new ServiceMessage('error', 'record.update.ns_name_change', [
+                        'existingName' => $existing['name'],
+                        'zoneName'     => $zoneName,
+                    ]);
+                    $violation = true;
+                }
+                if ($existing['content'] !== $content) {
+                    $messages[] = new ServiceMessage('error', 'record.update.ns_content_change', [
+                        'existingContent' => $existing['content'],
+                        'zoneName'        => $zoneName,
+                    ]);
+                    $violation = true;
+                }
+                if ($violation) {
+                    $this->rollbackIfActive();
+
+                    return new ServiceResult(false, $messages, $zoneId);
+                }
+            }
+
+            // DynDNS-Reservierungen: bisherigen UND beabsichtigten Namen/Typ bewerten.
+            // Gilt auch für Glue-/Systemrecords an reservierten Hostnamen (DynDNS hat Vorrang).
+            $dyndnsViolation = dyndnsCheckRecordChange(
+                $pdo,
+                $zoneId,
+                $zoneNameRaw,
+                $existing,
+                ['name' => $name, 'type' => $type, 'content' => $content, 'ttl' => $ttl]
+            );
+            if ($dyndnsViolation !== null) {
+                $this->rollbackIfActive();
+                $isReservedName = in_array($dyndnsViolation['code'], ['MANAGED_RECORD', 'AMBIGUOUS_RECORD'], true) === false;
+                $messages[] = new ServiceMessage(
+                    'error',
+                    $isReservedName ? 'record.update.dyndns_reserved' : 'record.update.dyndns_managed',
+                    [
+                        'reason'       => $dyndnsViolation['code'],
+                        'type'         => $type,
+                        'name'         => $name,
+                        'existingName' => $existing['name'],
+                        'existingType' => $existing['type'],
+                        'hostname'     => $dyndnsViolation['hostname'],
+                        'zoneName'     => $zoneName,
+                    ]
+                );
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            // Record bedingt auf den zuvor unter der Sperre gelesenen Zustand aktualisieren
+            // (kein "server_id IS NULL": erlaubte Glue-/Systemrecord-Änderungen bleiben möglich)
             $stmt = $pdo->prepare("
                 UPDATE records
                 SET name = ?, type = ?, content = ?, ttl = ?
                 WHERE id = ?
+                  AND zone_id = ?
+                  AND BINARY name = ?
+                  AND type = ?
+                  AND BINARY content = ?
+                  AND ttl <=> ?
+                  AND server_id <=> ?
             ");
-            $stmt->execute([$name, $type, $content, $ttl, $recordId]);
+            $stmt->execute([
+                $name,
+                $type,
+                $content,
+                $ttl,
+                $recordId,
+                $zoneId,
+                (string)$existing['name'],
+                (string)$existing['type'],
+                (string)$existing['content'],
+                $existing['ttl'],
+                $existing['server_id'],
+            ]);
+
+            if ($stmt->rowCount() !== 1) {
+                throw new RuntimeException('Record wurde zwischenzeitlich geändert (rowCount=' . $stmt->rowCount() . ').');
+            }
 
             // Zonendatei testen
             $rebuild = $this->rebuildZone($zoneId);
 
             if ($rebuild['status'] === 'error') {
-                $pdo->rollBack();
+                $this->rollbackIfActive();
                 $messages[] = new ServiceMessage('error', 'record.update.zonefile_invalid', [
                     'output' => $rebuild['output'],
                     'zoneId' => $zoneId,
@@ -321,7 +508,7 @@ final class RecordService
 
             $pdo->commit();
         } catch (Throwable $e) {
-            $pdo->rollBack();
+            $this->rollbackIfActive();
             $messages[] = new ServiceMessage('error', 'record.update.db_save_failed', [
                 'type'     => $type,
                 'name'     => $name,
@@ -346,8 +533,10 @@ final class RecordService
     /**
      * Legt einen neuen Record an und versucht optional einen automatischen PTR.
      *
-     * Ablauf Forward-Record: Berechtigung -> Validierung -> Duplikat-Prüfung
-     * -> Transaktion (INSERT, Rebuild, Commit).
+     * Ablauf Forward-Record (zone-first): Berechtigung -> Validierung (ohne Datenbankzustand)
+     * -> Transaktion. Die erste Abfrage der Transaktion sperrt die Zone (dyndnsLockZones).
+     * Unter der Sperre werden Zonenname, Schreibberechtigung, Duplikat und DynDNS-Reservierungen
+     * frisch geprüft; danach INSERT, Rebuild und Commit.
      *
      * AutoPTR (nur A/AAAA und $autoPtr === true) läuft bewusst erst NACH dem
      * Commit des Forward-Records und in einer eigenen Verarbeitung: Scheitert
@@ -372,7 +561,7 @@ final class RecordService
         $content = $input->content;
         $ttl     = $input->ttl;
 
-        // Berechtigung prüfen
+        // Berechtigung prüfen (frühe Ablehnung; wird unter der Zonensperre erneut geprüft)
         if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
             $messages[] = new ServiceMessage('audit', 'record.create.access_denied', [
                 'userId' => $actor->userId,
@@ -382,10 +571,10 @@ final class RecordService
             return new ServiceResult(false, $messages, $zoneId);
         }
 
-        // Zonenname (für Meldungen ohne abschließenden Punkt)
+        // Zonenname für Validierungsmeldungen (maßgeblich ist der Name unter der Zonensperre)
         $zoneName = rtrim(getZoneName($pdo, $zoneId), '.');
 
-        // Validierung
+        // Validierung (unabhängig vom Datenbankzustand)
         $validatorType = $input->validationType ?? (($type === 'TXT' && $input->isDkim) ? 'DKIM' : $type);
         $errors = validateDnsRecord($validatorType, $name, $content, $ttl);
         if (!empty($errors)) {
@@ -401,22 +590,74 @@ final class RecordService
             return new ServiceResult(false, $messages, $zoneId);
         }
 
-        // Auf Duplikate prüfen
-        if (isDuplicateRecord($pdo, $zoneId, $name, $type, $content)) {
-            $messages[] = new ServiceMessage('error', 'record.create.duplicate', [
-                'type'     => $type,
-                'name'     => $name,
-                'zoneName' => $zoneName,
-                'zoneId'   => $zoneId,
-            ]);
-
-            return new ServiceResult(false, $messages, $zoneId);
-        }
-
-        // Transaktion starten
-        $pdo->beginTransaction();
-
         try {
+            $pdo->beginTransaction();
+
+            // Erste Abfrage der Transaktion: Zone sperren
+            $zones = dyndnsLockZones($pdo, [$zoneId]);
+
+            if (!isset($zones[$zoneId])) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('error', 'record.create.db_save_failed', [
+                    'type'   => $type,
+                    'name'   => $name,
+                    'zoneId' => $zoneId,
+                    'detail' => "Zone $zoneId nicht gefunden.",
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            // Aktueller Zonenname unter der Sperre (die Zone kann zwischenzeitlich umbenannt worden sein)
+            $zoneNameRaw = (string)$zones[$zoneId]['name'];
+            $zoneName    = rtrim($zoneNameRaw, '.');
+
+            // Berechtigung unter der Sperre erneut prüfen (z. B. Entzug der Zonenzuweisung)
+            if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('audit', 'record.create.access_denied', [
+                    'userId' => $actor->userId,
+                    'zoneId' => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            // Auf Duplikate prüfen (unter der Sperre)
+            if (isDuplicateRecord($pdo, $zoneId, $name, $type, $content)) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('error', 'record.create.duplicate', [
+                    'type'     => $type,
+                    'name'     => $name,
+                    'zoneName' => $zoneName,
+                    'zoneId'   => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
+            // DynDNS-Reservierungen prüfen (beabsichtigter Name/Typ)
+            $dyndnsViolation = dyndnsCheckRecordChange(
+                $pdo,
+                $zoneId,
+                $zoneNameRaw,
+                null,
+                ['name' => $name, 'type' => $type, 'content' => $content, 'ttl' => $ttl]
+            );
+            if ($dyndnsViolation !== null) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('error', 'record.create.dyndns_reserved', [
+                    'reason'   => $dyndnsViolation['code'],
+                    'type'     => $type,
+                    'name'     => $name,
+                    'hostname' => $dyndnsViolation['hostname'],
+                    'zoneName' => $zoneName,
+                    'zoneId'   => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
             // Record schreiben
             $stmt = $pdo->prepare("INSERT INTO records (zone_id, name, type, content, ttl) VALUES (?, ?, ?, ?, ?)");
             $stmt->execute([$zoneId, $name, $type, $content, $ttl]);
@@ -425,7 +666,7 @@ final class RecordService
             $rebuild = $this->rebuildZone($zoneId);
 
             if ($rebuild['status'] === 'error') {
-                $pdo->rollBack();
+                $this->rollbackIfActive();
                 $messages[] = new ServiceMessage('error', 'record.create.zonefile_invalid', [
                     'output' => $rebuild['output'],
                     'zoneId' => $zoneId,
@@ -443,9 +684,7 @@ final class RecordService
 
             $pdo->commit();
         } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
+            $this->rollbackIfActive();
             $messages[] = new ServiceMessage('error', 'record.create.db_save_failed', [
                 'type'   => $type,
                 'name'   => $name,

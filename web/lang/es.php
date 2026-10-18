@@ -235,6 +235,16 @@ return [
     'record_deleted_success'                     => 'Registro(s) eliminado(s) con éxito.',
     'record_error_delete_failed'                 => 'Ocurrió un error al eliminar el(los) registro(s).',
 
+    // DynDNS-Reservierungen (RecordService)
+    'record_error_dyndns_reserved_address' => 'El nombre %s está reservado para una cuenta DynDNS. No se pueden crear ni mover registros A/AAAA allí.',
+    'record_error_dyndns_reserved_cname' => 'El nombre %s está reservado para una cuenta DynDNS. Allí no se permite un registro CNAME.',
+    'record_error_dyndns_reserved_delegation' => 'El nombre %s está reservado para una cuenta DynDNS o se encuentra por encima de uno. Allí no se permite un registro NS (delegación).',
+    'record_error_dyndns_reserved_dname' => 'El nombre %s está reservado para una cuenta DynDNS o se encuentra por encima de uno. Allí no se permite un registro DNAME.',
+    'record_error_dyndns_managed_record' => 'El registro A/AAAA %s está gestionado por una cuenta DynDNS. Su nombre, tipo y dirección IP no se pueden cambiar y el registro no se puede eliminar (solo se puede cambiar el TTL). Para quitarlo, elimine la asignación en la gestión de DynDNS.',
+    'record_error_dyndns_ambiguous_record' => 'El registro A/AAAA %s se encuentra en un nombre reservado para DynDNS y no puede asignarse de forma inequívoca a una cuenta DynDNS (p. ej., nombre de host compartido o varios registros). Aquí no se puede cambiar ni eliminar. Elimine primero la(s) asignación(es) DynDNS en la gestión de DynDNS.',
+    'record_error_dyndns_generic' => 'La operación está impedida por una reserva de DynDNS.',
+    'record_error_unhandled' => 'Ocurrió un error inesperado al procesar el registro.',
+
     // js
     'record_mx_invalid_priority' => 'Por favor, introduce una prioridad válida (número) para el registro MX.',
     'record_mx_missing_target' => 'Por favor, proporciona un servidor de correo válido.',

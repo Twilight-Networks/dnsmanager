@@ -116,6 +116,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
                 break;
 
+            case 'record.update.dyndns_reserved':
+                toastError(
+                    sprintf(
+                        $LANG['record_error_dyndns_' . strtolower((string)$ctx['reason'])] ?? $LANG['record_error_dyndns_generic'],
+                        '<code>' . htmlspecialchars((string)$ctx['name']) . '</code>'
+                    ),
+                    "Update blockiert (DynDNS-Reservierung {$ctx['reason']}): {$ctx['existingType']} {$ctx['existingName']} -> {$ctx['type']} {$ctx['name']} in Zone {$ctx['zoneName']} (Hostname '{$ctx['hostname']}')"
+                );
+                break;
+
+            case 'record.update.dyndns_managed':
+                toastError(
+                    sprintf(
+                        $LANG['record_error_dyndns_' . strtolower((string)$ctx['reason'])] ?? $LANG['record_error_dyndns_generic'],
+                        '<code>' . htmlspecialchars((string)$ctx['existingName']) . '</code>'
+                    ),
+                    "Update blockiert (DynDNS {$ctx['reason']}): {$ctx['existingType']} {$ctx['existingName']} -> {$ctx['type']} {$ctx['name']} in Zone {$ctx['zoneName']} (Hostname '{$ctx['hostname']}')"
+                );
+                break;
+
             case 'record.update.zonefile_invalid':
                 toastError(
                     $LANG['record_error_zonefile_invalid'],
@@ -142,6 +162,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     sprintf($LANG['record_updated'], htmlspecialchars($ctx['type']), htmlspecialchars($ctx['name']), htmlspecialchars($ctx['zoneName'])),
                     "DNS-Record {$ctx['type']} {$ctx['name']} erfolgreich geändert in Zone {$ctx['zoneName']} (ID {$ctx['recordId']})"
                 );
+                break;
+
+            default:
+                // Unbekannte ServiceMessages nie still verwerfen
+                if ($message->kind === 'error') {
+                    toastError(
+                        $LANG['record_error_unhandled'],
+                        "Unbehandelte ServiceMessage '{$message->code}' (record_update)"
+                    );
+                } else {
+                    appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (record_update)");
+                }
                 break;
         }
     }
