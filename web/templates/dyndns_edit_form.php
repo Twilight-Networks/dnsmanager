@@ -30,8 +30,25 @@ if (!isset($edit_account)) {
     return;
 }
 
-$stmt = $pdo->query("SELECT id, name FROM zones WHERE allow_dyndns = 1 ORDER BY name");
+// Auswählbare Zonen: freigegebene Forward-Zonen sowie IMMER die aktuelle Zone des Accounts.
+// Fehlt die aktuelle Zone in der Liste (z. B. DynDNS dort inzwischen deaktiviert), würde der Browser
+// stillschweigend die erste Option wählen und beim Speichern die Zone wechseln.
+$currentZoneId = (int)$edit_account['zone_id'];
+$stmt = $pdo->prepare("
+    SELECT id, name, type, allow_dyndns
+    FROM zones
+    WHERE (allow_dyndns = 1 AND type = 'forward') OR id = ?
+    ORDER BY name
+");
+$stmt->execute([$currentZoneId]);
 $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$currentZoneEligible = false;
+foreach ($zones as $z) {
+    if ((int)$z['id'] === $currentZoneId) {
+        $currentZoneEligible = (int)$z['allow_dyndns'] === 1 && $z['type'] === 'forward';
+    }
+}
 ?>
 
 <tr class="table-warning table-edit-form">
@@ -59,11 +76,15 @@ $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <label class="form-label"><?= $LANG['zone'] ?></label>
                     <select name="zone_id" class="form-select" required>
                         <?php foreach ($zones as $z): ?>
-                            <option value="<?= $z['id'] ?>" <?= $z['id'] == $edit_account['zone_id'] ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($z['name']) ?>
+                            <?php $isCurrent = (int)$z['id'] === $currentZoneId; ?>
+                            <option value="<?= (int)$z['id'] ?>" <?= $isCurrent ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($z['name']) ?><?= ($isCurrent && !$currentZoneEligible) ? ' ' . htmlspecialchars($LANG['dyndns_zone_disabled_suffix']) : '' ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <?php if (!$currentZoneEligible): ?>
+                        <div class="form-text text-warning"><?= htmlspecialchars($LANG['dyndns_zone_disabled_hint']) ?></div>
+                    <?php endif; ?>
                 </div>
             </div>
         </form>

@@ -382,3 +382,108 @@ function isDuplicateRecord(PDO $pdo, int $zone_id, string $name, string $type, s
     return ((int)$stmt->fetchColumn()) > 0;
 }
 
+/**
+ * Validiert einen DynDNS-Hostnamen (relativ zur Zone) für eine neue oder geänderte Zuordnung.
+ *
+ * Erlaubt sind ausschließlich relative ASCII-Hostnamen nach LDH-Regeln, z. B. "home" oder
+ * "fritz.home". Die Prüfung arbeitet auf der unveränderten Eingabe (kein trim()), damit
+ * Leer- und Steuerzeichen – auch am Rand – zuverlässig abgelehnt werden.
+ *
+ * Abgelehnt werden u. a.:
+ * - Leer- und Steuerzeichen (Space, Tab, CR/LF, NUL, DEL)
+ * - Nicht-ASCII-Zeichen (Unicode/IDN-Rohzeichen; Punycode "xn--…" ist zulässig)
+ * - Zonen-Apex "@", Wildcards "*", Unterstriche
+ * - abschließender Punkt bzw. absolute FQDNs (keine stillschweigende Umwandlung)
+ * - Hostnamen, die den Zonennamen bereits enthalten (z. B. "home.example.com" in "example.com")
+ * - leere Labels, Labels > 63 Zeichen, Labels mit "-" am Rand, IP-Adressen
+ * - vollständiger Name (Hostname + Zone) > 253 Zeichen
+ *
+ * Für die Label-Syntax wird isValidFqdn() wiederverwendet (LDH, 1–63 Zeichen, kein "-" am
+ * Rand, keine IP-Adresse, max. 253 Zeichen). Die DynDNS-spezifischen Einschränkungen
+ * (kein Endpunkt, kein "@"/"*", kein "_", Gesamtlänge inkl. Zone) werden vorab geprüft.
+ *
+ * @param string $hostname Unveränderte Benutzereingabe
+ * @param string $zoneName Name der Zielzone (mit oder ohne abschließenden Punkt)
+ * @return string[]        Fehlercodes (leer = gültig); es wird nur der erste Fehler gemeldet
+ */
+function validateDyndnsHostname(string $hostname, string $zoneName): array
+{
+    if ($hostname === '') {
+        return ['DYNDNS_HOST_EMPTY'];
+    }
+
+    // Leer- und Steuerzeichen (inkl. Tabulator, Zeilenumbruch, NUL, DEL)
+    if (preg_match('/[\x00-\x20\x7F]/', $hostname)) {
+        return ['DYNDNS_HOST_WHITESPACE'];
+    }
+
+    // Nicht-ASCII (Unicode-Rohzeichen); keine automatische IDN-Umwandlung
+    if (preg_match('/[^\x00-\x7F]/', $hostname)) {
+        return ['DYNDNS_HOST_NON_ASCII'];
+    }
+
+    if ($hostname === '@') {
+        return ['DYNDNS_HOST_APEX'];
+    }
+
+    if (str_contains($hostname, '*')) {
+        return ['DYNDNS_HOST_WILDCARD'];
+    }
+
+    // Absoluter Name: wird abgelehnt, nicht in einen relativen Namen umgewandelt
+    if (str_ends_with($hostname, '.')) {
+        return ['DYNDNS_HOST_ABSOLUTE'];
+    }
+
+    if (str_contains($hostname, '_')) {
+        return ['DYNDNS_HOST_UNDERSCORE'];
+    }
+
+    if (!preg_match('/^[A-Za-z0-9.\-]+$/', $hostname)) {
+        return ['DYNDNS_HOST_INVALID_CHARS'];
+    }
+
+    if (str_starts_with($hostname, '.') || str_contains($hostname, '..')) {
+        return ['DYNDNS_HOST_EMPTY_LABEL'];
+    }
+
+    foreach (explode('.', $hostname) as $label) {
+        if (strlen($label) > 63) {
+            return ['DYNDNS_HOST_LABEL_TOO_LONG'];
+        }
+    }
+
+    // LDH-Labels, kein "-" am Rand, keine IP-Adresse
+    if (!isValidFqdn($hostname)) {
+        return ['DYNDNS_HOST_INVALID_LABEL'];
+    }
+
+    $zone  = strtolower(rtrim($zoneName, '.'));
+    $lower = strtolower($hostname);
+
+    // Hostname enthält bereits den Zonennamen → vermutlich absoluter Name ohne Endpunkt
+    if ($zone !== '' && ($lower === $zone || str_ends_with($lower, '.' . $zone))) {
+        return ['DYNDNS_HOST_CONTAINS_ZONE'];
+    }
+
+    // Gesamtlänge des vollständigen Namens (ohne abschließenden Punkt)
+    if (strlen($lower) + 1 + strlen($zone) > 253) {
+        return ['DYNDNS_HOST_TOO_LONG'];
+    }
+
+    return [];
+}
+
+/**
+ * Normalisiert einen zuvor mit validateDyndnsHostname() geprüften Hostnamen für die Speicherung.
+ *
+ * DNS-Namen sind nicht case-sensitiv; gespeichert wird in Kleinbuchstaben.
+ * Nur für bereits validierte (reine ASCII-)Eingaben verwenden.
+ *
+ * @param string $hostname Validierter Hostname
+ * @return string          Hostname in Kleinbuchstaben
+ */
+function normalizeDyndnsHostname(string $hostname): string
+{
+    return strtolower($hostname);
+}
