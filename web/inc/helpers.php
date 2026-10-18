@@ -93,6 +93,61 @@ function csrf_input(): string
 }
 
 /**
+ * Prüft ein Rücksprungziel und liefert es nur zurück, wenn es ein interner, root-relativer Pfad
+ * zu einer vorhandenen Seite unter BASE_URL/pages/ ist; andernfalls wird $fallback geliefert.
+ *
+ * Zulässig ist ausschließlich: <Basispfad>/pages/<seitenname>.php[?<query>]
+ * - Basispfad = Pfadanteil von BASE_URL (BASE_URL darf auch eine vollständige URL sein)
+ * - seitenname: nur [a-z0-9_], die Datei muss in pages/ existieren
+ * - query: nur URL-sichere Zeichen; Prozentkodierungen müssen gültig sein
+ * - keine Schemas, Hosts, Backslashes, Steuer- oder Leerzeichen, kein "..", keine
+ *   Prozentkodierung im Pfadanteil, keine Nicht-String-Werte, höchstens 2048 Zeichen
+ *
+ * Keine Datenbank- oder Session-Zugriffe.
+ *
+ * @param mixed  $candidate Ungeprüftes Rücksprungziel (z. B. aus $_POST)
+ * @param string $fallback  Internes Standardziel bei ungültiger Eingabe
+ * @return string Geprüftes Rücksprungziel oder $fallback
+ */
+function safe_return_path(mixed $candidate, string $fallback): string
+{
+    if (!is_string($candidate) || $candidate === '' || strlen($candidate) > 2048 || !defined('BASE_URL')) {
+        return $fallback;
+    }
+
+    // Steuerzeichen, Leerzeichen, DEL und Backslashes ablehnen
+    if (preg_match('/[\x00-\x20\x7F\\\\]/', $candidate)) {
+        return $fallback;
+    }
+
+    // Basispfad aus BASE_URL (auch bei vollständiger URL nur der Pfadanteil)
+    $base_path = parse_url((string)BASE_URL, PHP_URL_PATH);
+    $base_path = rtrim(is_string($base_path) ? $base_path : '', '/');
+    if ($base_path !== '' && !preg_match('#^(/[A-Za-z0-9._~-]+)+$#', $base_path)) {
+        return $fallback;
+    }
+
+    // Exakt <Basispfad>/pages/<seitenname>.php mit optionalem Query-String
+    $pattern = '#^' . preg_quote($base_path, '#') . '/pages/([a-z0-9_]+)\.php(\?[A-Za-z0-9._~%&=+-]*)?$#D';
+    if (!preg_match($pattern, $candidate, $m)) {
+        return $fallback;
+    }
+
+    // Nur gültige Prozentkodierungen im Query-String
+    $query = $m[2] ?? '';
+    if ($query !== '' && preg_match('/%(?![0-9A-Fa-f]{2})/', $query)) {
+        return $fallback;
+    }
+
+    // Nur tatsächlich vorhandene Seiten
+    if (!is_file(__DIR__ . '/../pages/' . $m[1] . '.php')) {
+        return $fallback;
+    }
+
+    return $candidate;
+}
+
+/**
  * rebuild_zone_and_validate
  *
  * Erstellt eine temporäre Zonendatei für die angegebene Zone und prüft diese mit `named-checkzone`.

@@ -9,11 +9,21 @@
  *
  * Sicherheit:
  * - Zugriff nur für Benutzer mit Rolle "admin".
+ * - Nur per POST mit gültigem CSRF-Token.
  * - Der Server wird per ID über POST bestimmt und gegen die Datenbank verifiziert.
  */
 
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/api_client.php';
+
+// Zustandsändernde Aktion: nur POST mit gültigem CSRF-Token
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    header('Allow: POST');
+    exit('Method Not Allowed');
+}
+verify_csrf_token();
+
 requireRole(['admin']);
 
 $serverId = (int)($_POST['id'] ?? 0);

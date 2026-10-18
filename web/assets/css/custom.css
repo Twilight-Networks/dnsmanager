@@ -108,6 +108,11 @@ a:active {
     color: black;
 }
 
+/* Publish-Button ist ein <button> (POST-Formular): bisherige Sidebar-Linkfarbe (.sidebar a) beibehalten */
+.sidebar #publishButton {
+    color: #444444 !important;
+}
+
 #system_healthButton.has-errors {
     background-color: #F8D7DA !important;
     color: black;

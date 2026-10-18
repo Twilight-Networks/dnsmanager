@@ -21,6 +21,8 @@
  *
  * Zugriffsschutz:
  * - Nur für Benutzer mit Rolle 'admin' oder 'zoneadmin'
+ * - Nur per POST mit gültigem CSRF-Token (Prüfung vor Lock-Bezug und Flag-Verarbeitung)
+ * - Rücksprungziel nur über safe_return_path() (interne Seiten unter BASE_URL/pages/)
  *
  * Abhängigkeiten:
  * - bind_file_generator.php → generate_zone_file()
@@ -28,6 +30,15 @@
  */
 
 require_once __DIR__ . '/../common.php';
+
+// Zustandsändernde Aktion: nur POST mit gültigem CSRF-Token
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    header('Allow: POST');
+    exit('Method Not Allowed');
+}
+verify_csrf_token();
+
 requireRole(['admin', 'zoneadmin']);
 require_once __DIR__ . '/../inc/deploy/bind_file_generator.php';
 require_once __DIR__ . '/../inc/deploy/bind_file_distributor.php';
@@ -90,7 +101,7 @@ try {
 
 // Ohne Lock keine Flags verändern und nichts veröffentlichen
 if (!$publish_lock_acquired) {
-    $ref = $_GET['return'] ?? $_SERVER['HTTP_REFERER'] ?? (rtrim(BASE_URL, '/') . '/pages/dashboard.php');
+    $ref = safe_return_path($_POST['return'] ?? null, rtrim(BASE_URL, '/') . '/pages/dashboard.php');
     header("Location: $ref");
     exit;
 }
@@ -292,7 +303,7 @@ try {
 }
 
 // Zurück zur vorherigen Seite oder Dashboard
-$ref = $_GET['return'] ?? $_SERVER['HTTP_REFERER'] ?? (rtrim(BASE_URL, '/') . '/pages/dashboard.php');
+$ref = safe_return_path($_POST['return'] ?? null, rtrim(BASE_URL, '/') . '/pages/dashboard.php');
 header("Location: $ref");
 exit;
 ?>
