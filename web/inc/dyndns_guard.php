@@ -424,3 +424,240 @@ function dyndnsIsDuplicateKeyError(Throwable $e): bool
 
     return (int)($e->errorInfo[1] ?? 0) === 1062;
 }
+
+/* ---------------------------------------------------------------------------------------------
+ * DynDNS-Update-API (PR #37)
+ * ------------------------------------------------------------------------------------------- */
+
+/**
+ * Sicherheitsbedingte Ablehnung eines DynDNS-API-Updates.
+ *
+ * $response ist die an den Client gelieferte DynDNS-Antwort ('badauth' oder 'dnserr'),
+ * $reason ein maschinenlesbarer Grund fürs Log.
+ */
+final class DyndnsApiReject extends RuntimeException
+{
+    public string $response;
+    public string $reason;
+
+    public function __construct(string $response, string $reason, string $detail = '')
+    {
+        parent::__construct($reason . ($detail !== '' ? ': ' . $detail : ''));
+        $this->response = $response;
+        $this->reason = $reason;
+    }
+}
+
+/**
+ * Prüft und normalisiert einen IP-Parameter der DynDNS-API.
+ *
+ * - 'A'    akzeptiert ausschließlich IPv4, 'AAAA' ausschließlich IPv6
+ * - nicht vorhandener oder leerer Parameter → status 'empty'
+ * - nichtskalare Werte (z. B. myip[]=…), ungültige Adressen oder falsche Familie → status 'invalid'
+ * - gültige Adressen werden über inet_pton()/inet_ntop() normalisiert
+ *
+ * @param mixed  $raw  Rohwert aus $_GET (string, array, null …)
+ * @param string $type 'A' oder 'AAAA'
+ * @return array{status:string, ip:?string}
+ */
+function dyndnsParseApiIp(mixed $raw, string $type): array
+{
+    if ($raw === null) {
+        return ['status' => 'empty', 'ip' => null];
+    }
+
+    if (!is_string($raw)) {
+        return ['status' => 'invalid', 'ip' => null];
+    }
+
+    $value = trim($raw);
+    if ($value === '') {
+        return ['status' => 'empty', 'ip' => null];
+    }
+
+    $flag = $type === 'A' ? FILTER_FLAG_IPV4 : FILTER_FLAG_IPV6;
+    if (filter_var($value, FILTER_VALIDATE_IP, $flag) === false) {
+        return ['status' => 'invalid', 'ip' => null];
+    }
+
+    $bin = @inet_pton($value);
+    $normalized = $bin !== false ? inet_ntop($bin) : false;
+    if ($normalized === false) {
+        return ['status' => 'invalid', 'ip' => null];
+    }
+
+    return ['status' => 'ok', 'ip' => $normalized];
+}
+
+/**
+ * Vergleicht zwei IP-Adressen binär (inet_pton). Ungültige Werte sind nie gleich.
+ * Unterschiedliche gültige Schreibweisen derselben IPv6-Adresse gelten als gleich.
+ */
+function dyndnsIpEquals(?string $a, ?string $b): bool
+{
+    if ($a === null || $b === null) {
+        return false;
+    }
+
+    $binA = @inet_pton(trim($a));
+    $binB = @inet_pton(trim($b));
+
+    return $binA !== false && $binB !== false && $binA === $binB;
+}
+
+/**
+ * Sperrt alle Records einer Zone (SELECT … FOR UPDATE über den zone_id-Index) und liefert
+ * die aktuellen A/AAAA-Records.
+ *
+ * Unter REPEATABLE READ (InnoDB-Standard) sperrt die Abfrage zusätzlich den Indexbereich der
+ * Zone, sodass andere Transaktionen bis zum Commit keine Records dieser Zone ändern, löschen oder
+ * neu anlegen können. Unter READ COMMITTED entfallen diese Bereichssperren; dann schützt nur
+ * noch die Zeilensperre bestehender Records und das bedingte UPDATE.
+ *
+ * Muss nach dyndnsLockZones() und vor allen einfachen SELECTs der Transaktion aufgerufen werden.
+ *
+ * @return array<int, array{id:int|string, name:string, type:string, content:string, server_id:int|string|null}>
+ */
+function dyndnsLockZoneAddressRecords(PDO $pdo, int $zoneId): array
+{
+    if (!$pdo->inTransaction()) {
+        throw new LogicException('dyndnsLockZoneAddressRecords() erfordert eine aktive Transaktion.');
+    }
+
+    $stmt = $pdo->prepare("SELECT id, name, type, content, server_id FROM records WHERE zone_id = ? FOR UPDATE");
+    $stmt->execute([$zoneId]);
+
+    $records = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $rec) {
+        $type = strtoupper((string)$rec['type']);
+        if ($type === 'A' || $type === 'AAAA') {
+            $records[] = $rec;
+        }
+    }
+
+    return $records;
+}
+
+/**
+ * Entscheidet für beide Adressfamilien, ob ein DynDNS-API-Update zulässig ist.
+ *
+ * Reine Funktion ohne Datenbankzugriff; Namensvergleiche sind unabhängig von der Collation.
+ * Für jede Familie (auch nicht angeforderte) gilt:
+ * - Kandidaten: alle Records des Typs, deren kanonischer Name (dyndnsCanonicalName) dem Hostnamen
+ *   entspricht (inkl. absolut gespeicherter Namen und Namen mit Leerzeichen am Rand).
+ * - Systemrecord (server_id) unter den Kandidaten                → reject 'system_record'
+ * - Kandidat in abweichender Schreibweise (nur ASCII-Groß-/Kleinschreibung zulässig) → 'ambiguous_name'
+ * - mehr als ein Kandidat                                         → reject 'multiple_records'
+ * - genau ein Kandidat: gespeicherte current_ipv4/6 muss vorhanden und binär gleich dem
+ *   Record-Inhalt sein, sonst reject 'foreign_record' – auch wenn der Record zufällig bereits
+ *   der neuen IP entspricht. Erst danach: neue IP gleich → 'nochg', sonst → 'update'.
+ * - kein Kandidat: angefordert → 'insert', sonst → 'none'
+ * Ein Ablehnungsgrund in einer Familie lehnt die gesamte Anfrage ab.
+ *
+ * @param array  $records   A/AAAA-Records der Zone (dyndnsLockZoneAddressRecords)
+ * @param string $zoneName
+ * @param string $hostname  Gespeicherter, validierter Hostname des Accounts
+ * @param array  $current   ['A' => ?string, 'AAAA' => ?string] (current_ipv4 / current_ipv6)
+ * @param array  $requested ['A' => ?string, 'AAAA' => ?string] normalisierte neue IPs oder null
+ * @return array{reject:?string, detail:string, types:array<string, array{action:string, record:?array, ip:?string}>}
+ */
+function dyndnsPlanApiRecordChanges(
+    array $records,
+    string $zoneName,
+    string $hostname,
+    array $current,
+    array $requested
+): array {
+    $host       = dyndnsCanonicalName($hostname, $zoneName);
+    $strictName = dyndnsAsciiLower($hostname);
+    $types      = [];
+
+    foreach (['A', 'AAAA'] as $type) {
+        $candidates = [];
+        foreach ($records as $rec) {
+            if (strtoupper((string)$rec['type']) !== $type) {
+                continue;
+            }
+            if ($host !== null && dyndnsCanonicalName((string)$rec['name'], $zoneName) === $host) {
+                $candidates[] = $rec;
+            }
+        }
+
+        $newIp = $requested[$type] ?? null;
+
+        foreach ($candidates as $rec) {
+            if ($rec['server_id'] !== null) {
+                return ['reject' => 'system_record', 'detail' => "$type record_id={$rec['id']}", 'types' => []];
+            }
+        }
+
+        foreach ($candidates as $rec) {
+            if (dyndnsAsciiLower((string)$rec['name']) !== $strictName) {
+                return ['reject' => 'ambiguous_name', 'detail' => "$type record_id={$rec['id']} name=" . json_encode((string)$rec['name'], JSON_INVALID_UTF8_SUBSTITUTE), 'types' => []];
+            }
+        }
+
+        if (count($candidates) > 1) {
+            return ['reject' => 'multiple_records', 'detail' => "$type count=" . count($candidates), 'types' => []];
+        }
+
+        if (count($candidates) === 1) {
+            $rec = $candidates[0];
+            $stored = $current[$type] ?? null;
+
+            // Zuordnung nur bei vorhandener, inhaltlich gleicher gespeicherter Account-IP
+            if ($stored === null || trim($stored) === '' || !dyndnsIpEquals($stored, (string)$rec['content'])) {
+                return ['reject' => 'foreign_record', 'detail' => "$type record_id={$rec['id']}", 'types' => []];
+            }
+
+            if ($newIp === null) {
+                $types[$type] = ['action' => 'none', 'record' => $rec, 'ip' => null];
+            } elseif (dyndnsIpEquals($newIp, (string)$rec['content'])) {
+                $types[$type] = ['action' => 'nochg', 'record' => $rec, 'ip' => $newIp];
+            } else {
+                $types[$type] = ['action' => 'update', 'record' => $rec, 'ip' => $newIp];
+            }
+            continue;
+        }
+
+        $types[$type] = $newIp === null
+            ? ['action' => 'none', 'record' => null, 'ip' => null]
+            : ['action' => 'insert', 'record' => null, 'ip' => $newIp];
+    }
+
+    return ['reject' => null, 'detail' => '', 'types' => $types];
+}
+
+/**
+ * Aktualisiert genau einen zuvor geprüften A/AAAA-Record bedingt: Das UPDATE greift nur, wenn
+ * ID, Zone, Name, Typ und bisheriger Inhalt unverändert sind und kein Systemrecord vorliegt.
+ * Wirkt es nicht auf genau eine Zeile, wird eine Exception geworfen (Aufrufer: Rollback).
+ *
+ * @param array  $record Geprüfter Record (id, name, type, content)
+ * @param string $newIp  Normalisierte neue IP (unterscheidet sich vom bisherigen Inhalt)
+ */
+function dyndnsApplyApiRecordUpdate(PDO $pdo, int $zoneId, array $record, string $newIp): void
+{
+    $stmt = $pdo->prepare("
+        UPDATE records
+        SET content = ?
+        WHERE id = ?
+          AND zone_id = ?
+          AND BINARY name = ?
+          AND type = ?
+          AND BINARY content = ?
+          AND server_id IS NULL
+    ");
+    $stmt->execute([
+        $newIp,
+        (int)$record['id'],
+        $zoneId,
+        (string)$record['name'],
+        strtoupper((string)$record['type']),
+        (string)$record['content'],
+    ]);
+
+    if ($stmt->rowCount() !== 1) {
+        throw new DyndnsApiReject('dnserr', 'record_changed', "record_id={$record['id']} rowCount=" . $stmt->rowCount());
+    }
+}
