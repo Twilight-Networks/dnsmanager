@@ -145,8 +145,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     );
     $serviceResult = $recordService->createRecord($actor, $zone_id, $input, $autoPtr);
 
-    // ServiceMessages in Reihenfolge in bestehende Toasts/Logs/HTTP-Antworten übersetzen
-    $successContext = null;
+    // ServiceMessages in Reihenfolge in bestehende Toasts/Logs/HTTP-Antworten übersetzen.
+    // Forward-Erfolg und AutoPTR-Ergebnis bleiben gemeinsam sichtbar: Da nur eine Erfolgsmeldung
+    // gespeichert wird, werden Forward-Erfolg und PTR-Erfolg (angelegt/bereits vorhanden) zu einer
+    // Meldung zusammengefasst. Ein nicht angelegter PTR erscheint als Warnung daneben.
+    $successToast    = null; // Forward-Erfolg (Toast-Text)
+    $successLog      = null; // Forward-Erfolg (Log-Text)
+    $ptrSuccessToast = null; // PTR angelegt oder identisch vorhanden (Zusatz zur Erfolgsmeldung)
 
     foreach ($serviceResult->messages as $message) {
         $ctx = $message->context;
@@ -203,19 +208,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
 
             case 'record.create.success':
-                // Erfolgs-Toast erst nach den AutoPTR-Meldungen (nur ohne Fehler-Toasts)
-                $successContext = $ctx;
+                // Ausgabe nach der Schleife (ggf. zusammen mit dem PTR-Ergebnis)
+                $successToast = sprintf($LANG['record_created'], htmlspecialchars($ctx['type']), htmlspecialchars($ctx['name']), htmlspecialchars($ctx['zoneName']));
+                $successLog   = "Neuer DNS-Record {$ctx['type']} {$ctx['name']} erfolgreich gespeichert in Zone '{$ctx['zoneName']}' (ID {$ctx['zoneId']})";
+                break;
+
+            case 'record.create.ptr_skipped_wildcard':
+                toastWarning(
+                    sprintf($LANG['record_warning_auto_ptr_wildcard'], '<code>' . htmlspecialchars($ctx['name']) . '</code>'),
+                    "Kein automatischer PTR für Wildcard-Record '{$ctx['name']}' in Zone '{$ctx['zoneName']}' (IP {$ctx['ip']})"
+                );
+                break;
+
+            case 'record.create.ptr_skipped_out_of_zone':
+                toastWarning(
+                    sprintf($LANG['record_warning_auto_ptr_out_of_zone'], '<code>' . htmlspecialchars($ctx['name']) . '</code>', '<code>' . htmlspecialchars($ctx['zoneName']) . '</code>'),
+                    "Kein automatischer PTR: Name '{$ctx['name']}' liegt außerhalb der Zone '{$ctx['zoneName']}' (IP {$ctx['ip']})"
+                );
                 break;
 
             case 'record.create.ptr_invalid_ip':
-                toastError(
+                toastWarning(
                     $LANG['record_error_auto_ptr_invalid_ip'],
                     "Fehler bei PTR-Berechnung für {$ctx['type']} {$ctx['ip']} → Zone-ID {$ctx['zoneId']}, Name '{$ctx['name']}'"
                 );
                 break;
 
             case 'record.create.ptr_zone_missing':
-                toastError(
+                toastWarning(
                     sprintf($LANG['record_error_auto_ptr_no_zone'], "<code>{$ctx['ptrZone']}</code>"),
                     "PTR-Zuordnung fehlgeschlagen: keine Reverse-Zone '{$ctx['ptrZone']}' für IP {$ctx['ip']}"
                 );
@@ -226,28 +246,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'record_add_auto_ptr',
                     'Benutzer-ID ' . $ctx['userId'] . ' hat keine Berechtigung für Reverse-Zone-ID ' . $ctx['ptrZoneId'] . ' (' . $ctx['ptrZone'] . ') – automatischer PTR wurde nicht angelegt'
                 );
-                toastError(
+                toastWarning(
                     sprintf($LANG['record_error_auto_ptr_denied'], "<code>{$ctx['ptrZone']}</code>"),
                     "PTR-Zuordnung verweigert: keine Berechtigung für Reverse-Zone '{$ctx['ptrZone']}' (ID " . $ctx['ptrZoneId'] . ")"
                 );
                 break;
 
             case 'record.create.ptr_duplicate':
-                toastError(
+                toastWarning(
                     sprintf($LANG['record_error_auto_ptr_duplicate'], "<code>{$ctx['ptrZone']}</code>", "<code>{$ctx['ptrName']}</code>"),
-                    "PTR-Duplikat erkannt: PTR {$ctx['ptrName']}.{$ctx['ptrZone']} existiert bereits"
+                    "PTR-Konflikt: PTR {$ctx['ptrName']}.{$ctx['ptrZone']} existiert bereits mit abweichendem Ziel (" . implode(', ', $ctx['existingTargets']) . "), gewünscht {$ctx['target']}"
+                );
+                break;
+
+            case 'record.create.ptr_ambiguous':
+                toastWarning(
+                    sprintf($LANG['record_warning_auto_ptr_ambiguous'], "<code>{$ctx['ptrZone']}</code>", "<code>{$ctx['ptrName']}</code>"),
+                    "PTR mehrdeutig: für {$ctx['ptrName']}.{$ctx['ptrZone']} existieren bereits " . count($ctx['existingTargets']) . " PTR-Datensätze (" . implode(', ', $ctx['existingTargets']) . "), gewünscht {$ctx['target']} – keine Änderung"
+                );
+                break;
+
+            case 'record.create.ptr_zonefile_invalid':
+                toastWarning(
+                    sprintf($LANG['record_warning_auto_ptr_zonefile_invalid'], "<code>{$ctx['ptrZone']}</code>"),
+                    "PTR {$ctx['ptrName']}.{$ctx['ptrZone']} nicht angelegt, Reverse-Zone wäre ungültig: {$ctx['output']}"
                 );
                 break;
 
             case 'record.create.ptr_db_failed':
-                toastError(
+                toastWarning(
                     $LANG['record_error_auto_ptr_db'],
                     "Datenbankfehler beim Einfügen von PTR {$ctx['ptrName']}.{$ctx['ptrZone']}: " . $ctx['detail']
                 );
                 break;
 
+            case 'record.create.ptr_zonefile_warning':
+                toastWarning(
+                    sprintf($LANG['record_warning_auto_ptr_zonefile_check'], "<code>{$ctx['ptrZone']}</code>"),
+                    $ctx['output']
+                );
+                break;
+
+            case 'record.create.ptr_exists':
+                $ptrSuccessToast = sprintf($LANG['record_auto_ptr_exists'], "<code>{$ctx['ptrName']}.{$ctx['ptrZone']}</code>");
+                appLog('info', "PTR {$ctx['ptrName']}.{$ctx['ptrZone']} -> {$ctx['target']} bereits identisch vorhanden (keine Änderung)");
+                break;
+
             case 'record.create.ptr_created':
-                // Bisher keine eigene Ausgabe
+                $ptrSuccessToast = sprintf($LANG['record_auto_ptr_created'], "<code>{$ctx['ptrName']}.{$ctx['ptrZone']}</code>");
+                appLog('info', "PTR {$ctx['ptrName']}.{$ctx['ptrZone']} -> {$ctx['target']} automatisch angelegt");
                 break;
 
             default:
@@ -264,10 +311,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    if ($successContext !== null && empty($_SESSION['toast_errors'])) {
+    // Eine gemeinsame Erfolgsmeldung: Forward-Record gespeichert (+ PTR angelegt bzw. bereits vorhanden)
+    if ($successToast !== null) {
         toastSuccess(
-            sprintf($LANG['record_created'], htmlspecialchars($successContext['type']), htmlspecialchars($successContext['name']), htmlspecialchars($successContext['zoneName'])),
-            "Neuer DNS-Record {$successContext['type']} {$successContext['name']} erfolgreich gespeichert in Zone '{$successContext['zoneName']}' (ID {$successContext['zoneId']})"
+            $ptrSuccessToast !== null ? $successToast . '<br>' . $ptrSuccessToast : $successToast,
+            $successLog
         );
     }
 

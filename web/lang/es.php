@@ -207,9 +207,16 @@ return [
     // log
     'record_error_auto_ptr_invalid_ip'   => 'No se pudo crear el registro PTR – dirección IP inválida o error de formato.',
     'record_error_auto_ptr_no_zone'     => 'Registro PTR no posible – la zona inversa correspondiente %s no existe.',
-    'record_error_auto_ptr_duplicate'   => 'Registro PTR no posible – ya existe un PTR para %s en la zona %s.',
-    'record_error_auto_ptr_db'          => 'Error al crear automáticamente el registro PTR.',
+    'record_error_auto_ptr_duplicate'   => 'Registro PTR no creado – ya existe un PTR distinto para %2$s en la zona %1$s.',
+    'record_error_auto_ptr_db'          => 'Registro PTR no creado – error de base de datos al crear automáticamente el registro PTR.',
     'record_error_auto_ptr_denied'      => 'Registro PTR no creado – sin permiso para la zona inversa %s.',
+    'record_warning_auto_ptr_wildcard'         => 'No se creó ningún registro PTR – no se genera PTR para el nombre comodín %s.',
+    'record_warning_auto_ptr_out_of_zone'      => 'No se creó ningún registro PTR – el nombre %1$s está fuera de la zona %2$s.',
+    'record_warning_auto_ptr_ambiguous'        => 'Registro PTR no creado – ya existen varios registros PTR para %2$s en la zona %1$s.',
+    'record_warning_auto_ptr_zonefile_invalid' => 'Registro PTR no creado – la zona inversa %s sería inválida.',
+    'record_warning_auto_ptr_zonefile_check'   => 'Registro PTR creado – advertencia durante la verificación del archivo de la zona inversa %s.',
+    'record_auto_ptr_created'                  => 'Registro PTR %s creado automáticamente.',
+    'record_auto_ptr_exists'                   => 'El registro PTR %s ya existe con el mismo destino – sin cambios.',
 
     'record_error_dkim_file_too_large'    => 'El archivo es demasiado grande. El tamaño máximo permitido es de 2 KB.',
     'record_error_dkim_invalid_extension' => 'Solo se permiten archivos con extensión .txt.',
