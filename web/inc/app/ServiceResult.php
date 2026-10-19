@@ -3,7 +3,9 @@
  * Datei: inc/app/ServiceResult.php
  * Zweck: Unveränderlicher Rückgabetyp von Application-Services.
  *
- * - ok:         true, wenn die Operation vollständig erfolgreich war
+ * - ok:         true, wenn die primäre Operation erfolgreich war. Optionale Nebenoperationen
+ *               (z. B. AutoPTR bei RecordService::createRecord()) ändern ok nicht; ihr Ausgang
+ *               steht ausschließlich in den messages (siehe Dokumentation der jeweiligen Methode).
  * - messages:   ServiceMessage-Objekte in der Reihenfolge ihres Auftretens
  * - lastZoneId: zuletzt ermittelte Zonen-ID der Operation (für Adapter-Redirects)
  *

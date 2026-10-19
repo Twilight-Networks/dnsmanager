@@ -207,9 +207,16 @@ return [
     //log
     'record_error_auto_ptr_invalid_ip'   => 'PTR-Eintrag konnte nicht erzeugt werden – ungültige IP-Adresse oder Formatfehler.',
     'record_error_auto_ptr_no_zone'     => 'PTR-Eintrag nicht möglich – passende Reverse-Zone %s ist nicht vorhanden.',
-    'record_error_auto_ptr_duplicate'   => 'PTR-Eintrag nicht möglich – in der Zone %s existiert bereits ein PTR für %s.',
-    'record_error_auto_ptr_db'          => 'Fehler beim automatischen PTR-Eintrag.',
+    'record_error_auto_ptr_duplicate'   => 'PTR-Eintrag nicht angelegt – in der Zone %1$s existiert bereits ein abweichender PTR für %2$s.',
+    'record_error_auto_ptr_db'          => 'PTR-Eintrag nicht angelegt – Datenbankfehler beim automatischen PTR-Eintrag.',
     'record_error_auto_ptr_denied'      => 'PTR-Eintrag nicht angelegt – keine Berechtigung für die Reverse-Zone %s.',
+    'record_warning_auto_ptr_wildcard'         => 'Kein PTR-Eintrag angelegt – für den Wildcard-Namen %s wird kein PTR erzeugt.',
+    'record_warning_auto_ptr_out_of_zone'      => 'Kein PTR-Eintrag angelegt – der Name %1$s liegt außerhalb der Zone %2$s.',
+    'record_warning_auto_ptr_ambiguous'        => 'PTR-Eintrag nicht angelegt – in der Zone %1$s existieren bereits mehrere PTR-Einträge für %2$s.',
+    'record_warning_auto_ptr_zonefile_invalid' => 'PTR-Eintrag nicht angelegt – die Reverse-Zone %s wäre ungültig.',
+    'record_warning_auto_ptr_zonefile_check'   => 'PTR-Eintrag angelegt – Warnung beim Zonendatei-Check der Reverse-Zone %s.',
+    'record_auto_ptr_created'                  => 'PTR-Eintrag %s automatisch angelegt.',
+    'record_auto_ptr_exists'                   => 'PTR-Eintrag %s ist bereits identisch vorhanden – keine Änderung.',
 
     'record_error_dkim_file_too_large'    => 'Die Datei ist zu groß. Die maximale Dateigröße beträgt 2 KB.',
     'record_error_dkim_invalid_extension' => 'Nur .txt-Dateien sind erlaubt.',

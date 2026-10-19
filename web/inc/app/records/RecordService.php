@@ -19,8 +19,8 @@
  * Sperren der betroffenen Zonenzeile(n) (dyndnsLockZones, aufsteigende Zonen-ID, erste Abfrage
  * der Transaktion) - dieselbe Reihenfolge wie DynDNS-Verwaltung und DynDNS-API. Alle
  * zustandsabhängigen Lesezugriffe und Prüfungen erfolgen erst unter dieser Sperre. Die Garantie
- * gilt nur für Schreibpfade, die dieselbe Zonensperre verwenden; createAutoPtr() ist davon
- * bewusst nicht erfasst.
+ * gilt nur für Schreibpfade, die dieselbe Zonensperre verwenden. AutoPTR (createAutoPtr) nutzt
+ * eine eigene, nachgelagerte Transaktion, die ausschließlich die Reverse-Zone sperrt.
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -31,6 +31,7 @@ require_once __DIR__ . '/../../glue_check.php';
 require_once __DIR__ . '/../../validators.php';
 require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/RecordInput.php';
+require_once __DIR__ . '/AutoPtr.php';
 
 final class RecordService
 {
@@ -539,10 +540,13 @@ final class RecordService
      * frisch geprüft; danach INSERT, Rebuild und Commit.
      *
      * AutoPTR (nur A/AAAA und $autoPtr === true) läuft bewusst erst NACH dem
-     * Commit des Forward-Records und in einer eigenen Verarbeitung: Scheitert
-     * der PTR, bleibt der Forward-Record bestehen. Das Ergebnis ist dann
-     * weiterhin ok=true; der PTR-Ausgang steht in den ServiceMessages
-     * (record.create.ptr_*).
+     * Commit des Forward-Records in einer eigenen Transaktion (siehe createAutoPtr):
+     * Scheitert der PTR, bleibt der Forward-Record bestehen.
+     *
+     * Ergebnisvertrag: ok bezeichnet ausschließlich den Erfolg der Forward-Anlage. Bei
+     * angefordertem AutoPTR enthält das Ergebnis zusätzlich genau eine Meldung mit
+     * context['ptrOutcome'] ('created' | 'exists' | 'skipped' | 'failed'); ein fehlgeschlagener
+     * oder übersprungener PTR ändert ok nicht.
      *
      * @param Actor       $actor
      * @param int         $zoneId  Forward-Zone
@@ -712,12 +716,27 @@ final class RecordService
     }
 
     /**
-     * Versucht, für einen A- oder AAAA-Record automatisch einen PTR-Record anzulegen.
+     * Versucht, für einen A- oder AAAA-Record automatisch einen PTR-Record anzulegen (AutoPTR).
      *
-     * Voraussetzungen: Reverse-Zone existiert, Actor darf in die Reverse-Zone
-     * schreiben, kein PTR mit gleichem Namen vorhanden. Der Ausgang wird als
-     * ServiceMessages an $messages angehängt (Erfolg: record.create.ptr_created).
-     * Bewusst ohne eigene Transaktion (bestehendes Verhalten).
+     * Läuft erst nach dem Commit des Forward-Records (T1) in einer eigenen Transaktion T2.
+     * Ein Fehlschlag rollt ausschließlich T2 zurück; der Forward-Record bleibt bestehen.
+     *
+     * Ablauf T2 (zone-first): Ziel-FQDN und Reverse-Position berechnen (ohne Datenbank) ->
+     * Reverse-Zone ohne Sperre ermitteln und Berechtigung früh prüfen -> Transaktion, erste
+     * Abfrage sperrt die Reverse-Zone (dyndnsLockZones) -> unter der Sperre Zonenidentität,
+     * Zonentyp, Berechtigung und vorhandene PTR-Records frisch prüfen -> INSERT, Rebuild
+     * (setzt changed=1 der Reverse-Zone in derselben Transaktion) und Commit. Rebuild-Fehler und
+     * alle Exceptions (inkl. Deadlock/Lock-Timeout) führen zum Rollback von T2.
+     *
+     * Ergebnis: Es wird genau eine Ergebnismeldung mit context['ptrOutcome'] angehängt:
+     * - 'created': record.create.ptr_created
+     * - 'exists':  record.create.ptr_exists (genau ein identischer PTR vorhanden, No-op)
+     * - 'skipped': record.create.ptr_skipped_wildcard, record.create.ptr_skipped_out_of_zone
+     * - 'failed':  record.create.ptr_invalid_ip, ptr_zone_missing, ptr_access_denied (audit),
+     *              ptr_duplicate (genau ein abweichender PTR vorhanden), ptr_ambiguous (mehrere
+     *              PTR-Datensätze für denselben Owner, auch bei identischen Zielen),
+     *              ptr_zonefile_invalid, ptr_db_failed
+     * Zusätzlich kann record.create.ptr_zonefile_warning (ohne ptrOutcome) auftreten.
      *
      * @param ServiceMessage[] $messages
      */
@@ -733,92 +752,192 @@ final class RecordService
     ): void {
         $pdo = $this->pdo;
 
-        // Hostname ermitteln
-        $hostname = ($name === '@' || trim($name) === '')
-            ? $zoneName . '.'
-            : rtrim($name, '.') . '.' . $zoneName . '.';
+        // Ziel-FQDN berechnen (Wildcards und Namen außerhalb der Zone werden übersprungen)
+        $target = AutoPtr::targetFqdn($name, $zoneName);
 
-        // Reverse-Zone und Name berechnen
-        $ptr_zone = null;
-        $ptr_name = null;
-
-        if ($type === 'A' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            $parts = explode('.', $ip);
-            if (count($parts) === 4) {
-                $ptr_zone = "{$parts[2]}.{$parts[1]}.{$parts[0]}.in-addr.arpa";
-                $ptr_name = $parts[3];
-            }
-        } elseif ($type === 'AAAA' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-            $bin = inet_pton($ip);
-            $hex = unpack('H*', $bin)[1];
-            $nibbles = str_split($hex);
-            $reverse = array_reverse($nibbles);
-            $ptr_zone = implode('.', array_slice($reverse, 1)) . '.ip6.arpa';
-            $ptr_name = $reverse[0];
-        }
-
-        if (!$ptr_zone || !$ptr_name) {
-            $messages[] = new ServiceMessage('error', 'record.create.ptr_invalid_ip', [
-                'type'   => $type,
-                'ip'     => $ip,
-                'zoneId' => $zoneId,
-                'name'   => $name,
+        if ($target['status'] === 'wildcard') {
+            $messages[] = new ServiceMessage('warning', 'record.create.ptr_skipped_wildcard', [
+                'ptrOutcome' => 'skipped',
+                'name'       => $name,
+                'zoneName'   => $zoneName,
+                'ip'         => $ip,
             ]);
             return;
         }
 
-        // Reverse-Zone muss existieren
-        $stmt = $pdo->prepare("SELECT id FROM zones WHERE name = ? AND type = 'reverse'");
-        $stmt->execute([$ptr_zone]);
-        $ptr_zone_id = $stmt->fetchColumn();
-
-        if (!$ptr_zone_id) {
-            $messages[] = new ServiceMessage('error', 'record.create.ptr_zone_missing', [
-                'ptrZone' => $ptr_zone,
-                'ip'      => $ip,
+        if ($target['status'] === 'out_of_zone') {
+            $messages[] = new ServiceMessage('warning', 'record.create.ptr_skipped_out_of_zone', [
+                'ptrOutcome' => 'skipped',
+                'name'       => $name,
+                'zoneName'   => $zoneName,
+                'ip'         => $ip,
             ]);
             return;
         }
 
-        // Zonenberechtigung für die Reverse-Zone prüfen (zoneadmin benötigt user_zones-Eintrag)
-        if (!$this->zoneAccess->canWriteZone($actor, (int)$ptr_zone_id)) {
+        $hostname = (string)$target['fqdn'];
+
+        // Reverse-Zone und PTR-Owner berechnen (bisherige Zonenauswahl: IPv4 /24, IPv6 /124)
+        $location = AutoPtr::reverseLocation($type, $ip);
+
+        if ($location === null) {
+            $messages[] = new ServiceMessage('warning', 'record.create.ptr_invalid_ip', [
+                'ptrOutcome' => 'failed',
+                'type'       => $type,
+                'ip'         => $ip,
+                'zoneId'     => $zoneId,
+                'name'       => $name,
+            ]);
+            return;
+        }
+
+        $ptr_zone = $location['zone'];
+        $ptr_name = $location['name'];
+
+        $zoneMissing = function () use (&$messages, $ptr_zone, $ip): void {
+            $messages[] = new ServiceMessage('warning', 'record.create.ptr_zone_missing', [
+                'ptrOutcome' => 'failed',
+                'ptrZone'    => $ptr_zone,
+                'ip'         => $ip,
+            ]);
+        };
+
+        $accessDenied = function (int $ptrZoneId) use (&$messages, $actor, $ptr_zone): void {
             $messages[] = new ServiceMessage('audit', 'record.create.ptr_access_denied', [
-                'userId'    => $actor->userId,
-                'ptrZoneId' => (int)$ptr_zone_id,
-                'ptrZone'   => $ptr_zone,
+                'ptrOutcome' => 'failed',
+                'userId'     => $actor->userId,
+                'ptrZoneId'  => $ptrZoneId,
+                'ptrZone'    => $ptr_zone,
             ]);
-            return;
-        }
+        };
 
-        // Prüfen auf Duplikat
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM records WHERE zone_id = ? AND name = ? AND type = 'PTR'");
-        $stmt->execute([$ptr_zone_id, $ptr_name]);
-        if ((int)$stmt->fetchColumn() > 0) {
-            $messages[] = new ServiceMessage('error', 'record.create.ptr_duplicate', [
-                'ptrZone' => $ptr_zone,
-                'ptrName' => $ptr_name,
-            ]);
-            return;
-        }
-
-        // Einfügen
         try {
+            // Reverse-Zone ohne Sperre ermitteln (nur zur Bestimmung der Sperre; Prüfung erneut unter der Sperre)
+            $stmt = $pdo->prepare("SELECT id FROM zones WHERE name = ? AND type = 'reverse'");
+            $stmt->execute([$ptr_zone]);
+            $ptr_zone_id = $stmt->fetchColumn();
+            $stmt->closeCursor();
+
+            if ($ptr_zone_id === false) {
+                $zoneMissing();
+                return;
+            }
+            $ptr_zone_id = (int)$ptr_zone_id;
+
+            // Frühe Berechtigungsprüfung: ohne Schreibrecht wird keine Zonensperre angefordert
+            if (!$this->zoneAccess->canWriteZone($actor, $ptr_zone_id)) {
+                $accessDenied($ptr_zone_id);
+                return;
+            }
+
+            $pdo->beginTransaction();
+
+            // Erste Abfrage der Transaktion: Reverse-Zone sperren
+            $zones = dyndnsLockZones($pdo, [$ptr_zone_id]);
+
+            // Zonenidentität unter der Sperre: Zone existiert, ist Reverse-Zone und trägt weiterhin den berechneten Namen
+            $locked = $zones[$ptr_zone_id] ?? null;
+            if ($locked === null
+                || (string)$locked['type'] !== 'reverse'
+                || strtolower(rtrim((string)$locked['name'], '.')) !== strtolower($ptr_zone)
+            ) {
+                $this->rollbackIfActive();
+                $zoneMissing();
+                return;
+            }
+
+            // Berechtigung unter der Sperre erneut prüfen (z. B. zwischenzeitlich entzogene Zonenzuweisung)
+            if (!$this->zoneAccess->canWriteZone($actor, $ptr_zone_id)) {
+                $this->rollbackIfActive();
+                $accessDenied($ptr_zone_id);
+                return;
+            }
+
+            // Vorhandene PTR-Records unter der Sperre prüfen
+            $stmt = $pdo->prepare("SELECT content FROM records WHERE zone_id = ? AND name = ? AND type = 'PTR'");
+            $stmt->execute([$ptr_zone_id, $ptr_name]);
+            $existing = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+            if (count($existing) > 1) {
+                // Mehrere PTR-Datensätze für denselben Owner (Altbestand): mehrdeutig, nichts ändern,
+                // auch wenn alle Ziele identisch sind (keine automatische Bereinigung)
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('warning', 'record.create.ptr_ambiguous', [
+                    'ptrOutcome'      => 'failed',
+                    'ptrZone'         => $ptr_zone,
+                    'ptrName'         => $ptr_name,
+                    'target'          => $hostname,
+                    'existingTargets' => array_values(array_map('strval', $existing)),
+                ]);
+                return;
+            }
+
+            if (count($existing) === 1) {
+                $this->rollbackIfActive();
+
+                if (strtolower((string)$existing[0]) === strtolower($hostname)) {
+                    // Genau ein identischer PTR vorhanden: idempotenter No-op
+                    $messages[] = new ServiceMessage('success', 'record.create.ptr_exists', [
+                        'ptrOutcome' => 'exists',
+                        'ptrZone'    => $ptr_zone,
+                        'ptrName'    => $ptr_name,
+                        'target'     => $hostname,
+                    ]);
+                } else {
+                    // Genau ein abweichender PTR vorhanden: Konflikt, nichts geändert
+                    $messages[] = new ServiceMessage('warning', 'record.create.ptr_duplicate', [
+                        'ptrOutcome'      => 'failed',
+                        'ptrZone'         => $ptr_zone,
+                        'ptrName'         => $ptr_name,
+                        'target'          => $hostname,
+                        'existingTargets' => [(string)$existing[0]],
+                    ]);
+                }
+                return;
+            }
+
+            // PTR schreiben
             $stmt = $pdo->prepare("INSERT INTO records (zone_id, name, type, content, ttl) VALUES (?, ?, 'PTR', ?, ?)");
             $stmt->execute([$ptr_zone_id, $ptr_name, $hostname, $ttl]);
 
-            $pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
-            $this->rebuildZone((int)$ptr_zone_id);
+            // Reverse-Zone in derselben Transaktion validieren und als geändert markieren
+            $rebuild = $this->rebuildZone($ptr_zone_id);
 
-            $messages[] = new ServiceMessage('success', 'record.create.ptr_created', [
-                'ptrZone' => $ptr_zone,
-                'ptrName' => $ptr_name,
+            if ($rebuild['status'] === 'error') {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('warning', 'record.create.ptr_zonefile_invalid', [
+                    'ptrOutcome' => 'failed',
+                    'ptrZone'    => $ptr_zone,
+                    'ptrName'    => $ptr_name,
+                    'output'     => $rebuild['output'] ?? '',
+                ]);
+                return;
+            }
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $this->rollbackIfActive();
+            $messages[] = new ServiceMessage('warning', 'record.create.ptr_db_failed', [
+                'ptrOutcome' => 'failed',
+                'ptrZone'    => $ptr_zone,
+                'ptrName'    => $ptr_name,
+                'detail'     => $e->getMessage(),
             ]);
-        } catch (PDOException $e) {
-            $messages[] = new ServiceMessage('error', 'record.create.ptr_db_failed', [
+            return;
+        }
+
+        if ($rebuild['status'] === 'warning') {
+            $messages[] = new ServiceMessage('warning', 'record.create.ptr_zonefile_warning', [
                 'ptrZone' => $ptr_zone,
-                'ptrName' => $ptr_name,
-                'detail'  => $e->getMessage(),
+                'output'  => $rebuild['output'] ?? '',
             ]);
         }
+
+        $messages[] = new ServiceMessage('success', 'record.create.ptr_created', [
+            'ptrOutcome' => 'created',
+            'ptrZone'    => $ptr_zone,
+            'ptrName'    => $ptr_name,
+            'target'     => $hostname,
+        ]);
     }
 }

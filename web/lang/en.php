@@ -207,9 +207,16 @@ return [
     // log
     'record_error_auto_ptr_invalid_ip'   => 'PTR record could not be created – invalid IP address or format error.',
     'record_error_auto_ptr_no_zone'     => 'PTR record not possible – corresponding reverse zone %s does not exist.',
-    'record_error_auto_ptr_duplicate'   => 'PTR record not possible – PTR for %s already exists in zone %s.',
-    'record_error_auto_ptr_db'          => 'Error while creating PTR record automatically.',
+    'record_error_auto_ptr_duplicate'   => 'PTR record not created – a different PTR for %2$s already exists in zone %1$s.',
+    'record_error_auto_ptr_db'          => 'PTR record not created – database error while creating the PTR record automatically.',
     'record_error_auto_ptr_denied'      => 'PTR record not created – no permission for reverse zone %s.',
+    'record_warning_auto_ptr_wildcard'         => 'No PTR record created – no PTR is generated for the wildcard name %s.',
+    'record_warning_auto_ptr_out_of_zone'      => 'No PTR record created – the name %1$s is outside the zone %2$s.',
+    'record_warning_auto_ptr_ambiguous'        => 'PTR record not created – multiple PTR records for %2$s already exist in zone %1$s.',
+    'record_warning_auto_ptr_zonefile_invalid' => 'PTR record not created – the reverse zone %s would be invalid.',
+    'record_warning_auto_ptr_zonefile_check'   => 'PTR record created – warning during zone file check of reverse zone %s.',
+    'record_auto_ptr_created'                  => 'PTR record %s created automatically.',
+    'record_auto_ptr_exists'                   => 'PTR record %s already exists with the same target – no change.',
 
     'record_error_dkim_file_too_large'    => 'The file is too large. Maximum allowed size is 2 KB.',
     'record_error_dkim_invalid_extension' => 'Only .txt files are allowed.',
