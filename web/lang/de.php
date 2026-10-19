@@ -235,6 +235,16 @@ return [
     'record_deleted_success'                     => 'Record(s) erfolgreich gelöscht.',
     'record_error_delete_failed'                 => 'Beim Löschen der Records ist ein Fehler aufgetreten.',
 
+    // DynDNS-Reservierungen (RecordService)
+    'record_error_dyndns_reserved_address' => 'Der Name %s ist für einen DynDNS-Account reserviert. Dort dürfen keine A-/AAAA-Records angelegt oder hin verschoben werden.',
+    'record_error_dyndns_reserved_cname' => 'Der Name %s ist für einen DynDNS-Account reserviert. Ein CNAME-Record ist dort nicht erlaubt.',
+    'record_error_dyndns_reserved_delegation' => 'Der Name %s ist für einen DynDNS-Account reserviert oder liegt darüber. Ein NS-Record (Delegation) ist dort nicht erlaubt.',
+    'record_error_dyndns_reserved_dname' => 'Der Name %s ist für einen DynDNS-Account reserviert oder liegt darüber. Ein DNAME-Record ist dort nicht erlaubt.',
+    'record_error_dyndns_managed_record' => 'Der A-/AAAA-Record %s wird von einem DynDNS-Account verwaltet. Name, Typ und IP-Adresse können nicht geändert und der Record kann nicht gelöscht werden (nur die TTL ist änderbar). Zum Entfernen die Zuweisung in der DynDNS-Verwaltung löschen.',
+    'record_error_dyndns_ambiguous_record' => 'Der A-/AAAA-Record %s liegt an einem für DynDNS reservierten Namen und lässt sich keinem DynDNS-Account eindeutig zuordnen (z. B. geteilter Hostname oder mehrere Records). Er kann hier weder geändert noch gelöscht werden. Bitte zuerst die DynDNS-Zuweisung(en) in der DynDNS-Verwaltung entfernen.',
+    'record_error_dyndns_generic' => 'Der Vorgang wird durch eine DynDNS-Reservierung verhindert.',
+    'record_error_unhandled' => 'Beim Verarbeiten des Records ist ein unerwarteter Fehler aufgetreten.',
+
     // js
     'record_mx_invalid_priority' => 'Bitte eine gültige Priorität (Zahl) für den MX-Eintrag angeben.',
     'record_mx_missing_target' => 'Bitte einen gültigen Mailserver angeben.',

@@ -11,6 +11,7 @@
  * - Erkennung bestehender Doppelbelegungen (dyndnsFindAccountsSharingHostname)
  * - Konservative Auswahl löschbarer A/AAAA-Records eines Accounts (dyndnsClassifyAccountRecords)
  * - Erkennung von Lock-Timeouts/Deadlocks und Duplicate-Key-Fehlern
+ * - Reservierungsschutz für gewöhnliche Record-Operationen (dyndnsCheckRecordChange)
  *
  * Die Funktionen kennen keine Web-Schicht (keine Session, keine Toasts, kein HTML).
  *
@@ -20,9 +21,10 @@
  * Transaktion sein: Die Sperre ist ein Locking Read; die nachfolgenden einfachen SELECTs
  * erzeugen ihren Read-Snapshot erst nach dem Warten auf die Sperre und sehen damit alle
  * zuvor committeten Änderungen anderer Sperrinhaber (DynDNS-Accountverwaltung, DynDNS-API,
- * Publish). Schreibpfade, die diese Zonensperre NICHT verwenden (derzeit RecordService),
- * werden dadurch nicht serialisiert. Ohne UNIQUE-Constraint auf (zone_id, hostname) ist die
- * Zonensperre der einzige Schutz gegen parallele Doppelbelegungen.
+ * RecordService, Publish). Schreibpfade, die diese Zonensperre NICHT verwenden (z. B. das
+ * Neuaufbauen der Server-NS/Glue-Records, die Zonenverwaltung und AutoPTR), werden dadurch nicht
+ * serialisiert. Ohne UNIQUE-Constraint auf (zone_id, hostname) ist die Zonensperre der einzige
+ * Schutz gegen parallele Doppelbelegungen.
  */
 
 declare(strict_types=1);
@@ -660,4 +662,311 @@ function dyndnsApplyApiRecordUpdate(PDO $pdo, int $zoneId, array $record, string
     if ($stmt->rowCount() !== 1) {
         throw new DyndnsApiReject('dnserr', 'record_changed', "record_id={$record['id']} rowCount=" . $stmt->rowCount());
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reservierungsschutz für gewöhnliche Record-Operationen (RecordService)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Lädt alle DynDNS-Accounts einer Zone. Maßgeblich ist ausschließlich zones.id (zone_id);
+ * allow_dyndns und Zonentyp werden bewusst NICHT berücksichtigt, damit auch Altbestände in
+ * deaktivierten oder ungewöhnlichen Zonen geschützt bleiben.
+ *
+ * Autoritativ nur innerhalb einer Transaktion nach dyndnsLockZones() für $zoneId.
+ *
+ * @return array<int, array{id:int|string, username:string, hostname:string, current_ipv4:?string, current_ipv6:?string}>
+ */
+function dyndnsLoadZoneAccounts(PDO $pdo, int $zoneId): array
+{
+    $stmt = $pdo->prepare("
+        SELECT id, username, hostname, current_ipv4, current_ipv6
+        FROM dyndns_accounts
+        WHERE zone_id = ?
+        ORDER BY id
+    ");
+    $stmt->execute([$zoneId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Liefert Schreibweisen eines Namens für den losen Vergleich über die Datenbank-Collation:
+ * Original, ohne Rand-Leerzeichen, ohne abschließenden Punkt, relativ zur Zone (Groß-/Kleinschreibung
+ * bleibt erhalten) sowie die absoluten Schreibweisen mit und ohne abschließenden Punkt.
+ *
+ * @return string[]
+ */
+function dyndnsLooseNameForms(string $name, string $zoneName): array
+{
+    $zone  = rtrim(trim($zoneName), '.');
+    $trim  = trim($name);
+    $noDot = rtrim($trim, '.');
+    $rel   = $noDot;
+
+    if ($zone !== '' && strlen($noDot) > strlen($zone) + 1
+        && dyndnsAsciiLower(substr($noDot, -(strlen($zone) + 1))) === '.' . dyndnsAsciiLower($zone)) {
+        $rel = substr($noDot, 0, -(strlen($zone) + 1));
+    }
+
+    $forms = [$name, $trim, $noDot, $rel];
+
+    if ($rel !== '' && $rel !== '@' && $zone !== '') {
+        $forms[] = $rel . '.' . $zone;
+        $forms[] = $rel . '.' . $zone . '.';
+    }
+
+    return array_values(array_unique($forms));
+}
+
+/**
+ * Ermittelt, welche DynDNS-Accounts einen Owner-Namen reservieren.
+ *
+ * - strict:      kanonisch gleicher Name (dyndnsCanonicalName; DNS-Semantik: nur ASCII-Groß-/
+ *                Kleinschreibung, relativ/absolut gleichwertig, Rand-Leerzeichen ignoriert)
+ * - loose:       Accounts, deren Hostname nur unter der Datenbank-Collation gleich ist (z. B. "hóme"
+ *                = "home"). Diese Treffer dürfen eine konservative Ablehnung auslösen, begründen
+ *                aber NIE die Zuordnung eines Records zu einem Account.
+ * - descendants: Accounts, deren Hostname unterhalb des Owner-Namens liegt (Owner ist echter
+ *                Vorfahr; der Apex ist Vorfahr aller Namen)
+ *
+ * @param array $accounts Ergebnis von dyndnsLoadZoneAccounts()
+ * @return array{owner:?string, strict:array, loose:array, descendants:array}
+ */
+function dyndnsFindOwnerReservations(PDO $pdo, int $zoneId, string $zoneName, string $ownerName, array $accounts): array
+{
+    $owner = dyndnsCanonicalName($ownerName, $zoneName);
+    $res = ['owner' => $owner, 'strict' => [], 'loose' => [], 'descendants' => []];
+
+    if ($owner === null) {
+        return $res; // außerhalb der Zone, von BIND ignoriert
+    }
+
+    $strictIds = [];
+    foreach ($accounts as $acc) {
+        $host = dyndnsCanonicalName((string)$acc['hostname'], $zoneName);
+        if ($host === null) {
+            continue;
+        }
+        if ($host === $owner) {
+            $res['strict'][] = $acc;
+            $strictIds[(int)$acc['id']] = true;
+        } elseif ($owner === '@' || str_ends_with($host, '.' . $owner)) {
+            $res['descendants'][] = $acc;
+        }
+    }
+
+    // Loser Treffer über die Collation der Spalte (nur für Nicht-Apex-Namen)
+    if ($owner !== '@' && $accounts !== []) {
+        $forms = dyndnsLooseNameForms($ownerName, $zoneName);
+        $in = implode(',', array_fill(0, count($forms), '?'));
+        $stmt = $pdo->prepare("
+            SELECT id FROM dyndns_accounts
+            WHERE zone_id = ?
+              AND (hostname IN ($in) OR TRIM(TRAILING '.' FROM TRIM(hostname)) IN ($in))
+        ");
+        $stmt->execute(array_merge([$zoneId], $forms, $forms));
+        $looseIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        foreach ($accounts as $acc) {
+            $id = (int)$acc['id'];
+            if (in_array($id, $looseIds, true) && !isset($strictIds[$id])) {
+                $res['loose'][] = $acc;
+            }
+        }
+    }
+
+    return $res;
+}
+
+/**
+ * Ordnet unter allen A/AAAA-Records einer Zone den Record eines DynDNS-Accounts zu – mit denselben
+ * Kriterien wie die DynDNS-API (dyndnsPlanApiRecordChanges), jedoch für genau eine Adressfamilie.
+ *
+ * Reine Funktion ohne Datenbankzugriff, unabhängig von der Collation. Zustände:
+ * - NONE       kein Record des Typs unter dem Hostnamen
+ * - MANAGED    genau ein Record (kein Systemrecord, Name nur in ASCII-Groß-/Kleinschreibung vom
+ *              Hostnamen verschieden), dessen Inhalt der gespeicherten Account-IP entspricht
+ * - AMBIGUOUS  alles andere (Systemrecord, abweichende Schreibweise/absoluter Name, mehrere
+ *              Records, fehlende oder abweichende gespeicherte IP)
+ *
+ * @param array       $zoneRecords A/AAAA-Records der Zone (id, name, type, content, server_id)
+ * @param string      $type        'A' oder 'AAAA'
+ * @param string|null $storedIp    current_ipv4 bzw. current_ipv6 des Accounts
+ * @return array{state:string, record:?array}
+ */
+function dyndnsAttributeAddressRecord(array $zoneRecords, string $zoneName, string $hostname, string $type, ?string $storedIp): array
+{
+    $host = dyndnsCanonicalName($hostname, $zoneName);
+    $strictName = dyndnsAsciiLower($hostname);
+    $candidates = [];
+
+    foreach ($zoneRecords as $rec) {
+        if (strtoupper((string)$rec['type']) !== $type) {
+            continue;
+        }
+        if ($host !== null && dyndnsCanonicalName((string)$rec['name'], $zoneName) === $host) {
+            $candidates[] = $rec;
+        }
+    }
+
+    if ($candidates === []) {
+        return ['state' => 'NONE', 'record' => null];
+    }
+
+    foreach ($candidates as $rec) {
+        if ($rec['server_id'] !== null || dyndnsAsciiLower((string)$rec['name']) !== $strictName) {
+            return ['state' => 'AMBIGUOUS', 'record' => null];
+        }
+    }
+
+    if (count($candidates) > 1) {
+        return ['state' => 'AMBIGUOUS', 'record' => null];
+    }
+
+    $rec = $candidates[0];
+    if ($storedIp === null || trim($storedIp) === '' || !dyndnsIpEquals($storedIp, (string)$rec['content'])) {
+        return ['state' => 'AMBIGUOUS', 'record' => null];
+    }
+
+    return ['state' => 'MANAGED', 'record' => $rec];
+}
+
+/**
+ * Prüft, ob eine geplante Record-Operation der RecordService-Schicht DynDNS-Reservierungen verletzt.
+ *
+ * Bewertet den bisherigen Zustand ($old, "verlassen") und den beabsichtigten Zustand ($new,
+ * "betreten") getrennt:
+ *
+ * Verlassen – nur für A/AAAA an einem reservierten Namen (strikt oder lose):
+ * - MANAGED (eindeutig zuordenbar, strikt): nur TTL-Änderungen zulässig; Name, Typ oder IP ändern
+ *   und Löschen → MANAGED_RECORD
+ * - sonst (mehrdeutig, geteilter Hostname, Systemrecord, nur loser Treffer) → AMBIGUOUS_RECORD,
+ *   auch bei reiner TTL-Änderung (fail-closed)
+ *
+ * Betreten – nur wenn sich (kanonischer Name, Typ) gegenüber $old ändert oder $old fehlt:
+ * - A/AAAA an reserviertem Namen                      → RESERVED_ADDRESS
+ * - CNAME an reserviertem Namen                       → RESERVED_CNAME
+ * - NS an reserviertem Namen oder an einem echten Vorfahren eines reservierten Namens
+ *   (Apex ausgenommen)                                → RESERVED_DELEGATION
+ * - DNAME an reserviertem Namen oder Vorfahren (Apex) → RESERVED_DNAME
+ * Kompatible Typen (TXT, MX, CAA, SRV, …) sind erlaubt. Ein bereits bestehender CNAME/NS an
+ * einem reservierten Namen darf in Inhalt/TTL geändert werden (kein neuer Konflikt).
+ *
+ * Glue- und Systemrecords werden hier nicht ausgenommen: An reservierten Hostnamen hat der
+ * DynDNS-Schutz Vorrang vor den Glue-Ausnahmen. An nicht reservierten Namen greift diese
+ * Funktion nicht ein.
+ *
+ * Autoritativ nur innerhalb einer Transaktion nach dyndnsLockZones() für $zoneId; $zoneName ist
+ * der unter dieser Sperre gelesene Zonenname.
+ *
+ * @param array|null $old Bestehender Record (id, name, type, content, ttl, server_id) oder null (Anlegen)
+ * @param array|null $new Beabsichtigter Zustand (name, type, content, ttl) oder null (Löschen)
+ * @return array{code:string, name:string, type:string, hostname:string, accountIds:int[]}|null
+ */
+function dyndnsCheckRecordChange(PDO $pdo, int $zoneId, string $zoneName, ?array $old, ?array $new): ?array
+{
+    if (!$pdo->inTransaction()) {
+        throw new LogicException('dyndnsCheckRecordChange() erfordert eine aktive Transaktion.');
+    }
+
+    $accounts = dyndnsLoadZoneAccounts($pdo, $zoneId);
+    if ($accounts === []) {
+        return null;
+    }
+
+    $violation = static function (string $code, string $name, string $type, array $accs): array {
+        return [
+            'code'       => $code,
+            'name'       => $name,
+            'type'       => $type,
+            'hostname'   => $accs !== [] ? (string)$accs[0]['hostname'] : '',
+            'accountIds' => array_map(static fn (array $a): int => (int)$a['id'], $accs),
+        ];
+    };
+
+    // 1. Verlassen: bisheriger A/AAAA-Record an einem reservierten Namen
+    if ($old !== null && in_array(strtoupper((string)$old['type']), ['A', 'AAAA'], true)) {
+        $res = dyndnsFindOwnerReservations($pdo, $zoneId, $zoneName, (string)$old['name'], $accounts);
+        $reserving = array_merge($res['strict'], $res['loose']);
+
+        if ($reserving !== []) {
+            $oldType = strtoupper((string)$old['type']);
+            $state = 'AMBIGUOUS';
+
+            if (count($res['strict']) === 1 && $res['loose'] === [] && $old['server_id'] === null) {
+                $acc = $res['strict'][0];
+                $stmt = $pdo->prepare("SELECT id, name, type, content, server_id FROM records WHERE zone_id = ? AND type = ?");
+                $stmt->execute([$zoneId, $oldType]);
+                $attr = dyndnsAttributeAddressRecord(
+                    $stmt->fetchAll(PDO::FETCH_ASSOC),
+                    $zoneName,
+                    (string)$acc['hostname'],
+                    $oldType,
+                    $oldType === 'A' ? ($acc['current_ipv4'] ?? null) : ($acc['current_ipv6'] ?? null)
+                );
+                if ($attr['state'] === 'MANAGED' && (int)$attr['record']['id'] === (int)$old['id']) {
+                    $state = 'MANAGED';
+                }
+            }
+
+            if ($state !== 'MANAGED') {
+                return $violation('AMBIGUOUS_RECORD', (string)$old['name'], $oldType, $reserving);
+            }
+
+            // MANAGED: ausschließlich TTL-Änderungen (Name, Typ und IP-Inhalt unverändert)
+            $identityKept = $new !== null
+                && (string)$new['type'] === (string)$old['type']
+                && (string)$new['name'] === (string)$old['name']
+                && (string)$new['content'] === (string)$old['content'];
+
+            if (!$identityKept) {
+                return $violation('MANAGED_RECORD', (string)$old['name'], $oldType, $reserving);
+            }
+        }
+    }
+
+    // 2. Betreten: beabsichtigter Name/Typ
+    if ($new !== null) {
+        $newType  = strtoupper((string)$new['type']);
+        $newOwner = dyndnsCanonicalName((string)$new['name'], $zoneName);
+
+        $keyUnchanged = $old !== null
+            && $newOwner !== null
+            && strtoupper((string)$old['type']) === $newType
+            && dyndnsCanonicalName((string)$old['name'], $zoneName) === $newOwner;
+
+        if (!$keyUnchanged && in_array($newType, ['A', 'AAAA', 'CNAME', 'NS', 'DNAME'], true)) {
+            $res = dyndnsFindOwnerReservations($pdo, $zoneId, $zoneName, (string)$new['name'], $accounts);
+            $atName = array_merge($res['strict'], $res['loose']);
+            $code = null;
+            $involved = $atName;
+
+            if ($newType === 'A' || $newType === 'AAAA') {
+                $code = $atName !== [] ? 'RESERVED_ADDRESS' : null;
+            } elseif ($newType === 'CNAME') {
+                $code = $atName !== [] ? 'RESERVED_CNAME' : null;
+            } elseif ($newType === 'NS') {
+                if ($atName !== []) {
+                    $code = 'RESERVED_DELEGATION';
+                } elseif ($res['owner'] !== '@' && $res['descendants'] !== []) {
+                    $code = 'RESERVED_DELEGATION';
+                    $involved = $res['descendants'];
+                }
+            } else { // DNAME
+                if ($atName !== []) {
+                    $code = 'RESERVED_DNAME';
+                } elseif ($res['descendants'] !== []) {
+                    $code = 'RESERVED_DNAME';
+                    $involved = $res['descendants'];
+                }
+            }
+
+            if ($code !== null) {
+                return $violation($code, (string)$new['name'], $newType, $involved);
+            }
+        }
+    }
+
+    return null;
 }

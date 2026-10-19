@@ -235,6 +235,16 @@ return [
     'record_deleted_success'                     => 'Record(s) deleted successfully.',
     'record_error_delete_failed'                 => 'An error occurred while deleting the record(s).',
 
+    // DynDNS-Reservierungen (RecordService)
+    'record_error_dyndns_reserved_address' => 'The name %s is reserved for a DynDNS account. A/AAAA records cannot be created or moved there.',
+    'record_error_dyndns_reserved_cname' => 'The name %s is reserved for a DynDNS account. A CNAME record is not allowed there.',
+    'record_error_dyndns_reserved_delegation' => 'The name %s is reserved for a DynDNS account or lies above one. An NS record (delegation) is not allowed there.',
+    'record_error_dyndns_reserved_dname' => 'The name %s is reserved for a DynDNS account or lies above one. A DNAME record is not allowed there.',
+    'record_error_dyndns_managed_record' => 'The A/AAAA record %s is managed by a DynDNS account. Its name, type and IP address cannot be changed and the record cannot be deleted (only the TTL can be changed). To remove it, delete the assignment in the DynDNS management.',
+    'record_error_dyndns_ambiguous_record' => 'The A/AAAA record %s is located at a name reserved for DynDNS and cannot be attributed unambiguously to a DynDNS account (e.g. shared hostname or multiple records). It can neither be changed nor deleted here. Please remove the DynDNS assignment(s) in the DynDNS management first.',
+    'record_error_dyndns_generic' => 'The operation is prevented by a DynDNS reservation.',
+    'record_error_unhandled' => 'An unexpected error occurred while processing the record.',
+
     // js
     'record_mx_invalid_priority' => 'Please enter a valid priority (number) for the MX record.',
     'record_mx_missing_target' => 'Please provide a valid mail server.',
