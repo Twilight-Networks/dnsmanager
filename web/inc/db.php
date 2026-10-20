@@ -5,7 +5,8 @@
  *
  * Details:
  * - Lädt die zentrale Konfiguration (DB-Zugangsdaten aus ui_config.php).
- * - Stellt eine PDO-Verbindung zur MariaDB/MySQL-Datenbank her.
+ * - Stellt eine PDO-Verbindung zur MariaDB/MySQL-Datenbank her (über AppBootstrap::createPdo()).
+ * - Stellt die Verbindung als globale $pdo / $GLOBALS['pdo'] für den bestehenden Web-Code bereit.
  * - Fehler im Verbindungsaufbau führen zum sofortigen Abbruch mit einer sicheren Fehlermeldung.
  *
  * Hinweise:
@@ -18,14 +19,12 @@
 // Konfiguration laden
 require_once __DIR__ . '/../config/ui_config.php';
 
-// DSN (Data Source Name) für PDO erstellen
-$dsn = 'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=' . DB_CHARSET;
+// Gemeinsamer Verbindungsaufbau der Application-Schicht (gleiche DSN und Optionen wie bisher)
+require_once __DIR__ . '/app/AppBootstrap.php';
 
 try {
     // PDO-Instanz mit Fehlerbehandlung initialisieren
-    $pdo = new PDO($dsn, DB_USER, DB_PASS, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, // Fehler als Exception werfen
-    ]);
+    $pdo = AppBootstrap::createPdo();
 } catch (PDOException $e) {
     // Verbindung fehlgeschlagen – sicherer Abbruch
     die("Datenbankverbindung fehlgeschlagen: " . htmlspecialchars($e->getMessage()));
