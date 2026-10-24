@@ -24,3 +24,29 @@ function actorFromSession(): Actor
         'web'
     );
 }
+
+/**
+ * Strukturprüfung einer Mehrfachauswahl aus einem Formular (z. B. $_POST['zones']).
+ *
+ * Erlaubt ist nur eine Liste (fortlaufende Schlüssel ab 0, array_is_list()) aus Zeichenketten, wie sie
+ * ein <select multiple name="x[]"> liefert; eine leere Liste ist zulässig. Skalare Werte, assoziative
+ * bzw. nicht fortlaufend indizierte Arrays (z. B. x[5]=…) und verschachtelte Arrays gelten als ungültige
+ * Eingabestruktur.
+ *
+ * @param mixed $value Rohwert aus $_POST
+ *
+ * @return string[]|null Werte in Eingabereihenfolge oder null bei ungültiger Struktur
+ */
+function postStringList(mixed $value): ?array
+{
+    if (!is_array($value) || !array_is_list($value)) {
+        return null;
+    }
+    foreach ($value as $item) {
+        if (!is_string($item)) {
+            return null;
+        }
+    }
+
+    return array_values($value);
+}

@@ -10,100 +10,104 @@
  * - Bei Zone-Admins können individuelle Zonen zugewiesen werden.
  * - Erfolgreiche Anlage wird als Session-Toast gemeldet.
  *
+ * Web-Adapter: Eingaben lesen, UserService::createUser() aufrufen, ServiceMessages in
+ * Toasts/Logs übersetzen. Validierung, Berechtigung (DB-Rolle) und Transaktion liegen im Service.
+ *
  * Zugriff:
- * - Nur Admins (requireRole(['admin'])).
+ * - Nur Admins (requireRole(['admin'])); zusätzlich prüft der Service die Rolle in der Datenbank.
  */
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 requireRole(['admin']);
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/users/UserService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 // Eingaben aus dem POST-Request lesen und trimmen
 $username = trim($_POST['username']);
 $password_raw = $_POST['password'];
 $role = $_POST['role'] === 'admin' ? 'admin' : 'zoneadmin';
-$zones = isset($_POST['zones']) ? $_POST['zones'] : [];
+$zones = postStringList(isset($_POST['zones']) ? $_POST['zones'] : []);
 
-// Benutzername validieren
-if (!preg_match('/^[a-zA-Z0-9_\-\.@]+$/', $username)) {
-    toastError(
-        $LANG['user_error_invalid_username'],
-        "Benutzeranlage fehlgeschlagen: ungültiger Benutzername '{$username}'."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Passwort validieren über zentrale Helferfunktion
-if (!validatePassword($password_raw)) {
-    toastError(
-        sprintf($LANG['error_password_too_short'], PASSWORD_MIN_LENGTH),
-        "Benutzeranlage fehlgeschlagen: Passwort für '{$username}' zu kurz."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Prüfen, ob Benutzername bereits existiert
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
-$stmt->execute([$username]);
-if ($stmt->fetchColumn() > 0) {
-    toastError(
-        $LANG['user_error_username_exists'],
-        "Benutzeranlage fehlgeschlagen: Benutzername '{$username}' existiert bereits."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Passwort sicher hashen
-$password_hash = password_hash($password_raw, PASSWORD_DEFAULT);
-
-try {
-    $pdo->beginTransaction();
-
-    // Benutzer anlegen
-    $stmt = $pdo->prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)");
-    $stmt->execute([$username, $password_hash, $role]);
-
-    $user_id = (int)$pdo->lastInsertId();
-    if ($user_id < 1) {
-        throw new Exception("Benutzer-ID konnte nicht ermittelt werden.");
-    }
-
-    // Zone-Zuweisung bei Zoneadmins
-    if ($role === 'zoneadmin') {
-        $insert = $pdo->prepare("INSERT INTO user_zones (user_id, zone_id) VALUES (?, ?)");
-
-        if (in_array('all', $zones, true)) {
-            $zone_stmt = $pdo->prepare("SELECT id FROM zones");
-            $zone_stmt->execute();
-            $zone_ids = $zone_stmt->fetchAll(PDO::FETCH_COLUMN);
-
-            foreach ($zone_ids as $zone_id) {
-                $insert->execute([$user_id, (int)$zone_id]);
-            }
-        } else {
-            foreach ($zones as $zone_id) {
-                $zone_id = (int)$zone_id;
-                if ($zone_id > 0) {
-                    $insert->execute([$user_id, $zone_id]);
-                }
-            }
-        }
-    }
-
-    $pdo->commit();
-    toastSuccess(
-        sprintf($LANG['user_created'], htmlspecialchars($username)),
-        "Benutzer '{$username}' mit Rolle '{$role}' erfolgreich erstellt."
-    );
-} catch (Throwable $e) {
-    $pdo->rollBack();
+// Ungültige Eingabestruktur (z. B. skalares "zones") ausdrücklich zurückweisen
+if ($zones === null) {
     toastError(
         $LANG['user_error_create_failed'],
-        "Transaktion fehlgeschlagen bei Benutzeranlage '{$username}': " . $e->getMessage()
+        "Benutzeranlage abgelehnt: ungültige Eingabestruktur für Zonen (keine Liste)."
     );
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
+    exit;
+}
+
+// "all" = alle vorhandenen Zonen; übrige Werte als Zonen-IDs (Werte <= 0 ignoriert der Service)
+$input = new UserInput(
+    $username,
+    $role,
+    array_map('intval', array_values(array_filter($zones, static fn (string $z): bool => $z !== 'all'))),
+    in_array('all', $zones, true)
+);
+
+$userService = new UserService($pdo);
+$result = $userService->createUser(actorFromSession(), $input, $password_raw);
+
+// ServiceMessages in bestehende Toasts/Logs übersetzen
+foreach ($result->messages as $message) {
+    $ctx = $message->context;
+
+    switch ($message->code) {
+        case 'user.create.access_denied':
+            logAccessDenied('user_add', "Benutzer-ID {$ctx['actorId']} ist laut Datenbank kein Administrator.");
+            http_response_code(403);
+            exit('Zugriff verweigert: Unzureichende Berechtigungen.');
+
+        case 'user.create.invalid_username':
+            toastError(
+                $LANG['user_error_invalid_username'],
+                "Benutzeranlage fehlgeschlagen: ungültiger Benutzername '{$username}'."
+            );
+            break;
+
+        case 'user.create.password_too_short':
+            toastError(
+                sprintf($LANG['error_password_too_short'], PASSWORD_MIN_LENGTH),
+                "Benutzeranlage fehlgeschlagen: Passwort für '{$username}' zu kurz."
+            );
+            break;
+
+        case 'user.create.username_exists':
+            toastError(
+                $LANG['user_error_username_exists'],
+                "Benutzeranlage fehlgeschlagen: Benutzername '{$username}' existiert bereits."
+            );
+            break;
+
+        case 'user.create.success':
+            toastSuccess(
+                sprintf($LANG['user_created'], htmlspecialchars($username)),
+                "Benutzer '{$username}' mit Rolle '{$role}' erfolgreich erstellt."
+            );
+            break;
+
+        case 'user.create.failed':
+            toastError(
+                $LANG['user_error_create_failed'],
+                "Transaktion fehlgeschlagen bei Benutzeranlage '{$username}': " . $ctx['detail']
+            );
+            break;
+
+        default:
+            // Unbekannte ServiceMessages nie still verwerfen
+            if ($message->kind === 'success') {
+                appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (user_add)");
+            } else {
+                toastError(
+                    $LANG['user_error_create_failed'],
+                    "Unbehandelte ServiceMessage '{$message->code}' (user_add)"
+                );
+            }
+            break;
+    }
 }
 
 header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");

@@ -6,78 +6,103 @@
  * - Admins dürfen jedes Passwort ändern (nur 1x-Eingabe nötig)
  * - Benutzer dürfen ihr eigenes ändern (2x-Eingabe erforderlich)
  * - Passwörter werden per bcrypt sicher gehasht
+ *
+ * Web-Adapter: Eingaben lesen (trim wie bisher), UserService::changePassword() aufrufen,
+ * ServiceMessages in Toasts/Logs übersetzen. Berechtigung (DB-Stand) und Transaktion liegen im Service.
  */
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/users/UserService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 $user_id = (int)($_POST['id'] ?? 0);
 $current_user_id = (int)$_SESSION['user_id'];
-$is_self = ($user_id === $current_user_id);
-$is_admin = ($_SESSION['role'] === 'admin');
 
-if (!$is_admin && !$is_self) {
-    toastError(
-        $LANG['error_password_unauthorized'],
-        "Verbotener Passwort-Änderungsversuch für Benutzer-ID {$user_id} durch Benutzer-ID {$current_user_id}."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
+// Manipulierte Passwortfelder (z. B. Arrays) werden wie leere Eingaben behandelt: kein TypeError;
+// Berechtigung (zuerst) und Passwortregeln prüft unverändert der UserService.
+$password_raw = $_POST['password'] ?? '';
+$password_repeat_raw = $_POST['password_repeat'] ?? '';
+$password = is_string($password_raw) ? trim($password_raw) : '';
+$password_repeat = is_string($password_repeat_raw) ? trim($password_repeat_raw) : '';
 
-$password = trim($_POST['password'] ?? '');
-$password_repeat = trim($_POST['password_repeat'] ?? '');
+$userService = new UserService($pdo);
+$result = $userService->changePassword(actorFromSession(), $user_id, $password, $password_repeat);
 
-if (!validatePassword($password)) {
-    toastError(
-        sprintf($LANG['error_password_too_short'], PASSWORD_MIN_LENGTH),
-        "Passwort-Änderung abgelehnt: Passwort zu kurz für Benutzer-ID {$user_id}."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
+// ServiceMessages in bestehende Toasts/Logs übersetzen
+foreach ($result->messages as $message) {
+    $ctx = $message->context;
 
-if ($is_self && $password !== $password_repeat) {
-    toastError(
-        $LANG['error_password_mismatch'],
-        "Passwort-Änderung durch Benutzer-ID {$user_id} abgebrochen: Eingaben nicht identisch."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
+    switch ($message->code) {
+        case 'user.password.unauthorized':
+            toastError(
+                $LANG['error_password_unauthorized'],
+                "Verbotener Passwort-Änderungsversuch für Benutzer-ID {$user_id} durch Benutzer-ID {$current_user_id}."
+            );
+            break;
 
-// Passwort hashen vor der Transaktion
-$hash = password_hash($password, PASSWORD_DEFAULT);
-if ($hash === false) {
-    toastError(
-        $LANG['error_password_processing'],
-        "Passwort-Hashing für Benutzer-ID {$user_id} fehlgeschlagen."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
+        case 'user.password.access_denied':
+            logAccessDenied('user_password', "Benutzer-ID {$current_user_id} ist laut Datenbank nicht (mehr) berechtigt, das Passwort von Benutzer-ID {$user_id} zu ändern.");
+            http_response_code(403);
+            exit('Zugriff verweigert: Unzureichende Berechtigungen.');
 
-try {
-    $pdo->beginTransaction();
+        case 'user.password.password_too_short':
+            toastError(
+                sprintf($LANG['error_password_too_short'], PASSWORD_MIN_LENGTH),
+                "Passwort-Änderung abgelehnt: Passwort zu kurz für Benutzer-ID {$user_id}."
+            );
+            break;
 
-    $stmt = $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
-    $stmt->execute([$hash, $user_id]);
+        case 'user.password.mismatch':
+            toastError(
+                $LANG['error_password_mismatch'],
+                "Passwort-Änderung durch Benutzer-ID {$user_id} abgebrochen: Eingaben nicht identisch."
+            );
+            break;
 
-    $pdo->commit();
+        case 'user.password.hash_failed':
+            toastError(
+                $LANG['error_password_processing'],
+                "Passwort-Hashing für Benutzer-ID {$user_id} fehlgeschlagen."
+            );
+            break;
 
-    toastSuccess(
-        $is_self
-            ? $LANG['password_changed']
-            : $LANG['password_changed_admin'],
-        "Passwort erfolgreich geändert für Benutzer-ID {$user_id}" . ($is_self ? " (eigenes Konto)" : " (durch Admin)")
-    );
+        case 'user.password.not_found':
+            toastError(
+                $LANG['user_error_not_found'],
+                "Passwort-Änderung fehlgeschlagen: Benutzer-ID {$user_id} existiert nicht."
+            );
+            break;
 
-} catch (Exception $e) {
-    $pdo->rollBack();
-    toastError(
-        $LANG['error_password_save'],
-        "Fehler beim Speichern des Passworts für Benutzer-ID {$user_id}: " . $e->getMessage()
-    );
+        case 'user.password.success':
+            toastSuccess(
+                $ctx['self']
+                    ? $LANG['password_changed']
+                    : $LANG['password_changed_admin'],
+                "Passwort erfolgreich geändert für Benutzer-ID {$user_id}" . ($ctx['self'] ? " (eigenes Konto)" : " (durch Admin)")
+            );
+            break;
+
+        case 'user.password.failed':
+            toastError(
+                $LANG['error_password_save'],
+                "Fehler beim Speichern des Passworts für Benutzer-ID {$user_id}: " . $ctx['detail']
+            );
+            break;
+
+        default:
+            // Unbekannte ServiceMessages nie still verwerfen
+            if ($message->kind === 'success') {
+                appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (user_password)");
+            } else {
+                toastError(
+                    $LANG['error_password_save'],
+                    "Unbehandelte ServiceMessage '{$message->code}' (user_password)"
+                );
+            }
+            break;
+    }
 }
 
 header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");

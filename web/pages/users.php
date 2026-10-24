@@ -6,30 +6,42 @@
 
 define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
+require_once __DIR__ . '/../inc/app/users/UserReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 include __DIR__ . '/../templates/layout.php';
 
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
 
-// Benutzer laden
-if ($_SESSION['role'] === 'admin') {
-    $stmt = $pdo->prepare("SELECT * FROM users ORDER BY role");
-    $stmt->execute();
-    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} else {
-    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-    $stmt->execute([$_SESSION['user_id']]);
-    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
+$actor = actorFromSession();
 
-// Liste aller verfügbaren Zonen laden
-$stmt = $pdo->prepare("SELECT id, name FROM zones ORDER BY name");
-$stmt->execute();
-$zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// Benutzer laden (UserReadService: Sichtbarkeit nach DB-Rolle; admin: alle, zoneadmin: eigener Datensatz).
+// Vollständige Liste: alle Seiten abrufen, keine Begrenzung auf eine Seite.
+$userReadService = new UserReadService($pdo);
+$users = [];
+$offset = 0;
+do {
+    $page = $userReadService->listUsers($actor, UserReadService::MAX_LIMIT, $offset);
+    $users = array_merge($users, $page['users']);
+    $offset += UserReadService::MAX_LIMIT;
+} while ($page['hasMore']);
 
-// Anzahl der Admins (für Löschsperre)
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE role = :role");
-$stmt->execute(['role' => 'admin']);
-$admin_count = $stmt->fetchColumn();
+// Liste der verfügbaren Zonen (Formulare; nur für Admins sichtbar), vollständig, nach Name sortiert
+$zoneReadService = new ZoneReadService($pdo, new ZoneAccess($pdo));
+$zones = [];
+$offset = 0;
+do {
+    $page = $zoneReadService->listZones($actor, ZoneReadService::MAX_LIMIT, $offset);
+    foreach ($page['zones'] as $z) {
+        $zones[] = ['id' => $z['id'], 'name' => $z['name']];
+    }
+    $offset += ZoneReadService::MAX_LIMIT;
+} while ($page['hasMore']);
+
+// Anzahl der Admins (für Löschsperre); die Liste ist für Admins vollständig
+$admin_count = count(array_filter($users, static fn (array $u): bool => $u['role'] === 'admin'));
 ?>
 
 <br><br>
@@ -58,10 +70,8 @@ $admin_count = $stmt->fetchColumn();
         <?php foreach ($users as $u): ?>
             <?php if ($edit_id === (int)$u['id']): ?>
                 <?php
-                // Lade die zugewiesenen Zonen-IDs für das Bearbeitungsformular
-                $user_zone_ids = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
-                $user_zone_ids->execute([$u['id']]);
-                $selected = array_column($user_zone_ids->fetchAll(PDO::FETCH_ASSOC), 'zone_id');
+                // Zugewiesene Zonen-IDs für das Bearbeitungsformular (aus dem UserReadService)
+                $selected = array_column($u['zones'], 'id');
                 ?>
                 <tr class="table-warning">
                     <td><?= htmlspecialchars($u['username']) ?></td>
@@ -86,9 +96,7 @@ $admin_count = $stmt->fetchColumn();
                             <em><?= $LANG['all_zones'] ?></em>
                         <?php else: ?>
                             <?php
-                            $zstmt = $pdo->prepare("SELECT z.name FROM zones z JOIN user_zones uz ON uz.zone_id = z.id WHERE uz.user_id = ?");
-                            $zstmt->execute([$u['id']]);
-                            $userZoneNames = $zstmt->fetchAll(PDO::FETCH_COLUMN);
+                            $userZoneNames = array_column($u['zones'], 'name');
                             foreach ($userZoneNames as $zname): ?>
                                 <span class="badge bg-primary"><?= htmlspecialchars($zname) ?></span>
                             <?php endforeach; ?>
@@ -128,7 +136,7 @@ $admin_count = $stmt->fetchColumn();
                                     <label class="form-label"><?= $LANG['new_password'] ?></label>
                                     <input type="password" name="password" class="form-control" required>
                                 </div>
-                                <?php if ($_SESSION['user_id'] === $u['id']): ?>
+                                <?php if ((int)$_SESSION['user_id'] === $u['id']): ?>
                                     <div class="mb-3">
                                         <label class="form-label"><?= $LANG['repeat_password'] ?></label>
                                         <input type="password" name="password_repeat" class="form-control" required>

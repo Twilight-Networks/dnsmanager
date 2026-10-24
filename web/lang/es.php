@@ -408,6 +408,7 @@ return [
     'user_error_invalid_id'  => 'ID de usuario no válido.',
     'user_error_not_found'   => 'El usuario no existe.',
     'user_error_last_admin'  => 'No se puede eliminar al último administrador.',
+    'user_error_last_admin_demote' => 'No se puede degradar al último administrador.',
     'user_deleted'           => 'Usuario eliminado correctamente.',
     'user_error_delete'      => 'Error al eliminar el usuario.',
 
