@@ -15,7 +15,8 @@
  *   nie angepasst (keine Rechteänderung „im Flug“).
  * - Beenden wie beim bestehenden Inaktivitäts-Timeout: Authentifizierungsdaten verwerfen, neue anonyme
  *   Session mit frischer Session-ID, die ausschließlich den Hinweis „session_expired“ enthält,
- *   Weiterleitung zur Login-Seite.
+ *   Weiterleitung zur Login-Seite. Protokoll: event=session_revoked auf Level 'error' (unabhängig vom
+ *   konfigurierten LOG_LEVEL stets ausgegeben, Facility LOG_AUTH bei Syslog).
  * - Technischer Fehler bei der Prüfung → Fail-Closed: Die Anfrage wird mit HTTP 503 abgebrochen,
  *   der Fehler protokolliert (ohne Zugangsdaten, Session-ID oder SQL-Details).
  *
@@ -95,7 +96,11 @@ function revalidate_session(PDO $pdo): void
  */
 function session_guard_revoke(string $sessionUser, int $userId, string $reason): never
 {
-    appLog('warning', sprintf(
+    // Sicherheitsereignis: Level 'error' (höchste Stufe), damit es bei keinem gültigen LOG_LEVEL
+    // herausgefiltert wird – wie logAccessDenied(). Hinweis zur Semantik von appLog(): Die Level-Filterung
+    // greift vor $forceSyslog; $forceSyslog wählt nur bei LOG_TARGET = 'syslog' die Facility LOG_AUTH und
+    // erzeugt bei LOG_TARGET = 'apache' keine zusätzliche Syslog-Ausgabe.
+    appLog('error', sprintf(
         'event=session_revoked user=%s userId=%d ip=%s reason=%s',
         $sessionUser,
         $userId,
