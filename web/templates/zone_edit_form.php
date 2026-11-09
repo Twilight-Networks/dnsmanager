@@ -4,7 +4,8 @@
  * Zweck: Bearbeitungsformular für eine bestehende DNS-Zone.
  * Hinweise:
  * - Enthält vollständiges <form>-Tag mit POST-Handling.
- * - Die Variable $zone muss gesetzt sein.
+ * - Die Variable $zone muss gesetzt sein; $zone_edit_servers (wählbare Server) und $zone_edit_assigned
+ *   (server_id => is_master) liefert die einbindende Seite aus dem ZoneReadService.
  * - Eingebunden durch zones.php im Bearbeitungsmodus
  */
 
@@ -18,13 +19,10 @@ if (!isset($zone)) {
     return;
 }
 
-$stmt_all = $pdo->prepare("SELECT id, name, dns_ip4, dns_ip6, active FROM servers ORDER BY name");
-$stmt_all->execute();
-$all_servers = $stmt_all->fetchAll(PDO::FETCH_ASSOC);
-
-$stmt_assigned = $pdo->prepare("SELECT server_id, is_master FROM zone_servers WHERE zone_id = ?");
-$stmt_assigned->execute([$zone['id']]);
-$assigned = $stmt_assigned->fetchAll(PDO::FETCH_KEY_PAIR);
+// Wählbare Server und aktuelle Zuweisung (server_id => is_master) stellt die einbindende Seite bereit
+// (ZoneReadService, Übersetzung im Web-Layer); keine eigenen Datenbankabfragen im Template.
+$all_servers = $zone_edit_servers ?? [];
+$assigned = $zone_edit_assigned ?? [];
 ?>
 
 <tr class="table-warning table-edit-form">

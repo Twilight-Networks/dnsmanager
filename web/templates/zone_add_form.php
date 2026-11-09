@@ -6,6 +6,7 @@
  * Voraussetzungen:
  * - IN_APP muss definiert sein.
  * - Formularwerte werden über $_POST vorbelegt.
+ * - Aktive Server für die Zuweisung liefert die einbindende Seite in $zone_add_servers (ZoneReadService).
  * - Dynamisches Verhalten wird durch zone_add_form.js gesteuert.
  */
 
@@ -95,10 +96,8 @@ if (!defined('IN_APP')) {
     </fieldset>
 
     <?php
-    // Serverliste laden für die Zuweisung
-    $stmt = $pdo->prepare("SELECT id, name, dns_ip4, dns_ip6 FROM servers WHERE active = 1 ORDER BY name");
-    $stmt->execute();
-    $all_servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Aktive Server für die Zuweisung stellt die einbindende Seite bereit (ZoneReadService)
+    $all_servers = $zone_add_servers ?? [];
     ?>
     <div class="col-12">
         <label class="form-label"><?= $LANG['assign_dns_servers'] ?></label>
