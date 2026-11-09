@@ -84,26 +84,28 @@ final class ZoneService
             return self::fail($m, 'error', 'zone.create.invalid_input', ['errors' => array_values($errors)]);
         }
 
-        // Zonenparameter vorbereiten (bisherige Ausdrücke aus zone_add.php)
-        $prefix        = trim($post['zone_prefix'] ?? '');
-        $selected_type = $post['type'] ?? null;
+        // Zonenparameter vorbereiten: bisherige Ausdrücke aus zone_add.php unverändert, bewusst ohne "??",
+        // wo der bisherige Code keines hatte (fehlende Felder erzeugen wie bisher dieselbe PHP-Warnung bzw.
+        // Deprecation und dasselbe Ergebnis; Legacy-Brücke, E17).
+        $prefix        = trim($post['zone_prefix']);
+        $selected_type = $post['type'];
         $type          = in_array($selected_type, ['reverse_ipv4', 'reverse_ipv6']) ? 'reverse' : 'forward';
         $name          = $type === 'reverse'
             ? $prefix . ($selected_type === 'reverse_ipv6' ? '.ip6.arpa' : '.in-addr.arpa')
             : $prefix;
 
-        $ttl           = intval($post['ttl'] ?? null) ?: 86400;
+        $ttl           = intval($post['ttl']) ?: 86400;
         $ttl_ns        = 3600;
         $ttl_glue      = 300;
         $prefix_length = $type === 'reverse' ? (int)($post['prefix_length'] ?? null) : null;
-        $description   = trim($post['description'] ?? '') ?: null;
+        $description   = trim($post['description']) ?: null;
 
         $soa_serial   = (int)(date('Ymd') . '01');
-        $soa_mail     = rtrim(trim($post['soa_mail'] ?? ''), '.') . '.';
-        $soa_refresh  = (int)($post['soa_refresh'] ?? null);
-        $soa_retry    = (int)($post['soa_retry'] ?? null);
-        $soa_expire   = (int)($post['soa_expire'] ?? null);
-        $soa_minimum  = (int)($post['soa_minimum'] ?? null);
+        $soa_mail     = rtrim(trim($post['soa_mail']), '.') . '.';
+        $soa_refresh  = (int)$post['soa_refresh'];
+        $soa_retry    = (int)$post['soa_retry'];
+        $soa_expire   = (int)$post['soa_expire'];
+        $soa_minimum  = (int)$post['soa_minimum'];
         $allow_dyndns = $input->allowDyndns ? 1 : 0;
 
         // Serverzuweisung
