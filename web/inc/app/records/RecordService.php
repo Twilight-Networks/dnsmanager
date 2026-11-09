@@ -15,12 +15,15 @@
  * DB-Connection/Transaktion arbeiten wie das übergebene PDO-Objekt, damit noch
  * nicht committete Record-Änderungen sichtbar sind.
  *
- * Nebenläufigkeit (zone-first): Create, Update und Delete beginnen ihre Transaktion mit dem
- * Sperren der betroffenen Zonenzeile(n) (dyndnsLockZones, aufsteigende Zonen-ID, erste Abfrage
- * der Transaktion) - dieselbe Reihenfolge wie DynDNS-Verwaltung und DynDNS-API. Alle
- * zustandsabhängigen Lesezugriffe und Prüfungen erfolgen erst unter dieser Sperre. Die Garantie
- * gilt nur für Schreibpfade, die dieselbe Zonensperre verwenden. AutoPTR (createAutoPtr) nutzt
- * eine eigene, nachgelagerte Transaktion, die ausschließlich die Reverse-Zone sperrt.
+ * Nebenläufigkeit (R4): Create, Update und Delete beginnen ihre Transaktion mit der sperrenden
+ * Berechtigungsprüfung (ZoneAccess::lockZoneWritePermissions: users S → user_zones S) und sperren
+ * danach die betroffenen Zonenzeile(n) (dyndnsLockZones, aufsteigende Zonen-ID) – Reihenfolge
+ * users → user_zones → zones wie ZoneService (E13). Nur Locking Reads stehen vor der Zonensperre;
+ * der Read-Snapshot entsteht weiterhin erst danach. Ein paralleler Rechteentzug wartet bis zum Ende
+ * der Record-Transaktion bzw. wird – wenn zuvor committet – erkannt. Alle zustandsabhängigen
+ * Lesezugriffe und Prüfungen erfolgen unter diesen Sperren. Die Garantie gilt nur für Schreibpfade,
+ * die dieselben Sperren verwenden. AutoPTR (createAutoPtr) nutzt eine eigene, nachgelagerte
+ * Transaktion, die die Berechtigung für die Reverse-Zone sperrt und ausschließlich diese Zone sperrt.
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -75,10 +78,10 @@ final class RecordService
      * Ein Fehler bei einem Record (fehlender Record, fehlende Berechtigung,
      * Glue-/NS-Schutz, Rebuild-Fehler) führt zum vollständigen Rollback.
      *
-     * Ablauf (zone-first): Die Zonen der Records werden zunächst ohne Sperre ermittelt.
-     * Danach beginnt die Transaktion mit dem Sperren ALLER betroffenen Zonen, in denen der
-     * Akteur schreiben darf, in aufsteigender ID-Reihenfolge (dyndnsLockZones, erste Abfrage
-     * der Transaktion). Erst unter diesen
+     * Ablauf: Die Zonen der Records werden zunächst ohne Sperre ermittelt und vorab auf
+     * Schreibrecht geprüft. Die Transaktion beginnt mit der sperrenden Berechtigungsprüfung für diese
+     * Zonen (lockZoneWritePermissions, aufsteigend; maßgeblich) und sperrt danach alle weiterhin
+     * berechtigten Zonen in aufsteigender ID-Reihenfolge (dyndnsLockZones). Erst unter diesen
      * Sperren werden Records, Zonenname, Berechtigung und Schutzregeln geprüft (jeweils frisch
      * gelesen) und gelöscht. Die Verarbeitungsreihenfolge der IDs und alle Meldungen bleiben
      * wie bisher.
@@ -121,8 +124,11 @@ final class RecordService
 
             $pdo->beginTransaction();
 
-            // Erste Abfrage der Transaktion: alle betroffenen Zonen aufsteigend sperren
-            $zones = dyndnsLockZones($pdo, $lockIds);
+            // Erste Abfragen der Transaktion: Schreibberechtigung für die vorab ermittelten Zonen sperrend
+            // prüfen (users S → user_zones S, aufsteigend; maßgeblich), danach nur die weiterhin
+            // berechtigten Zonen aufsteigend sperren
+            $permitted = $this->zoneAccess->lockZoneWritePermissions($actor, $lockIds);
+            $zones = dyndnsLockZones($pdo, $permitted);
 
             $affected_zones = [];
 
@@ -139,8 +145,8 @@ final class RecordService
                 $zone_id = (int)$record['zone_id'];
                 $lastZoneId = $zone_id;
 
-                // Rechte prüfen (unter der Zonensperre bzw. ohne Sperre für nicht berechtigte Zonen)
-                if (!$this->zoneAccess->canWriteZone($actor, $zone_id)) {
+                // Rechte: maßgeblich ist die gesperrte Berechtigung dieser Transaktion
+                if (!in_array($zone_id, $permitted, true)) {
                     $messages[] = new ServiceMessage('audit', 'record.delete.access_denied', [
                         'userId'   => $actor->userId,
                         'recordId' => $id,
@@ -257,10 +263,10 @@ final class RecordService
     /**
      * Aktualisiert einen bestehenden Record.
      *
-     * Ablauf (zone-first): Berechtigung -> Validierung (ohne Datenbankzustand) -> Transaktion.
-     * Die erste Abfrage der Transaktion sperrt die Zone (dyndnsLockZones). Erst danach werden
-     * alle zustandsabhängigen Informationen frisch gelesen und geprüft: Zonenname,
-     * Schreibberechtigung, Record samt Zonenzuordnung, No-Change-Prüfung, Glue-Schutz,
+     * Ablauf: Berechtigung (Vorabprüfung) -> Validierung (ohne Datenbankzustand) -> Transaktion.
+     * Die Transaktion sperrt zuerst die Schreibberechtigung (lockZoneWritePermissions, maßgeblich),
+     * dann die Zone (dyndnsLockZones). Erst danach werden alle zustandsabhängigen Informationen
+     * frisch gelesen und geprüft: Zonenname, Record samt Zonenzuordnung, No-Change-Prüfung, Glue-Schutz,
      * NS-Schutz und DynDNS-Reservierungen. Das UPDATE ist bedingt auf den zuvor gelesenen
      * Zustand des Records.
      *
@@ -314,7 +320,18 @@ final class RecordService
         try {
             $pdo->beginTransaction();
 
-            // Erste Abfrage der Transaktion: Zone sperren
+            // Erste Abfragen der Transaktion: Schreibberechtigung sperrend prüfen (users S → user_zones S,
+            // maßgeblich; ein paralleler Entzug wartet bis zum Transaktionsende), danach die Zone sperren
+            if ($this->zoneAccess->lockZoneWritePermissions($actor, [$zoneId]) === []) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('audit', 'record.update.access_denied', [
+                    'userId' => $actor->userId,
+                    'zoneId' => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
             $zones = dyndnsLockZones($pdo, [$zoneId]);
 
             if (!isset($zones[$zoneId])) {
@@ -330,17 +347,6 @@ final class RecordService
             // Aktueller Zonenname unter der Sperre (die Zone kann zwischenzeitlich umbenannt worden sein)
             $zoneNameRaw = (string)$zones[$zoneId]['name'];
             $zoneName    = rtrim($zoneNameRaw, '.');
-
-            // Berechtigung unter der Sperre erneut prüfen (z. B. Entzug der Zonenzuweisung)
-            if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
-                $this->rollbackIfActive();
-                $messages[] = new ServiceMessage('audit', 'record.update.access_denied', [
-                    'userId' => $actor->userId,
-                    'zoneId' => $zoneId,
-                ]);
-
-                return new ServiceResult(false, $messages, $zoneId);
-            }
 
             // Record frisch laden; die Zonenzuordnung wird über zone_id mitgeprüft
             $stmt = $pdo->prepare("SELECT * FROM records WHERE id = ? AND zone_id = ?");
@@ -534,10 +540,11 @@ final class RecordService
     /**
      * Legt einen neuen Record an und versucht optional einen automatischen PTR.
      *
-     * Ablauf Forward-Record (zone-first): Berechtigung -> Validierung (ohne Datenbankzustand)
-     * -> Transaktion. Die erste Abfrage der Transaktion sperrt die Zone (dyndnsLockZones).
-     * Unter der Sperre werden Zonenname, Schreibberechtigung, Duplikat und DynDNS-Reservierungen
-     * frisch geprüft; danach INSERT, Rebuild und Commit.
+     * Ablauf Forward-Record: Berechtigung (Vorabprüfung) -> Validierung (ohne Datenbankzustand)
+     * -> Transaktion. Die Transaktion sperrt zuerst die Schreibberechtigung
+     * (lockZoneWritePermissions, maßgeblich), dann die Zone (dyndnsLockZones). Unter den Sperren
+     * werden Zonenname, Duplikat und DynDNS-Reservierungen frisch geprüft; danach INSERT, Rebuild
+     * und Commit.
      *
      * AutoPTR (nur A/AAAA und $autoPtr === true) läuft bewusst erst NACH dem
      * Commit des Forward-Records in einer eigenen Transaktion (siehe createAutoPtr):
@@ -597,7 +604,18 @@ final class RecordService
         try {
             $pdo->beginTransaction();
 
-            // Erste Abfrage der Transaktion: Zone sperren
+            // Erste Abfragen der Transaktion: Schreibberechtigung sperrend prüfen (users S → user_zones S,
+            // maßgeblich; ein paralleler Entzug wartet bis zum Transaktionsende), danach die Zone sperren
+            if ($this->zoneAccess->lockZoneWritePermissions($actor, [$zoneId]) === []) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('audit', 'record.create.access_denied', [
+                    'userId' => $actor->userId,
+                    'zoneId' => $zoneId,
+                ]);
+
+                return new ServiceResult(false, $messages, $zoneId);
+            }
+
             $zones = dyndnsLockZones($pdo, [$zoneId]);
 
             if (!isset($zones[$zoneId])) {
@@ -615,17 +633,6 @@ final class RecordService
             // Aktueller Zonenname unter der Sperre (die Zone kann zwischenzeitlich umbenannt worden sein)
             $zoneNameRaw = (string)$zones[$zoneId]['name'];
             $zoneName    = rtrim($zoneNameRaw, '.');
-
-            // Berechtigung unter der Sperre erneut prüfen (z. B. Entzug der Zonenzuweisung)
-            if (!$this->zoneAccess->canWriteZone($actor, $zoneId)) {
-                $this->rollbackIfActive();
-                $messages[] = new ServiceMessage('audit', 'record.create.access_denied', [
-                    'userId' => $actor->userId,
-                    'zoneId' => $zoneId,
-                ]);
-
-                return new ServiceResult(false, $messages, $zoneId);
-            }
 
             // Auf Duplikate prüfen (unter der Sperre)
             if (isDuplicateRecord($pdo, $zoneId, $name, $type, $content)) {
@@ -721,10 +728,11 @@ final class RecordService
      * Läuft erst nach dem Commit des Forward-Records (T1) in einer eigenen Transaktion T2.
      * Ein Fehlschlag rollt ausschließlich T2 zurück; der Forward-Record bleibt bestehen.
      *
-     * Ablauf T2 (zone-first): Ziel-FQDN und Reverse-Position berechnen (ohne Datenbank) ->
-     * Reverse-Zone ohne Sperre ermitteln und Berechtigung früh prüfen -> Transaktion, erste
-     * Abfrage sperrt die Reverse-Zone (dyndnsLockZones) -> unter der Sperre Zonenidentität,
-     * Zonentyp, Berechtigung und vorhandene PTR-Records frisch prüfen -> INSERT, Rebuild
+     * Ablauf T2: Ziel-FQDN und Reverse-Position berechnen (ohne Datenbank) -> Reverse-Zone ohne
+     * Sperre ermitteln und Berechtigung früh prüfen -> Transaktion: Schreibberechtigung für die
+     * Reverse-Zone sperrend prüfen (lockZoneWritePermissions, maßgeblich, unabhängig von T1), dann
+     * die Reverse-Zone sperren (dyndnsLockZones) -> unter den Sperren Zonenidentität, Zonentyp und
+     * vorhandene PTR-Records frisch prüfen -> INSERT, Rebuild
      * (setzt changed=1 der Reverse-Zone in derselben Transaktion) und Commit. Rebuild-Fehler und
      * alle Exceptions (inkl. Deadlock/Lock-Timeout) führen zum Rollback von T2.
      *
@@ -832,7 +840,14 @@ final class RecordService
 
             $pdo->beginTransaction();
 
-            // Erste Abfrage der Transaktion: Reverse-Zone sperren
+            // Erste Abfragen von T2: Schreibberechtigung für die Reverse-Zone sperrend prüfen (users S →
+            // user_zones S, maßgeblich; unabhängig von T1), danach die Reverse-Zone sperren
+            if ($this->zoneAccess->lockZoneWritePermissions($actor, [$ptr_zone_id]) === []) {
+                $this->rollbackIfActive();
+                $accessDenied($ptr_zone_id);
+                return;
+            }
+
             $zones = dyndnsLockZones($pdo, [$ptr_zone_id]);
 
             // Zonenidentität unter der Sperre: Zone existiert, ist Reverse-Zone und trägt weiterhin den berechneten Namen
@@ -843,13 +858,6 @@ final class RecordService
             ) {
                 $this->rollbackIfActive();
                 $zoneMissing();
-                return;
-            }
-
-            // Berechtigung unter der Sperre erneut prüfen (z. B. zwischenzeitlich entzogene Zonenzuweisung)
-            if (!$this->zoneAccess->canWriteZone($actor, $ptr_zone_id)) {
-                $this->rollbackIfActive();
-                $accessDenied($ptr_zone_id);
                 return;
             }
 

@@ -564,6 +564,14 @@ final class ZoneService
                 $this->releaseLock('delete', $m); // vor der Ablehnung, da der Web-Adapter dort abbricht
                 $m[] = new ServiceMessage('audit', 'zone.delete.access_denied', ['actorId' => $actor->userId, 'zoneId' => $id, 'reason' => 'db_role']);
             } else {
+                // R4/E42: Zuweisungen der Zone VOR der Zonenzeile exklusiv sperren (Index zone_id des
+                // Fremdschlüssels). Sonst entstünde die Sperre auf user_zones erst durch das kaskadierende
+                // DELETE nach zones (X) – umgekehrt zur Reihenfolge users → user_zones → zones des
+                // RecordService (lockZoneWritePermissions) und damit ein möglicher Sperrzyklus.
+                $stmt = $this->pdo->prepare("SELECT user_id FROM user_zones WHERE zone_id = ? ORDER BY user_id FOR UPDATE");
+                $stmt->execute([$id]);
+                $stmt->fetchAll();
+
                 $stmt = $this->pdo->prepare("SELECT id FROM zones WHERE id = ? FOR UPDATE");
                 $stmt->execute([$id]);
                 if (!$stmt->fetch()) {
