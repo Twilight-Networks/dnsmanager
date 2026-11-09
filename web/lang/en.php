@@ -408,6 +408,7 @@ return [
     'user_error_invalid_id'  => 'Invalid user ID.',
     'user_error_not_found'   => 'User does not exist.',
     'user_error_last_admin'  => 'The last admin cannot be deleted.',
+    'user_error_last_admin_demote' => 'The last admin cannot be demoted.',
     'user_deleted'           => 'User deleted successfully.',
     'user_error_delete'      => 'Error deleting user.',
 

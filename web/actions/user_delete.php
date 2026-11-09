@@ -6,76 +6,83 @@
  * Details:
  * - Nur Admins dürfen Benutzer löschen.
  * - Es wird geprüft, ob der Benutzer existiert.
- * - Admin-Benutzer können nur gelöscht werden, wenn noch andere Admins existieren.
+ * - Admin-Benutzer können nur gelöscht werden, wenn noch andere Admins existieren
+ *   (unter Zeilensperre geprüft, auch bei parallelen Löschungen).
  * - Bei Löschung werden auch alle Zonen-Zuweisungen des Benutzers entfernt.
+ *
+ * Web-Adapter: UserService::deleteUser() aufrufen, ServiceMessages in Toasts/Logs übersetzen.
  */
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 requireRole(['admin']);
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/users/UserService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
     $id = (int)$_POST['id'];
 
-    if ($id <= 0) {
-        toastError(
-            $LANG['user_error_invalid_id'],
-            "Löschvorgang abgebrochen: Ungültige Benutzer-ID übergeben ({$id})."
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-        exit;
-    }
+    $userService = new UserService($pdo);
+    $result = $userService->deleteUser(actorFromSession(), $id);
 
-    try {
-        $pdo->beginTransaction();
+    // ServiceMessages in bestehende Toasts/Logs übersetzen
+    foreach ($result->messages as $message) {
+        $ctx = $message->context;
 
-        // Rolle abrufen
-        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
-        $stmt->execute([$id]);
-        $role = $stmt->fetchColumn();
+        switch ($message->code) {
+            case 'user.delete.access_denied':
+                logAccessDenied('user_delete', "Benutzer-ID {$ctx['actorId']} ist laut Datenbank kein Administrator.");
+                http_response_code(403);
+                exit('Zugriff verweigert: Unzureichende Berechtigungen.');
 
-        if (!$role) {
-            toastError(
-                $LANG['user_error_not_found'],
-                "Benutzer-Delete fehlgeschlagen: Benutzer-ID {$id} nicht gefunden."
-            );
-            $pdo->rollBack();
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-            exit;
-        }
+            case 'user.delete.invalid_id':
+                toastError(
+                    $LANG['user_error_invalid_id'],
+                    "Löschvorgang abgebrochen: Ungültige Benutzer-ID übergeben ({$id})."
+                );
+                break;
 
-        if ($role === 'admin') {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE role = 'admin'");
-            $stmt->execute();
-            $admin_count = $stmt->fetchColumn();
+            case 'user.delete.not_found':
+                toastError(
+                    $LANG['user_error_not_found'],
+                    "Benutzer-Delete fehlgeschlagen: Benutzer-ID {$id} nicht gefunden."
+                );
+                break;
 
-            if ($admin_count <= 1) {
+            case 'user.delete.last_admin':
                 toastError(
                     $LANG['user_error_last_admin'],
                     "Benutzer-ID {$id} war letzter Administrator – Löschung abgebrochen."
                 );
-                $pdo->rollBack();
-                header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-                exit;
-            }
+                break;
+
+            case 'user.delete.success':
+                toastSuccess(
+                    $LANG['user_deleted'],
+                    "Benutzer-ID {$id} wurde erfolgreich entfernt, inklusive aller Zonen-Zuweisungen."
+                );
+                break;
+
+            case 'user.delete.failed':
+                toastError(
+                    $LANG['user_error_delete'],
+                    "Systemfehler beim Löschen von Benutzer-ID {$id}: " . $ctx['detail']
+                );
+                break;
+
+            default:
+                // Unbekannte ServiceMessages nie still verwerfen
+                if ($message->kind === 'success') {
+                    appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (user_delete)");
+                } else {
+                    toastError(
+                        $LANG['user_error_delete'],
+                        "Unbehandelte ServiceMessage '{$message->code}' (user_delete)"
+                    );
+                }
+                break;
         }
-
-        // Benutzer und Zonen-Zuweisungen löschen
-        $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$id]);
-        $pdo->prepare("DELETE FROM user_zones WHERE user_id = ?")->execute([$id]);
-
-        $pdo->commit();
-
-        toastSuccess(
-            $LANG['user_deleted'],
-            "Benutzer-ID {$id} wurde erfolgreich entfernt, inklusive aller Zonen-Zuweisungen."
-        );
-    } catch (Throwable $e) {
-        $pdo->rollBack();
-        toastError(
-            $LANG['user_error_delete'],
-            "Systemfehler beim Löschen von Benutzer-ID {$id}: " . $e->getMessage()
-        );
     }
 
     header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");

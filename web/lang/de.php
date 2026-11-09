@@ -408,6 +408,7 @@ return [
     'user_error_invalid_id'  => 'Ungültige Benutzer-ID.',
     'user_error_not_found'   => 'Benutzer existiert nicht.',
     'user_error_last_admin'  => 'Der letzte Admin darf nicht gelöscht werden.',
+    'user_error_last_admin_demote' => 'Der letzte Admin darf nicht herabgestuft werden.',
     'user_deleted'           => 'Benutzer erfolgreich gelöscht.',
     'user_error_delete'      => 'Fehler beim Löschen des Benutzers.',
 

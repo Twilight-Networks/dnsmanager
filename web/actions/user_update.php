@@ -7,116 +7,115 @@
  * - Nur Admins dürfen Benutzer bearbeiten.
  * - Benutzername wird geprüft, Rolle wird validiert.
  * - Bei Zone-Admins werden die zugewiesenen Zonen aktualisiert.
+ * - Der letzte Administrator kann nicht herabgestuft werden.
+ *
+ * Web-Adapter: Eingaben lesen, UserService::updateUser() aufrufen, ServiceMessages in
+ * Toasts/Logs übersetzen. Validierung, Berechtigung (DB-Rolle) und Transaktion liegen im Service.
  *
  * Zugriff:
- * - Nur Admins (requireRole(['admin'])).
+ * - Nur Admins (requireRole(['admin'])); zusätzlich prüft der Service die Rolle in der Datenbank.
  */
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 requireRole(['admin']);
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/users/UserService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 // Eingaben absichern
 $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
 $username = trim($_POST['username']);
 $role = $_POST['role'];
-$zones = isset($_POST['zones']) ? $_POST['zones'] : [];
+$zones = postStringList(isset($_POST['zones']) ? $_POST['zones'] : []);
 
-// Grundvalidierung der Eingaben
-if ($id <= 0 || !in_array($role, ['admin', 'zoneadmin'], true)) {
-    toastError(
-        $LANG['user_error_invalid_id'],
-        "Benutzer-Update fehlgeschlagen: Ungültige ID oder Rolle (ID {$id}, Rolle '{$role}')."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Benutzername validieren
-if (!preg_match('/^[a-zA-Z0-9_\-\.@]+$/', $username)) {
-    toastError(
-        $LANG['user_error_invalid_username'],
-        "Benutzer-Update fehlgeschlagen: Benutzername '{$username}' ist ungültig."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Prüfen, ob der Benutzer existiert
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ?");
-$stmt->execute([$id]);
-if ((int)$stmt->fetchColumn() === 0) {
-    toastError(
-        $LANG['user_error_username_exists'],
-        "Update fehlgeschlagen: Benutzer-ID {$id} existiert nicht."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Vorherige Daten laden
-$stmt = $pdo->prepare("SELECT username, role FROM users WHERE id = ?");
-$stmt->execute([$id]);
-$old = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$old) {
-    toastError(
-        $LANG['user_error_load_failed'],
-        "Benutzer-ID {$id} konnte nicht geladen werden."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Aktuelle Zonenzuweisung holen (nur IDs)
-$stmt = $pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ?");
-$stmt->execute([$id]);
-$existing_zone_ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
-$new_zone_ids = array_map('intval', $zones);
-
-$usernameChanged = $old['username'] !== $username;
-$roleChanged     = $old['role'] !== $role;
-$zonesChanged    = ($role === 'zoneadmin') &&
-                   (array_diff($existing_zone_ids, $new_zone_ids) ||
-                    array_diff($new_zone_ids, $existing_zone_ids));
-
-if (!$usernameChanged && !$roleChanged && !$zonesChanged) {
-    toastSuccess($LANG['no_changes'], "Benutzerdaten sind unverändert.");
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
-    exit;
-}
-
-// Benutzername und Rolle aktualisieren
-try {
-    $pdo->beginTransaction();
-
-    $stmt = $pdo->prepare("UPDATE users SET username = ?, role = ? WHERE id = ?");
-    $stmt->execute([$username, $role, $id]);
-
-    $stmt = $pdo->prepare("DELETE FROM user_zones WHERE user_id = ?");
-    $stmt->execute([$id]);
-
-    if ($role === 'zoneadmin' && is_array($zones)) {
-        $insert = $pdo->prepare("INSERT INTO user_zones (user_id, zone_id) VALUES (?, ?)");
-        foreach ($zones as $zone_id) {
-            $zone_id = (int)$zone_id;
-            if ($zone_id > 0) {
-                $insert->execute([$id, $zone_id]);
-            }
-        }
-    }
-
-    $pdo->commit();
-    toastSuccess(
-        sprintf($LANG['user_updated'], htmlspecialchars($username)),
-        "Benutzer '{$username}' (ID {$id}) mit Rolle '{$role}' erfolgreich geändert."
-    );
-} catch (Exception $e) {
-    $pdo->rollBack();
+// Ungültige Eingabestruktur (z. B. skalares "zones") ausdrücklich zurückweisen
+if ($zones === null) {
     toastError(
         $LANG['user_error_update_failed'],
-        "Fehler beim Speichern von Benutzer '{$username}' (ID {$id}): " . $e->getMessage()
+        "Benutzer-Update abgelehnt: ungültige Eingabestruktur für Zonen (keine Liste, ID {$id})."
     );
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
+    exit;
+}
+
+$input = new UserInput(
+    $username,
+    is_string($role) ? $role : '',
+    array_map('intval', $zones)
+);
+
+$userService = new UserService($pdo);
+$result = $userService->updateUser(actorFromSession(), $id, $input);
+
+// ServiceMessages in bestehende Toasts/Logs übersetzen
+foreach ($result->messages as $message) {
+    $ctx = $message->context;
+
+    switch ($message->code) {
+        case 'user.update.access_denied':
+            logAccessDenied('user_update', "Benutzer-ID {$ctx['actorId']} ist laut Datenbank kein Administrator.");
+            http_response_code(403);
+            exit('Zugriff verweigert: Unzureichende Berechtigungen.');
+
+        case 'user.update.invalid_input':
+            toastError(
+                $LANG['user_error_invalid_id'],
+                "Benutzer-Update fehlgeschlagen: Ungültige ID oder Rolle (ID {$id}, Rolle '{$ctx['role']}')."
+            );
+            break;
+
+        case 'user.update.invalid_username':
+            toastError(
+                $LANG['user_error_invalid_username'],
+                "Benutzer-Update fehlgeschlagen: Benutzername '{$username}' ist ungültig."
+            );
+            break;
+
+        case 'user.update.not_found':
+            toastError(
+                $LANG['user_error_not_found'],
+                "Update fehlgeschlagen: Benutzer-ID {$id} existiert nicht."
+            );
+            break;
+
+        case 'user.update.unchanged':
+            toastSuccess($LANG['no_changes'], "Benutzerdaten sind unverändert.");
+            break;
+
+        case 'user.update.last_admin':
+            toastError(
+                $LANG['user_error_last_admin_demote'],
+                "Benutzer-ID {$id} ist letzter Administrator – Herabstufung abgebrochen."
+            );
+            break;
+
+        case 'user.update.success':
+            toastSuccess(
+                sprintf($LANG['user_updated'], htmlspecialchars($username)),
+                "Benutzer '{$username}' (ID {$id}) mit Rolle '{$ctx['role']}' erfolgreich geändert."
+            );
+            break;
+
+        case 'user.update.failed':
+            toastError(
+                $LANG['user_error_update_failed'],
+                "Fehler beim Speichern von Benutzer '{$username}' (ID {$id}): " . $ctx['detail']
+            );
+            break;
+
+        default:
+            // Unbekannte ServiceMessages nie still verwerfen
+            if ($message->kind === 'success') {
+                appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (user_update)");
+            } else {
+                toastError(
+                    $LANG['user_error_update_failed'],
+                    "Unbehandelte ServiceMessage '{$message->code}' (user_update)"
+                );
+            }
+            break;
+    }
 }
 
 header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
