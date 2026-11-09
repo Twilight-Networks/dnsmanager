@@ -7,19 +7,24 @@
  * - Validiert Benutzerrechte (admin oder zugewiesener zoneadmin).
  * - Erkennt gezielt, ob überhaupt relevante Änderungen vorgenommen wurden.
  * - Unterscheidet zwischen:
- *      - Zonen-relevanten Änderungen (z. B. TTL, SOA → führt zu Rebuild)
+ *      - Zonen-relevanten Änderungen (z. B. TTL, SOA → führt zu Rebuild)
  *      - nicht kritischen Änderungen (Beschreibung, DynDNS → nur Speichern)
  *      - Änderungen an DNS-Servern (→ führt zu NS/Glue-Rebuild)
  * - Verhindert unnötige Verarbeitung bei unveränderten Daten.
- * - Nutzt gezielte Rebuilds:
- *      - rebuild_ns_and_glue_for_zone_and_flag_if_valid()
- *      - rebuild_zone_and_flag_if_valid()
  * - Gibt Rückmeldung über Toasts und leitet zurück zur Zonenübersicht.
+ *
+ * Web-Adapter: Eingaben lesen, ZoneService::updateZone() aufrufen, ServiceMessages in die bisherigen
+ * Toasts/Logs/Redirects übersetzen. Validierung, Berechtigung (DB-Rolle/Zuweisung), Topologie-Lock,
+ * Sperren und Transaktion liegen im Service.
  */
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
-require_once __DIR__ . '/../inc/validators.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/TopologyLock.php';
+require_once __DIR__ . '/../inc/app/zones/ZoneService.php';
+require_once __DIR__ . '/../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -29,398 +34,182 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $id = (int)($_POST['id'] ?? 0);
 requireRole(['admin', 'zoneadmin']);
 
-// Rechteprüfung für zoneadmin
-if ($_SESSION['role'] !== 'admin') {
-    $stmt = $pdo->prepare("SELECT 1 FROM user_zones WHERE zone_id = ? AND user_id = ?");
-    $stmt->execute([$id, $_SESSION['user_id']]);
-    if (!$stmt->fetch()) {
-        logAccessDenied('zone_update', "Unbefugter Zugriff auf Zone-ID $id");
-        http_response_code(403);
-        exit('Zugriff verweigert.');
-    }
-}
+// Rohwerte aus dem Formular (Normalisierung und Validierung im Service)
+$input = new ZoneUpdateInput(
+    $_POST['ttl'] ?? null,
+    $_POST['prefix_length'] ?? null,
+    $_POST['description'] ?? null,
+    isset($_POST['allow_dyndns']),
+    $_POST['soa_mail'] ?? null,
+    $_POST['soa_ns'] ?? null,
+    $_POST['soa_refresh'] ?? null,
+    $_POST['soa_retry'] ?? null,
+    $_POST['soa_expire'] ?? null,
+    $_POST['soa_minimum'] ?? null,
+    $_POST['server_ids'] ?? null,
+    $_POST['master_server_id'] ?? null,
+    $_POST['type'] ?? null
+);
 
-// Zone laden
-$stmt = $pdo->prepare("SELECT name, type FROM zones WHERE id = ?");
-$stmt->execute([$id]);
-$zone = $stmt->fetch(PDO::FETCH_ASSOC);
+$zoneService = new ZoneService($pdo, new LegacyZoneBuildBackend($pdo), new TopologyLock($pdo));
+$result = $zoneService->updateZone(actorFromSession(), $id, $input);
 
-// Vorherige Zonenwerte laden für Vergleich
-$stmt = $pdo->prepare("
-    SELECT ttl, prefix_length, description, allow_dyndns, soa_ns, soa_mail,
-           soa_refresh, soa_retry, soa_expire, soa_minimum
-    FROM zones
-    WHERE id = ?
-");
-$stmt->execute([$id]);
-$old = $stmt->fetch(PDO::FETCH_ASSOC);
+$lock = TopologyLock::NAME;
+$redirect = $result->ok ? "/pages/zones.php" : "/pages/zones.php?edit_id=$id";
 
-if (!$zone) {
-    toastError(
-        $LANG['zone_error_not_found'],
-        "Zone-ID {$id} konnte nicht geladen werden."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
-    exit;
-}
+// ServiceMessages in bestehende Toasts/Logs übersetzen
+foreach ($result->messages as $message) {
+    $ctx = $message->context;
 
-$name = $zone['name'];
-$type = $zone['type'];
+    switch ($message->code) {
+        case 'zone.update.access_denied':
+            if (($ctx['reason'] ?? '') === 'db_role' || ($ctx['reason'] ?? '') === 'db_assignment') {
+                logAccessDenied('zone_update', "Benutzer-ID {$ctx['actorId']} ist laut Datenbank nicht (mehr) berechtigt, Zone-ID $id zu ändern.");
+            } else {
+                logAccessDenied('zone_update', "Unbefugter Zugriff auf Zone-ID $id");
+            }
+            http_response_code(403);
+            exit('Zugriff verweigert.');
 
-// Eingaben
-$ttl           = (int)($_POST['ttl'] ?? 3600);
-$prefix_length = isset($_POST['prefix_length']) ? (int)$_POST['prefix_length'] : null;
-$description   = trim($_POST['description'] ?? '') ?: null;
-$allow_dyndns = isset($_POST['allow_dyndns']) ? 1 : 0;
+        case 'zone.update.not_found':
+            toastError(
+                $LANG['zone_error_not_found'],
+                "Zone-ID {$id} konnte nicht geladen werden."
+            );
+            $redirect = "/pages/zones.php";
+            break;
 
-$soa_mail    = rtrim(trim($_POST['soa_mail'] ?? ''), '.') . '.';
-$soa_refresh = (int)($_POST['soa_refresh'] ?? 3600);
-$soa_retry   = (int)($_POST['soa_retry'] ?? 1800);
-$soa_expire  = (int)($_POST['soa_expire'] ?? 1209600);
-$soa_minimum = (int)($_POST['soa_minimum'] ?? 86400);
+        case 'zone.update.invalid_input':
+            foreach ($ctx['errors'] as $error) {
+                toastError(
+                    $LANG[$error] ?? $LANG['generic_validation_error'],
+                    "Zoneneingabe ungültig (ID {$id}): {$error}"
+                );
+            }
+            break;
 
-// Eingabevalidierung
-$errors = validateZoneInput($_POST, false);
-if (!empty($errors)) {
-    foreach ($errors as $error) {
-        toastError(
-            $LANG[$error] ?? $LANG['generic_validation_error'],
-            "Zoneneingabe ungültig (ID {$id}): {$error}"
-        );
-    }
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-    exit;
-}
+        case 'zone.update.invalid_prefix_length':
+            toastError(
+                $LANG['zone_error_invalid_prefix_length'],
+                "Zone-ID {$id} hat ungültige Prefix-Länge: {$ctx['prefixLength']}"
+            );
+            break;
 
-// Reverse-Zonen: Prefix prüfen
-if ($type === 'reverse' && ($prefix_length < 8 || $prefix_length > 128)) {
-    toastError(
-        $LANG['zone_error_invalid_prefix_length'],
-        "Zone-ID {$id} hat ungültige Prefix-Länge: {$prefix_length}"
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-    exit;
-}
+        case 'zone.update.no_servers':
+            toastError(
+                $LANG['zone_error_no_servers'],
+                "Zone-ID {$id}: keine DNS-Server ausgewählt."
+            );
+            break;
 
-$server_ids = $_POST['server_ids'] ?? [];
-$master_id  = $_POST['master_server_id'] ?? null;
+        case 'zone.update.master_not_in_list':
+            toastError(
+                $LANG['zone_error_master_not_in_list'],
+                "Zone-ID {$id}: Master-ID {$ctx['masterId']} nicht in Serverliste."
+            );
+            break;
 
-// SOA-NS aus der Formulareingabe (nur Reverse-Zonen) wird unverändert in die Zonendatei geschrieben →
-// strikt prüfen, bevor Lock oder Transaktion beginnen (Sicherheitsbefund S17).
-$rejectInvalidSoaNs = function (string $soa_ns) use ($LANG, $id): void {
-    if (isValidSoaName($soa_ns)) {
-        return;
-    }
-    toastError(
-        $LANG['ERR_ZONE_SOA_NS'],
-        "Zoneneingabe ungültig (ID {$id}): ERR_ZONE_SOA_NS"
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-    exit;
-};
+        case 'zone.update.master_inactive':
+            toastError(
+                $LANG['zone_error_master_inactive'],
+                "Zone-ID {$id}: Der gewählte Master-Server ({$ctx['masterId']}) ist nicht aktiv."
+            );
+            break;
 
-// Transaktionsgrenze: Ein erfolgreicher Zone-Update läuft in genau einer DB-Transaktion.
-// Bei geänderter Serverzuweisung beginnt sie vor dem Schreiben von zone_servers und umfasst
-// Zuweisung, NS/Glue-Rebuild, Validierung, changed-Flag und das anschließende Metadaten-UPDATE.
-// Jeder Abbruch nach Beginn der Transaktion muss sie vor Redirect/exit zurückrollen.
-$rollbackIfActive = function () use ($pdo): void {
-    if ($pdo->inTransaction()) {
-        $pdo->rollBack();
-    }
-};
+        case 'zone.update.invalid_soa_ns':
+            toastError(
+                $LANG['ERR_ZONE_SOA_NS'],
+                "Zoneneingabe ungültig (ID {$id}): ERR_ZONE_SOA_NS"
+            );
+            break;
 
-// Topologie-Lock: derselbe MariaDB-Advisory-Lock wie Publish All ('dnsmanager_publish_all',
-// GET_LOCK mit Timeout 0, kein Warten). Er wird vor jeder Transaktion bzw. schreibenden Operation
-// erworben und erst nach Commit/Rollback freigegeben. Bei hartem Prozessabbruch gibt MariaDB ihn
-// mit dem Verbindungsende frei.
-$publish_lock_name = 'dnsmanager_publish_all';
-$publish_lock_acquired = false;
-$releasePublishLock = function () use ($pdo, $publish_lock_name, &$publish_lock_acquired): void {
-    if (!$publish_lock_acquired) {
-        return;
-    }
-    try {
-        $stmt_release = $pdo->prepare("SELECT RELEASE_LOCK(?)");
-        $stmt_release->execute([$publish_lock_name]);
-        $release_result = $stmt_release->fetchColumn(); // 1 = freigegeben, 0 = nicht von dieser Verbindung gehalten, NULL = Lock existiert nicht
-        if ($release_result === null || $release_result === false || (int)$release_result !== 1) {
-            // Fachlicher Vorgang bleibt erfolgreich; Lock wird spätestens mit dem Verbindungsende frei
-            appLog('warning', "[zone_update] Freigabe von Lock '$publish_lock_name' nicht bestätigt (RELEASE_LOCK = " . var_export($release_result, true) . ")");
-        }
-    } catch (Throwable $e) {
-        appLog('warning', "[zone_update] Lock '$publish_lock_name' konnte nicht freigegeben werden (wird mit Verbindungsende frei): " . $e->getMessage());
-    } finally {
-        // Release-Versuch abgeschlossen: keine erneuten Freigabeversuche über diesen Helper
-        $publish_lock_acquired = false;
-    }
-};
-// Nur bei Änderung von Serverliste oder Master erworben und über die gesamte Transaktion gehalten.
+        case 'zone.update.lock_acquire_error':
+            appLog('error', "[zone_update] Lock '$lock' konnte nicht bezogen werden: " . $ctx['detail']);
+            break;
 
-if ($_SESSION['role'] === 'admin') {
-    // Validierung der Serverwahl
-    if (!is_array($server_ids) || count($server_ids) < 1) {
-        toastError(
-            $LANG['zone_error_no_servers'],
-            "Zone-ID {$id}: keine DNS-Server ausgewählt."
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-        exit;
-    }
-
-    if (!$master_id || !in_array($master_id, $server_ids, true)) {
-        toastError(
-            $LANG['zone_error_master_not_in_list'],
-            "Zone-ID {$id}: Master-ID {$master_id} nicht in Serverliste."
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-        exit;
-    }
-
-    // Aktive Server-IDs laden
-    $stmt = $pdo->query("SELECT id FROM servers WHERE active = 1");
-    $active_ids = $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
-
-    // Prüfen: Master muss aktiv sein
-    if (!in_array((int)$master_id, $active_ids, true)) {
-        toastError(
-            $LANG['zone_error_master_inactive'],
-            "Zone-ID {$id}: Der gewählte Master-Server ({$master_id}) ist nicht aktiv."
-        );
-        header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-        exit;
-    }
-
-    // Alte Server-Zuweisung laden: ID + Master-Flag
-    $stmt = $pdo->prepare("SELECT server_id, is_master FROM zone_servers WHERE zone_id = ?");
-    $stmt->execute([$id]);
-    $old_servers = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
-
-    // Alte Serverzuweisung als [server_id => is_master] geladen
-    $old_server_ids = array_keys($old_servers);
-    $old_master_id = array_search(1, $old_servers, true); // erster mit is_master = 1
-
-    $new_master_id = (int)$master_id;
-
-    /**
-     * Ergänze inaktive alte Slave-Server für Vergleich und Speicherung,
-     * da sie durch das Formular (<input disabled>) nicht übermittelt werden.
-     * Nur gültig für Slaves – ein inaktiver Master wäre bereits weiter oben geblockt.
-     */
-    $preserve_inactive_slaves = [];
-    foreach ($old_servers as $sid => $is_master) {
-        if (!in_array($sid, $active_ids, true) && (int)$is_master !== 1) {
-            $preserve_inactive_slaves[] = (int)$sid;
-        }
-    }
-
-    // Neue Serverliste inkl. inaktiver Slaves für Vergleich und späteren Insert
-    $effective_new_server_ids = array_unique(array_merge(array_map('intval', $server_ids), $preserve_inactive_slaves));
-    sort($effective_new_server_ids);
-    sort($old_server_ids);
-
-    // Vergleich alt ↔︎ neu
-    $serverListChanged = $effective_new_server_ids !== $old_server_ids;
-    $masterChanged = (int)$old_master_id !== $new_master_id;
-
-    // Wenn keine Änderungen bei der Serverzuweisung → keine Aktion, SOA-NS unverändert übernehmen
-    if (!$serverListChanged && !$masterChanged) {
-        // keine Änderung – skippe RebuildNS + Serverupdate
-        $soa_ns = $zone['type'] === 'forward' ? $old['soa_ns'] : trim($_POST['soa_ns'] ?? '');
-        if ($zone['type'] !== 'forward') {
-            $rejectInvalidSoaNs($soa_ns);
-        }
-    } else {
-        // Server-Zuweisung hat sich geändert → neu schreiben + rebuild
-        // (innerhalb der gemeinsamen Transaktion, Commit erst nach dem Metadaten-UPDATE)
-        // Topologie-Lock vor der Transaktion erwerben
-        try {
-            $stmt_lock = $pdo->prepare("SELECT GET_LOCK(?, 0)");
-            $stmt_lock->execute([$publish_lock_name]);
-            $lock_result = $stmt_lock->fetchColumn(); // 1 = erhalten, 0 = belegt, NULL = Fehler
-            $publish_lock_acquired = $lock_result !== null && (int)$lock_result === 1;
-        } catch (Throwable $e) {
-            appLog('error', "[zone_update] Lock '$publish_lock_name' konnte nicht bezogen werden: " . $e->getMessage());
-        }
-        if (!$publish_lock_acquired) {
-            // Keine Transaktion, keine Schreiboperation
+        case 'zone.update.topology_locked':
             toastWarning(
                 $LANG['topology_locked'] ?? 'Eine Veröffentlichung oder strukturelle Änderung läuft gerade. Bitte in Kürze erneut versuchen.',
-                "[zone_update] Serverzuweisung von Zone-ID {$id} nicht geändert: Lock '$publish_lock_name' nicht verfügbar"
+                "[zone_update] Serverzuweisung von Zone-ID {$id} nicht geändert: Lock '$lock' nicht verfügbar"
             );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-            exit;
-        }
+            break;
 
-        try {
-            $pdo->beginTransaction();
+        case 'zone.update.lock_release_unconfirmed':
+            appLog('warning', "[zone_update] Freigabe von Lock '$lock' nicht bestätigt (RELEASE_LOCK = " . var_export($ctx['result'], true) . ")");
+            break;
 
-            // Alte Zuweisungen löschen
-            $pdo->prepare("DELETE FROM zone_servers WHERE zone_id = ?")->execute([$id]);
+        case 'zone.update.lock_release_error':
+            appLog('warning', "[zone_update] Lock '$lock' konnte nicht freigegeben werden (wird mit Verbindungsende frei): " . $ctx['detail']);
+            break;
 
-            // Neue setzen
-            $stmt = $pdo->prepare("INSERT INTO zone_servers (zone_id, server_id, is_master) VALUES (?, ?, ?)");
-            foreach ($effective_new_server_ids as $sid) {
-                $stmt->execute([$id, $sid, ((int)$sid === $new_master_id) ? 1 : 0]);
-            }
+        case 'zone.update.ns_glue_failed':
+            toastError(
+                $LANG['zone_error_ns_glue_failed'],
+                $ctx['output']
+            );
+            break;
 
-            // Rebuild NS + Glue (nur wenn Änderung)
-            $result = rebuild_ns_and_glue_for_zone_and_flag_if_valid($pdo, $id);
+        case 'zone.update.ns_glue_warning':
+            toastWarning(
+                $LANG['zone_warning_ns_glue'],
+                $ctx['output']
+            );
+            break;
 
-            if ($result['status'] === 'error') {
-                $rollbackIfActive();
-                $releasePublishLock();
-                toastError(
-                    $LANG['zone_error_ns_glue_failed'],
-                    $result['output']
-                );
-                header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-                exit;
-            }
-
-            if ($result['status'] === 'warning') {
-                toastWarning(
-                    $LANG['zone_warning_ns_glue'],
-                    $result['output']
-                );
-            }
-
-            // neuen SOA-NS setzen (nach Rebuild)
-            $stmt = $pdo->prepare("SELECT soa_ns FROM zones WHERE id = ?");
-            $stmt->execute([$id]);
-            $soa_ns = $stmt->fetchColumn();
-        } catch (Throwable $e) {
-            $rollbackIfActive();
-            $releasePublishLock();
+        case 'zone.update.server_assignment_failed':
             toastError(
                 $LANG['zone_error_server_assignment_failed'],
-                "Fehler beim Aktualisieren von Zone-ID {$id}: " . $e->getMessage()
+                "Fehler beim Aktualisieren von Zone-ID {$id}: " . $ctx['detail']
             );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-            exit;
-        }
-    }
-} else {
-    // zoneadmin darf keine Serverzuweisung ändern; SOA-NS von Forward-Zonen bleibt unverändert
-    $serverListChanged = false;
-    $masterChanged = false;
-    $soa_ns = $type === 'forward'
-        ? $old['soa_ns']
-        : trim($_POST['soa_ns'] ?? '');
-    if ($type !== 'forward') {
-        $rejectInvalidSoaNs($soa_ns);
-    }
-}
+            break;
 
-if (!$old) {
-    $rollbackIfActive();
-    $releasePublishLock();
-    toastError(
-        $LANG['zone_error_check_failed'],
-        "Zone-ID {$id} existiert nicht mehr."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
-    exit;
-}
-
-// --- Änderungserkennung: Aufteilung in kritisch (führt zu Rebuild) und unkritisch (nur speichern) ---
-
-// Rebuild der Zonendatei nur bei relevanten Änderungen (TTL, SOA, etc.)
-$hasZoneRelevantChanges =
-    (int)$old['ttl'] !== $ttl ||
-    ($type === 'reverse' && (int)$old['prefix_length'] !== $prefix_length) ||
-    rtrim($old['soa_ns'], '.') !== rtrim($soa_ns, '.') ||
-    rtrim($old['soa_mail'], '.') !== rtrim($soa_mail, '.') ||
-    (int)$old['soa_refresh'] !== $soa_refresh ||
-    (int)$old['soa_retry'] !== $soa_retry ||
-    (int)$old['soa_expire'] !== $soa_expire ||
-    (int)$old['soa_minimum'] !== $soa_minimum;
-
-// Nur fürs Speichern relevant (kein Trigger für Rebuild)
-$hasNonCriticalChanges =
-    trim((string)($old['description'] ?? '')) !== trim((string)($description ?? '')) ||
-    (int)$old['allow_dyndns'] !== $allow_dyndns;
-
-// Wenn keine Änderungen → keine Aktion
-if (!$hasZoneRelevantChanges && !$serverListChanged && !$masterChanged && !$hasNonCriticalChanges) {
-    $rollbackIfActive();
-    $releasePublishLock();
-    toastSuccess($LANG['no_changes'], "Die Zonendaten sind unverändert.");
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
-    exit;
-}
-
-// --- Nur wenn Änderungen vorhanden: Metadaten-Update + Rebuild ---
-
-// Transaktion nur starten, wenn sie nicht bereits durch eine Änderung der Serverzuweisung begonnen wurde
-if (!$pdo->inTransaction()) {
-    $pdo->beginTransaction();
-}
-try {
-    $stmt = $pdo->prepare("
-        UPDATE zones SET
-            ttl = ?, prefix_length = ?, description = ?,
-            allow_dyndns = ?,
-            soa_ns = ?, soa_mail = ?,
-            soa_refresh = ?, soa_retry = ?, soa_expire = ?, soa_minimum = ?
-        WHERE id = ?
-    ");
-    $stmt->execute([
-        $ttl,
-        $type === 'reverse' ? $prefix_length : null,
-        $description,
-        $allow_dyndns,
-        $soa_ns,
-        $soa_mail,
-        $soa_refresh,
-        $soa_retry,
-        $soa_expire,
-        $soa_minimum,
-        $id
-    ]);
-
-    if ($hasZoneRelevantChanges) {
-        $rebuild = rebuild_zone_and_flag_if_valid($id);
-
-        if ($rebuild['status'] === 'error') {
-            $pdo->rollBack();
-            $releasePublishLock();
+        case 'zone.update.zonefile_invalid':
             toastError(
                 $LANG['zone_error_zonefile_invalid'],
-                $rebuild['output']
+                $ctx['output']
             );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-            exit;
-        }
+            break;
 
-        if ($rebuild['status'] === 'warning') {
+        case 'zone.update.zonefile_warning':
             toastWarning(
                 $LANG['zone_warning_zonefile_check'],
-                $rebuild['output']
+                $ctx['output']
             );
-        }
+            break;
+
+        case 'zone.update.unchanged':
+            toastSuccess($LANG['no_changes'], "Die Zonendaten sind unverändert.");
+            break;
+
+        case 'zone.update.failed':
+            toastError(
+                $LANG['zone_error_db_save_failed'],
+                "Zonen-Metadaten konnten für Zone '{$ctx['name']}' (ID {$id}) nicht gespeichert werden: " . $ctx['detail']
+            );
+            break;
+
+        case 'zone.update.success':
+            if (empty($_SESSION['toast_errors'])) {
+                toastSuccess(
+                    sprintf($LANG['zone_updated'], htmlspecialchars($ctx['name'])),
+                    "Zone '{$ctx['name']}' (ID {$id}) erfolgreich geändert."
+                );
+            }
+            break;
+
+        default:
+            // Unbekannte ServiceMessages nie still verwerfen
+            if ($message->kind === 'success') {
+                appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (zone_update)");
+            } else {
+                toastError(
+                    $LANG['zone_error_db_save_failed'],
+                    "Unbehandelte ServiceMessage '{$message->code}' (zone_update)"
+                );
+            }
+            break;
     }
-
-    $pdo->commit();
-} catch (Throwable $e) {
-    $rollbackIfActive();
-    $releasePublishLock();
-    toastError(
-        $LANG['zone_error_db_save_failed'],
-        "Zonen-Metadaten konnten für Zone '{$name}' (ID {$id}) nicht gespeichert werden: " . $e->getMessage()
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
-    exit;
 }
 
-// Erfolgreicher Commit: Topologie-Lock (falls erworben) freigeben
-$releasePublishLock();
-
-if (empty($_SESSION['toast_errors'])) {
-    toastSuccess(
-        sprintf($LANG['zone_updated'], htmlspecialchars($name)),
-        "Zone '{$name}' (ID {$id}) erfolgreich geändert."
-    );
-}
-
-header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php");
+header("Location: " . rtrim(BASE_URL, '/') . $redirect);
 exit;
