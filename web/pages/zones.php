@@ -20,44 +20,85 @@ include __DIR__ . '/../templates/layout.php';
 // Edit-ID aus GET-Parametern lesen (für Bearbeitungsmodus)
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
 
-// Zonen aus der Datenbank laden:
-// - Admins sehen alle Zonen
-// - Zone-Admins nur ihre zugewiesenen Zonen
-if ($_SESSION['role'] === 'admin') {
-    $stmt = $pdo->prepare("SELECT * FROM zones ORDER BY name");
-    $stmt->execute();
-} else {
-    $stmt = $pdo->prepare("
-        SELECT z.* FROM zones z
-        JOIN user_zones uz ON uz.zone_id = z.id
-        WHERE uz.user_id = ?
-        ORDER BY z.name
-    ");
-    $stmt->execute([$_SESSION['user_id']]);
-}
-$zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
-// Server-Zuweisungen pro Zone laden (für Master/Secondary-Anzeige)
-$stmt_links = $pdo->prepare("
-    SELECT zs.zone_id, s.name, zs.is_master, s.active
-    FROM zone_servers zs
-    JOIN servers s ON s.id = zs.server_id
-    ORDER BY s.name
-");
-$stmt_links->execute();
+// Alle Fachdaten dieser Seite stammen aus dem ZoneReadService (Sichtbarkeit über ZoneAccess:
+// admin alle Zonen, zoneadmin zugewiesene Zonen). Die Übersetzung des normalisierten Ergebnisses in die
+// bisherigen Template-Felder erfolgt ausschließlich hier im Web-Layer.
+$actor = actorFromSession();
+$zoneReadService = new ZoneReadService($pdo, new ZoneAccess($pdo));
 
-$server_links = [];
-while ($row = $stmt_links->fetch(PDO::FETCH_ASSOC)) {
-    $server_links[$row['zone_id']][] = [
-        'name' => $row['active'] ? $row['name'] : $row['name'] . ' (' . $LANG['inactive'] . ')',
-        'is_master' => (bool)$row['is_master']
-    ];
+// Zonen inkl. Serverzuweisungen laden – vollständige Liste über alle Seiten
+$zones = [];
+$offset = 0;
+do {
+    $page = $zoneReadService->listZones($actor, ZoneReadService::MAX_LIMIT, $offset);
+    foreach ($page['zones'] as $z) {
+        $zone_servers = [];
+        foreach ($z['servers'] as $srv) {
+            $zone_servers[] = [
+                'name'      => $srv['active'] ? $srv['name'] : $srv['name'] . ' (' . $LANG['inactive'] . ')',
+                'is_master' => $srv['role'] === 'master',
+            ];
+        }
+        $zones[] = [
+            'id'            => $z['id'],
+            'name'          => $z['name'],
+            'type'          => $z['type'],
+            'ttl'           => $z['ttl'],
+            'prefix_length' => $z['prefixLength'],
+            'description'   => $z['description'],
+            'changed'       => $z['pendingPublish'] ? 1 : 0,
+            'servers'       => $zone_servers,
+        ];
+    }
+    $offset += ZoneReadService::MAX_LIMIT;
+} while ($page['hasMore']);
+
+// Bearbeitungsformular: nur für eine in der Liste sichtbare Zone. Zone, Serverzuweisung und wählbare
+// Server über den ZoneReadService (getZone prüft die Berechtigung erneut in derselben Abfrage; ist die
+// Zuweisung inzwischen entzogen, wird kein Formular ausgegeben – E26).
+$zone_edit = null;
+$zone_edit_servers = [];
+$zone_edit_assigned = [];
+if ($edit_id !== null && in_array($edit_id, array_column($zones, 'id'), true)) {
+    $z = $zoneReadService->getZone($actor, $edit_id);
+    if ($z !== null) {
+        $zone_edit = [
+            'id'            => $z['id'],
+            'name'          => $z['name'],
+            'type'          => $z['type'],
+            'ttl'           => $z['ttl'],
+            'prefix_length' => $z['prefixLength'],
+            'description'   => $z['description'],
+            'allow_dyndns'  => $z['allowDyndns'] ? 1 : 0,
+            'soa_ns'        => $z['soa']['primaryNs'],
+            'soa_mail'      => $z['soa']['mail'],
+            'soa_refresh'   => $z['soa']['refresh'],
+            'soa_retry'     => $z['soa']['retry'],
+            'soa_expire'    => $z['soa']['expire'],
+            'soa_minimum'   => $z['soa']['minimum'],
+        ];
+        foreach ($z['servers'] as $srv) {
+            $zone_edit_assigned[$srv['id']] = $srv['role'] === 'master' ? 1 : 0;
+        }
+        foreach ($zoneReadService->listAssignableServers($actor, false) as $srv) {
+            $zone_edit_servers[] = ['id' => $srv['id'], 'name' => $srv['name'], 'dns_ip4' => $srv['dnsIp4'], 'dns_ip6' => $srv['dnsIp6'], 'active' => $srv['active']];
+        }
+    }
+}
+
+// Anlageformular (nur admin): aktive Server zur Zuweisung
+$zone_add_servers = [];
+if ($_SESSION['role'] === 'admin' && isset($_GET['add_new']) && $_GET['add_new'] == '1') {
+    foreach ($zoneReadService->listAssignableServers($actor, true) as $srv) {
+        $zone_add_servers[] = ['id' => $srv['id'], 'name' => $srv['name'], 'dns_ip4' => $srv['dnsIp4'], 'dns_ip6' => $srv['dnsIp6']];
+    }
 }
 
 // Zonendiagnosen laden – nur für Zonen, die der Benutzer lesen darf (Berechtigung in derselben Abfrage,
-// ZoneAccess). Übersetzung in die bisherige Struktur von getDiagnosticResults()['zone'] für die
+// ZoneAccess, S25). Übersetzung in die bisherige Struktur von getDiagnosticResults()['zone'] für die
 // unveränderte Auswertung und Darstellung unten.
 $zone_results = [];
-foreach ((new ZoneReadService($pdo, new ZoneAccess($pdo)))->listZoneDiagnostics(actorFromSession()) as $diag) {
+foreach ($zoneReadService->listZoneDiagnostics($actor) as $diag) {
     $zone_results[] = [
         'zone'   => $diag['zoneName'] ?? '(unbekannt)',
         'server' => $diag['serverName'] ?? '(unbekannt)',
@@ -114,9 +155,6 @@ foreach ($zones as &$zone) {
     if ($zone['status'] === 'ok' && (int)$zone['changed'] !== 0) {
         $zone['status'] = 'changed';
     }
-
-    // Serververknüpfungen zuweisen
-    $zone['servers'] = $server_links[$zone['id']] ?? [];
 }
 unset($zone); // Referenz aufheben
 
@@ -253,8 +291,8 @@ $overall_zone_message = $has_zone_errors
                 </tr>
 
                 <!-- Bearbeitungsformular -->
-                <?php if ($edit_id === (int)$zone['id']): ?>
-                    <?php include __DIR__ . '/../templates/zone_edit_form.php'; ?>
+                <?php if ($edit_id === (int)$zone['id'] && $zone_edit !== null): ?>
+                    <?php $zone = $zone_edit; include __DIR__ . '/../templates/zone_edit_form.php'; ?>
                 <?php endif; ?>
             <?php endforeach; ?>
         </tbody>
@@ -330,8 +368,8 @@ $overall_zone_message = $has_zone_errors
                 </tr>
 
                 <!-- Bearbeitungsformular -->
-                <?php if ($edit_id === (int)$zone['id']): ?>
-                    <?php include __DIR__ . '/../templates/zone_edit_form.php'; ?>
+                <?php if ($edit_id === (int)$zone['id'] && $zone_edit !== null): ?>
+                    <?php $zone = $zone_edit; include __DIR__ . '/../templates/zone_edit_form.php'; ?>
                 <?php endif; ?>
             <?php endforeach; ?>
         </tbody>

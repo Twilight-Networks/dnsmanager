@@ -8,8 +8,11 @@
  *   Die Berechtigung ist Bedingung der jeweiligen Datenabfrage selbst (ZoneAccess::readableZoneCondition),
  *   sodass eine zwischenzeitlich entzogene Zuweisung sofort wirkt. Keine Transaktionen, keine Sperren.
  * - Explizite Spaltenlisten und ein fester Ergebnisvertrag (kein SELECT *).
- * - Keine Server-Zugangsdaten: Zu Servern werden nur Name, Rolle und Aktivstatus ausgegeben
- *   (kein api_token, keine api_ip).
+ * - Keine Server-Zugangsdaten: Zu zugeordneten Servern werden nur ID, Name, Rolle und Aktivstatus
+ *   ausgegeben, zu zuweisbaren Servern zusätzlich die öffentlichen DNS-Adressen (kein api_token, keine
+ *   api_ip, kein is_local).
+ * - Normalisierte Rückgabewerte ohne HTML-/Web-Bezug; die Übersetzung in Template-Felder erfolgt im
+ *   Web-Layer.
  * - Stabile Sortierung (Zonenname, dann ID) und begrenzte Ergebnismengen.
  *
  * Fehlerfälle:
@@ -39,7 +42,12 @@ final class ZoneReadService
     }
 
     /**
-     * Für den Akteur sichtbare Zonen (Übersicht), sortiert nach Name und ID.
+     * Für den Akteur sichtbare Zonen (Übersicht), sortiert nach Name und ID, jeweils mit den zugeordneten
+     * Servern (id, name, role, active; sortiert nach Servername und ID).
+     *
+     * Eine einzige Abfrage: Die Zonenseite (Berechtigung, Sortierung, LIMIT/OFFSET) wird als abgeleitete
+     * Tabelle auf Zonenebene gebildet; erst danach werden die Server angefügt. Die Pagination bezieht sich
+     * damit ausschließlich auf Zonen, Serverlisten werden nie über Seitengrenzen abgeschnitten.
      *
      * @return array{zones: array<int, array>, limit: int, offset: int, hasMore: bool}
      *
@@ -57,23 +65,41 @@ final class ZoneReadService
         }
 
         $stmt = $this->pdo->prepare(
-            'SELECT ' . self::ZONE_COLUMNS . ' FROM zones z WHERE ' . $access['sql']
-            . ' ORDER BY z.name ASC, z.id ASC LIMIT ? OFFSET ?'
+            'SELECT zp.id, zp.name, zp.type, zp.ttl, zp.prefix_length, zp.description, zp.changed, zp.allow_dyndns,'
+            . ' s.id AS server_id, s.name AS server_name, zs.is_master AS server_is_master,'
+            . ' s.active AS server_active'
+            . ' FROM (SELECT ' . self::ZONE_COLUMNS . ' FROM zones z WHERE ' . $access['sql']
+            . ' ORDER BY z.name ASC, z.id ASC LIMIT ? OFFSET ?) zp'
+            . ' LEFT JOIN zone_servers zs ON zs.zone_id = zp.id'
+            . ' LEFT JOIN servers s ON s.id = zs.server_id'
+            . ' ORDER BY zp.name ASC, zp.id ASC, s.name ASC, s.id ASC'
         );
         $i = 1;
         foreach ($access['params'] as $param) {
             $stmt->bindValue($i++, $param, PDO::PARAM_INT);
         }
-        $stmt->bindValue($i++, $limit + 1, PDO::PARAM_INT); // eine Zeile mehr zur Ermittlung von hasMore
+        $stmt->bindValue($i++, $limit + 1, PDO::PARAM_INT); // eine Zone mehr zur Ermittlung von hasMore
         $stmt->bindValue($i, $offset, PDO::PARAM_INT);
         $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $hasMore = count($rows) > $limit;
-        $rows = array_slice($rows, 0, $limit);
+        // Zeilen (Zone × Server) zu Zonen zusammenfassen; Reihenfolge der Abfrage bleibt erhalten
+        $zones = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $id = (int)$row['id'];
+            if (!isset($zones[$id])) {
+                $zones[$id] = self::mapZone($row);
+                $zones[$id]['servers'] = [];
+            }
+            if ($row['server_id'] !== null) {
+                $zones[$id]['servers'][] = self::mapServer($row);
+            }
+        }
+        $zones = array_values($zones);
+
+        $hasMore = count($zones) > $limit;
 
         return [
-            'zones'   => array_map([self::class, 'mapZone'], $rows),
+            'zones'   => array_slice($zones, 0, $limit),
             'limit'   => $limit,
             'offset'  => $offset,
             'hasMore' => $hasMore,
@@ -94,11 +120,11 @@ final class ZoneReadService
         }
 
         // Eine einzige Abfrage: Zone, Berechtigung (aktuelle Zuweisung) und zugeordnete Server werden
-        // gemeinsam gelesen. Server: nur Name, Rolle und Aktivstatus (keine Tokens, keine API-Adressen).
+        // gemeinsam gelesen. Server: nur ID, Name, Rolle und Aktivstatus (keine Tokens, keine API-Adressen).
         $stmt = $this->pdo->prepare(
             'SELECT ' . self::ZONE_COLUMNS . ', z.soa_ns, z.soa_mail, z.soa_serial, z.soa_refresh, z.soa_retry,'
-            . ' z.soa_expire, z.soa_minimum, s.name AS server_name, zs.is_master AS server_is_master,'
-            . ' s.active AS server_active'
+            . ' z.soa_expire, z.soa_minimum, s.id AS server_id, s.name AS server_name,'
+            . ' zs.is_master AS server_is_master, s.active AS server_active'
             . ' FROM zones z'
             . ' LEFT JOIN zone_servers zs ON zs.zone_id = z.id'
             . ' LEFT JOIN servers s ON s.id = zs.server_id'
@@ -131,17 +157,52 @@ final class ZoneReadService
         ];
         $zone['servers'] = [];
         foreach ($rows as $r) {
-            if ($r['server_name'] === null) {
+            if ($r['server_id'] === null) {
                 continue; // Zone ohne Serverzuordnung (LEFT JOIN)
             }
-            $zone['servers'][] = [
-                'name'   => (string)$r['server_name'],
-                'role'   => (int)$r['server_is_master'] === 1 ? 'master' : 'secondary',
-                'active' => (int)$r['server_active'] === 1,
-            ];
+            $zone['servers'][] = self::mapServer($r);
         }
 
         return $zone;
+    }
+
+    /**
+     * Server, die in Zonenformularen zur Zuweisung angezeigt werden (Anlage- und Bearbeitungsformular).
+     *
+     * Sichtbar für admin und zoneadmin (das Bearbeitungsformular zeigt auch zoneadmins die Serverzuweisung;
+     * Änderungen daran übernimmt ZoneService nur für admins), für alle anderen Rollen leer.
+     * Nur öffentliche Serverdaten: ID, Name, DNS-Adressen, Aktivstatus – keine Tokens, keine API-Adressen.
+     * Sortierung nach Name und ID.
+     *
+     * @param bool $activeOnly true = nur aktive Server (Anlageformular)
+     *
+     * @return array<int, array{id: int, name: string, dnsIp4: ?string, dnsIp6: ?string, active: bool}>
+     */
+    public function listAssignableServers(Actor $actor, bool $activeOnly): array
+    {
+        if (!$actor->isAdmin() && $actor->role !== 'zoneadmin') {
+            return [];
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT s.id, s.name, s.dns_ip4, s.dns_ip6, s.active FROM servers s'
+            . ($activeOnly ? ' WHERE s.active = 1' : '')
+            . ' ORDER BY s.name ASC, s.id ASC'
+        );
+        $stmt->execute();
+
+        $servers = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $servers[] = [
+                'id'     => (int)$row['id'],
+                'name'   => (string)$row['name'],
+                'dnsIp4' => $row['dns_ip4'] === null ? null : (string)$row['dns_ip4'],
+                'dnsIp6' => $row['dns_ip6'] === null ? null : (string)$row['dns_ip6'],
+                'active' => (int)$row['active'] === 1,
+            ];
+        }
+
+        return $servers;
     }
 
     /**
@@ -208,6 +269,23 @@ final class ZoneReadService
             'description'    => $row['description'] === null ? null : (string)$row['description'],
             'allowDyndns'    => (int)$row['allow_dyndns'] === 1,
             'pendingPublish' => (int)$row['changed'] !== 0,
+        ];
+    }
+
+    /**
+     * Zugeordneter Server aus einer Zeile mit server_id, server_name, server_is_master, server_active.
+     *
+     * @param array<string, mixed> $row
+     *
+     * @return array{id: int, name: string, role: string, active: bool}
+     */
+    private static function mapServer(array $row): array
+    {
+        return [
+            'id'     => (int)$row['server_id'],
+            'name'   => (string)$row['server_name'],
+            'role'   => (int)$row['server_is_master'] === 1 ? 'master' : 'secondary',
+            'active' => (int)$row['server_active'] === 1,
         ];
     }
 
