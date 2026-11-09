@@ -113,6 +113,17 @@ $soa_ns         = ($type === 'reverse')
             : $master_name . '.' . $zone_base . '.'
     );
 
+// Reverse-Zonen: SOA-NS enthält die freie Eingabe soa_domain und wird unverändert in die
+// Zonendatei geschrieben → vor Lock und Transaktion strikt prüfen (Sicherheitsbefund S17).
+if ($type === 'reverse' && !isValidSoaName($soa_ns)) {
+    toastError(
+        $LANG['ERR_ZONE_SOA_NS'],
+        "Zoneneingabe ungültig: ERR_ZONE_SOA_NS"
+    );
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?add_new=1");
+    exit;
+}
+
 // Topologie-Lock: derselbe MariaDB-Advisory-Lock wie Publish All ('dnsmanager_publish_all',
 // GET_LOCK mit Timeout 0, kein Warten). Er wird vor jeder Transaktion bzw. schreibenden Operation
 // erworben und erst nach Commit/Rollback freigegeben. Bei hartem Prozessabbruch gibt MariaDB ihn

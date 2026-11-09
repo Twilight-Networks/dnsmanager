@@ -539,6 +539,7 @@ return [
     'ERR_ZONE_NAME_INVALID'       => 'Nombre de zona no válido.',
     'ERR_ZONE_PREFIX_LENGTH'      => 'La longitud del prefijo para zonas reversas debe estar entre 8 y 128.',
     'ERR_ZONE_SOA_MAIL'           => 'Dirección de administrador no válida (correo SOA).',
+    'ERR_ZONE_SOA_NS'             => 'Servidor de nombres primario no válido (SOA NS).',
     'ERR_ZONE_SOA_REFRESH'        => 'El valor de SOA refresh debe estar entre 1200 y 86400 segundos.',
     'ERR_ZONE_SOA_RETRY'          => 'El valor de SOA retry debe estar entre 180 y 7200 segundos.',
     'ERR_ZONE_SOA_EXPIRE'         => 'El valor de SOA expire debe estar entre 1209600 y 2419200 segundos.',
