@@ -28,6 +28,14 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
         $errors[] = 'ERR_INVALID_NAME_CHARS';
     }
 
+    // Record-Inhalte dürfen keine Steuerzeichen (insb. Zeilenumbrüche) enthalten. Sie werden
+    // unverändert in genau eine Zeile der Zonendatei geschrieben; ein Steuerzeichen könnte sonst
+    // zusätzliche Zeilen oder Direktiven erzeugen. Byteweise geprüft (ohne /u), damit auch ungültige
+    // UTF-8-Folgen zuverlässig erkannt werden. Leerzeichen bleiben erlaubt (z. B. TXT, MX, SRV).
+    if (preg_match('/[\x00-\x1F\x7F]/', $content)) {
+        $errors[] = 'ERR_INVALID_CONTENT_CHARS';
+    }
+
     // TTL prüfen (darf nicht negativ sein)
     if ($ttl !== null && $ttl < 0) {
         $errors[] = 'ERR_TTL_NEGATIVE';
@@ -341,7 +349,7 @@ function isValidFqdn(string $fqdn): bool
     $labels = explode('.', $fqdn);
     foreach ($labels as $label) {
         // Label darf nur aus a–z, A–Z, 0–9 und - bestehen, 1–63 Zeichen lang
-        if (!preg_match('/^[a-zA-Z0-9-]{1,63}$/', $label)) {
+        if (!preg_match('/^[a-zA-Z0-9-]{1,63}\z/', $label)) {
             return false;
         }
 
