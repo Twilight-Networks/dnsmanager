@@ -70,6 +70,15 @@ if (!defined('ALLOW_UNAUTHENTICATED') || ALLOW_UNAUTHENTICATED !== true) {
 // Datenbankverbindung initialisieren
 require_once __DIR__ . '/inc/db.php';
 
+// Globale Session-Revalidierung (S3): Identität und Rolle der angemeldeten Session werden vor jedem
+// geschützten Seiten- bzw. Action-Code mit der Datenbank abgeglichen (öffentliche Einstiegspunkte
+// mit ALLOW_UNAUTHENTICATED ausgenommen). Bei Abweichung endet die Session, bei technischem Fehler
+// wird die Anfrage abgebrochen (Fail-Closed).
+if (!defined('ALLOW_UNAUTHENTICATED') || ALLOW_UNAUTHENTICATED !== true) {
+    require_once __DIR__ . '/inc/web/session_guard.php';
+    revalidate_session($pdo);
+}
+
 // Hilfsfunktionen (z.B. Rollenprüfungen, sichere Shell-Kommandos) laden
 require_once __DIR__ . '/inc/helpers.php';
 
