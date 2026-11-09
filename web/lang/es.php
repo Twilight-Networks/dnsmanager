@@ -503,6 +503,7 @@ return [
 
     // DNS record validation errors
     'ERR_INVALID_NAME_CHARS'      => 'El nombre contiene caracteres no válidos (por ejemplo, espacios o caracteres de control).',
+    'ERR_INVALID_CONTENT_CHARS'   => 'El contenido contiene caracteres de control no válidos (p. ej. saltos de línea).',
     'ERR_TTL_NEGATIVE'            => 'El TTL no debe ser negativo.',
     'ERR_INVALID_IPV4'            => 'Dirección IPv4 no válida.',
     'ERR_INVALID_IPV6'            => 'Dirección IPv6 no válida.',

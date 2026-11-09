@@ -503,6 +503,7 @@ return [
 
     // DNS-Record Validierungsfehler
     'ERR_INVALID_NAME_CHARS'      => 'Der Name enthält ungültige Zeichen (z. B. Leer- oder Steuerzeichen).',
+    'ERR_INVALID_CONTENT_CHARS'   => 'Der Inhalt enthält ungültige Steuerzeichen (z. B. Zeilenumbrüche).',
     'ERR_TTL_NEGATIVE'            => 'TTL darf nicht negativ sein.',
     'ERR_INVALID_IPV4'            => 'Ungültige IPv4-Adresse.',
     'ERR_INVALID_IPV6'            => 'Ungültige IPv6-Adresse.',

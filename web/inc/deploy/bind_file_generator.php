@@ -58,6 +58,24 @@ function zone_file_soa_name_is_safe(string $value, bool $allowEscape = false): b
 }
 
 /**
+ * Defensive Prüfung eines Record-Feldes (name, type, content) unmittelbar vor dem Schreiben der
+ * Zonendatei.
+ *
+ * Jeder Record wird in genau eine Zeile `name TTL IN type content` geschrieben. Ein Steuerzeichen
+ * (insbesondere Zeilenumbruch oder Wagenrücklauf) könnte zusätzliche Zonendatei-Zeilen oder
+ * Direktiven erzeugen. Die fachliche Validierung verhindert dies bereits beim Anlegen/Ändern; diese
+ * Prüfung ist der letzte Schutz auch für bereits gespeicherte Daten und für Pfade ohne
+ * validateDnsRecord() (z. B. DynDNS). Byteweise geprüft (ohne /u).
+ *
+ * @param string $value Feldwert aus der Datenbank
+ * @return bool true, wenn der Wert ein Steuerzeichen enthält (= unsicher)
+ */
+function zone_file_value_has_control_chars(string $value): bool
+{
+    return preg_match('/[\x00-\x1F\x7F]/', $value) === 1;
+}
+
+/**
  * Erzeugt eine Zonendatei (db.<zone>) im angegebenen Zielverzeichnis und validiert sie mit named-checkzone.
  *
  * Verhalten:
@@ -70,6 +88,8 @@ function zone_file_soa_name_is_safe(string $value, bool $allowEscape = false): b
  * - Es erfolgt keine direkte Verarbeitung von Benutzereingaben.
  * - soa_ns und soa_mail werden vor dem Schreiben geprüft (zone_file_soa_name_is_safe, S17); unsichere
  *   Werte führen zu status 'error' ohne Zonendatei.
+ * - Record-Felder (name, type, content) werden vor dem Schreiben auf Steuerzeichen geprüft
+ *   (zone_file_value_has_control_chars); unsichere Werte führen zu status 'error' ohne Zonendatei.
  * - Pfade werden auf sichere Zielverzeichnisse begrenzt.
  *
  * @param int $zone_id ID der zu verarbeitenden Zone
@@ -148,6 +168,29 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
                 'status' => 'error',
                 'output' => "Ungültige SOA-Angaben in Zone $zone_name ($fields): unzulässige Zeichen – Zonendatei wird nicht erzeugt.",
                 'errors' => ["SOA: unzulässige Zeichen in $fields"],
+            ];
+        }
+
+        // Record-Felder (name, type, content) werden unverändert in je eine Zeile geschrieben.
+        // Unsichere, bereits gespeicherte Werte führen in jedem Modus zum Abbruch, bevor eine Datei
+        // entsteht. Der Feldinhalt wird bewusst nicht ausgegeben (Toast/Log).
+        $unsafe_records = 0;
+        foreach ($records as $r) {
+            if (zone_file_value_has_control_chars((string)($r['name'] ?? ''))
+                || zone_file_value_has_control_chars((string)($r['type'] ?? ''))
+                || zone_file_value_has_control_chars((string)($r['content'] ?? ''))
+            ) {
+                $unsafe_records++;
+            }
+        }
+        if ($unsafe_records > 0) {
+            if ($tx_started && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            return [
+                'status' => 'error',
+                'output' => "Ungültige Record-Daten in Zone $zone_name ($unsafe_records betroffen): unzulässige Zeichen – Zonendatei wird nicht erzeugt.",
+                'errors' => ["Records: unzulässige Zeichen in $unsafe_records Datensätzen"],
             ];
         }
 
