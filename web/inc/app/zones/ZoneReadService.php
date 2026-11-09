@@ -145,6 +145,56 @@ final class ZoneReadService
     }
 
     /**
+     * Zonendiagnosen (Tabelle diagnostics, target_type 'zone') für alle Zonen, die der Akteur lesen darf.
+     *
+     * Die Berechtigung ist Bedingung derselben Abfrage (ZoneAccess::readableZoneCondition auf
+     * d.target_id): admin erhält alle Zonendiagnosen – auch solche ohne vorhandene Zone –, zoneadmin nur
+     * Diagnosen zugewiesener Zonen, alle anderen Rollen keine. Serverdiagnosen werden nicht geliefert.
+     *
+     * Reihenfolge: nach Diagnose-ID (Einfügereihenfolge), damit die Ausgabe stabil ist.
+     *
+     * @return array<int, array{zoneId: int, zoneName: ?string, serverName: ?string, checkType: string,
+     *                          status: string, message: ?string}>
+     *         zoneName/serverName null = Zone bzw. Server nicht (mehr) vorhanden
+     */
+    public function listZoneDiagnostics(Actor $actor): array
+    {
+        $access = $this->zoneAccess->readableZoneCondition($actor, 'd.target_id');
+
+        if ($access === null) {
+            return [];
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT d.target_id, d.check_type, d.status, d.message, z.name AS zone_name, s.name AS server_name'
+            . ' FROM diagnostics d'
+            . ' LEFT JOIN zones z ON z.id = d.target_id'
+            . ' LEFT JOIN servers s ON s.id = d.server_id'
+            . " WHERE d.target_type = 'zone' AND " . $access['sql']
+            . ' ORDER BY d.id ASC'
+        );
+        $i = 1;
+        foreach ($access['params'] as $param) {
+            $stmt->bindValue($i++, $param, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[] = [
+                'zoneId'     => (int)$row['target_id'],
+                'zoneName'   => $row['zone_name'] === null ? null : (string)$row['zone_name'],
+                'serverName' => $row['server_name'] === null ? null : (string)$row['server_name'],
+                'checkType'  => (string)$row['check_type'],
+                'status'     => (string)$row['status'],
+                'message'    => $row['message'] === null ? null : (string)$row['message'],
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
      * @param array<string, mixed> $row
      */
     private static function mapZone(array $row): array

@@ -11,6 +11,10 @@
 define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/diagnostics.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 include __DIR__ . '/../templates/layout.php';
 
 // Edit-ID aus GET-Parametern lesen (für Bearbeitungsmodus)
@@ -49,9 +53,20 @@ while ($row = $stmt_links->fetch(PDO::FETCH_ASSOC)) {
     ];
 }
 
-// Diagnosedaten aus der Datenbank laden
-$diagnostics = getDiagnosticResults($pdo);
-$zone_results = $diagnostics['zone'];
+// Zonendiagnosen laden – nur für Zonen, die der Benutzer lesen darf (Berechtigung in derselben Abfrage,
+// ZoneAccess). Übersetzung in die bisherige Struktur von getDiagnosticResults()['zone'] für die
+// unveränderte Auswertung und Darstellung unten.
+$zone_results = [];
+foreach ((new ZoneReadService($pdo, new ZoneAccess($pdo)))->listZoneDiagnostics(actorFromSession()) as $diag) {
+    $zone_results[] = [
+        'zone'   => $diag['zoneName'] ?? '(unbekannt)',
+        'server' => $diag['serverName'] ?? '(unbekannt)',
+        $diag['checkType'] => [
+            'status'  => $diag['status'],
+            'message' => $diag['message'],
+        ],
+    ];
+}
 
 // Ergebnisse nach Zonenname gruppieren und besten Status ermitteln
 $zone_statuses = [];
