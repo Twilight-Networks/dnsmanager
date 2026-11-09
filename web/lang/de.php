@@ -329,6 +329,8 @@ return [
     'server_error_db_update_failed'     => 'Beim Speichern des Servers ist ein Fehler aufgetreten.',
 
     'server_error_delete_assigned' => 'Der Server ist noch mindestens einer Zone zugewiesen und kann daher nicht gelöscht werden.',
+    'server_deleted'               => 'Server wurde gelöscht.',
+    'server_error_delete_failed'   => 'Fehler beim Löschen des Servers.',
 
     // === system_health.php ===
     'system_update_now' => 'Status jetzt aktualisieren',

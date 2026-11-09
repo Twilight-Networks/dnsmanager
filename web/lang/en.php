@@ -315,6 +315,8 @@ return [
     'server_error_db_update_failed'     => 'An error occurred while updating the server.',
 
     'server_error_delete_assigned' => 'The server is still assigned to at least one zone and cannot be deleted.',
+    'server_deleted'               => 'Server has been deleted.',
+    'server_error_delete_failed'   => 'Error deleting the server.',
 
     // form
     'add_new_server' => 'Add new DNS server',
