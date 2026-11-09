@@ -355,6 +355,30 @@ function isValidFqdn(string $fqdn): bool
 }
 
 /**
+ * Prüft einen Namen, der unverändert in die SOA-Zeile einer Zonendatei geschrieben wird
+ * (primärer Nameserver, SOA NS).
+ *
+ * Erlaubt sind ausschließlich Buchstaben, Ziffern, Bindestrich und Punkt; zusätzlich müssen die
+ * FQDN-Regeln von isValidFqdn() erfüllt sein. Leer-, Steuer- und Sonderzeichen (insbesondere
+ * Zeilenumbrüche, ';', '(', ')', '"', '$') sind damit ausgeschlossen, sodass der Wert keine weiteren
+ * Zonendatei-Zeilen oder -Direktiven erzeugen kann (Sicherheitsbefund S17).
+ *
+ * Die Zeichenprüfung erfolgt bewusst zusätzlich zu isValidFqdn(), da deren Label-Prüfung mit '$'
+ * einen abschließenden Zeilenumbruch zulassen würde.
+ *
+ * @param string $name z. B. "ns1.example.com." oder "ns1.example.com"
+ * @return bool true, wenn der Name sicher und gültig ist
+ */
+function isValidSoaName(string $name): bool
+{
+    if ($name === '' || preg_match('/[^A-Za-z0-9.\-]/', $name)) {
+        return false;
+    }
+
+    return isValidFqdn($name);
+}
+
+/**
  * Prüft, ob ein identischer DNS-Record in der Datenbank bereits existiert.
  *
  * Ein Record gilt als identisch, wenn alle vier Schlüsselattribute übereinstimmen:

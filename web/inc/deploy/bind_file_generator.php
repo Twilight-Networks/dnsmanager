@@ -33,6 +33,31 @@
 require_once __DIR__ . '/../soa_serial.php';
 
 /**
+ * Defensive Prüfung eines SOA-Namensfeldes (soa_ns, soa_mail) unmittelbar vor dem Schreiben der
+ * Zonendatei (Sicherheitsbefund S17).
+ *
+ * Der Wert wird ungefiltert in die SOA-Zeile eingesetzt. Er muss daher genau ein Namens-Token sein:
+ * Buchstaben, Ziffern, '.', '-', '_' und – nur für soa_mail – die maskierte Punkt-Sequenz '\.'
+ * (Postfachname mit Punkt). Leerraum, Steuerzeichen (z. B. Zeilenumbrüche) und Zonendatei-Syntax
+ * (';', '(', ')', '"', '$', '@' …) sind ausgeschlossen. Bewusst großzügiger als die Eingabeprüfung,
+ * damit vorhandene gültige Werte weiterhin erzeugt werden; die fachliche Gültigkeit prüft anschließend
+ * named-checkzone.
+ *
+ * @param string $value       Gespeicherter Feldwert
+ * @param bool   $allowEscape true für soa_mail ('\.' zulässig)
+ * @return bool true, wenn der Wert gefahrlos in die SOA-Zeile geschrieben werden kann
+ */
+function zone_file_soa_name_is_safe(string $value, bool $allowEscape = false): bool
+{
+    if ($value === '' || strlen($value) > 255) {
+        return false;
+    }
+    $pattern = $allowEscape ? '/^(?:[A-Za-z0-9._\-]|\\\\\.)+\z/' : '/^[A-Za-z0-9._\-]+\z/';
+
+    return preg_match($pattern, $value) === 1;
+}
+
+/**
  * Erzeugt eine Zonendatei (db.<zone>) im angegebenen Zielverzeichnis und validiert sie mit named-checkzone.
  *
  * Verhalten:
@@ -43,6 +68,8 @@ require_once __DIR__ . '/../soa_serial.php';
  *
  * Sicherheit:
  * - Es erfolgt keine direkte Verarbeitung von Benutzereingaben.
+ * - soa_ns und soa_mail werden vor dem Schreiben geprüft (zone_file_soa_name_is_safe, S17); unsichere
+ *   Werte führen zu status 'error' ohne Zonendatei.
  * - Pfade werden auf sichere Zielverzeichnisse begrenzt.
  *
  * @param int $zone_id ID der zu verarbeitenden Zone
@@ -101,6 +128,29 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
         $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $zone_name = $zone['name'];
+
+        // S17: SOA-Felder werden unverändert in die Zonendatei geschrieben. Unsichere Werte (auch
+        // bereits gespeicherte) führen in jedem Modus zum Abbruch, bevor eine Datei entsteht.
+        // Der Feldinhalt wird bewusst nicht ausgegeben (Toast/Log).
+        $unsafe_soa_fields = [];
+        if (!zone_file_soa_name_is_safe((string)$zone['soa_ns'])) {
+            $unsafe_soa_fields[] = 'soa_ns';
+        }
+        if (!zone_file_soa_name_is_safe((string)$zone['soa_mail'], true)) {
+            $unsafe_soa_fields[] = 'soa_mail';
+        }
+        if ($unsafe_soa_fields !== []) {
+            if ($tx_started && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $fields = implode(', ', $unsafe_soa_fields);
+            return [
+                'status' => 'error',
+                'output' => "Ungültige SOA-Angaben in Zone $zone_name ($fields): unzulässige Zeichen – Zonendatei wird nicht erzeugt.",
+                'errors' => ["SOA: unzulässige Zeichen in $fields"],
+            ];
+        }
+
         $safe_zone_name = preg_replace('/[^a-zA-Z0-9._\-]/', '_', $zone_name);
         $zone_file_path = rtrim($output_dir, '/') . "/db." . $safe_zone_name . "." . bin2hex(random_bytes(8));
     } catch (Throwable $e) {

@@ -105,6 +105,20 @@ if ($type === 'reverse' && ($prefix_length < 8 || $prefix_length > 128)) {
 $server_ids = $_POST['server_ids'] ?? [];
 $master_id  = $_POST['master_server_id'] ?? null;
 
+// SOA-NS aus der Formulareingabe (nur Reverse-Zonen) wird unverändert in die Zonendatei geschrieben →
+// strikt prüfen, bevor Lock oder Transaktion beginnen (Sicherheitsbefund S17).
+$rejectInvalidSoaNs = function (string $soa_ns) use ($LANG, $id): void {
+    if (isValidSoaName($soa_ns)) {
+        return;
+    }
+    toastError(
+        $LANG['ERR_ZONE_SOA_NS'],
+        "Zoneneingabe ungültig (ID {$id}): ERR_ZONE_SOA_NS"
+    );
+    header("Location: " . rtrim(BASE_URL, '/') . "/pages/zones.php?edit_id=$id");
+    exit;
+};
+
 // Transaktionsgrenze: Ein erfolgreicher Zone-Update läuft in genau einer DB-Transaktion.
 // Bei geänderter Serverzuweisung beginnt sie vor dem Schreiben von zone_servers und umfasst
 // Zuweisung, NS/Glue-Rebuild, Validierung, changed-Flag und das anschließende Metadaten-UPDATE.
@@ -212,6 +226,9 @@ if ($_SESSION['role'] === 'admin') {
     if (!$serverListChanged && !$masterChanged) {
         // keine Änderung – skippe RebuildNS + Serverupdate
         $soa_ns = $zone['type'] === 'forward' ? $old['soa_ns'] : trim($_POST['soa_ns'] ?? '');
+        if ($zone['type'] !== 'forward') {
+            $rejectInvalidSoaNs($soa_ns);
+        }
     } else {
         // Server-Zuweisung hat sich geändert → neu schreiben + rebuild
         // (innerhalb der gemeinsamen Transaktion, Commit erst nach dem Metadaten-UPDATE)
@@ -289,6 +306,9 @@ if ($_SESSION['role'] === 'admin') {
     $soa_ns = $type === 'forward'
         ? $old['soa_ns']
         : trim($_POST['soa_ns'] ?? '');
+    if ($type !== 'forward') {
+        $rejectInvalidSoaNs($soa_ns);
+    }
 }
 
 if (!$old) {

@@ -539,6 +539,7 @@ return [
     'ERR_ZONE_NAME_INVALID'       => 'Invalid zone name.',
     'ERR_ZONE_PREFIX_LENGTH'      => 'Prefix length for reverse zones must be between 8 and 128.',
     'ERR_ZONE_SOA_MAIL'           => 'Invalid administrator address (SOA mail).',
+    'ERR_ZONE_SOA_NS'             => 'Invalid primary name server (SOA NS).',
     'ERR_ZONE_SOA_REFRESH'        => 'SOA refresh must be between 1200 and 86400 seconds.',
     'ERR_ZONE_SOA_RETRY'          => 'SOA retry must be between 180 and 7200 seconds.',
     'ERR_ZONE_SOA_EXPIRE'         => 'SOA expire must be between 1209600 and 2419200 seconds.',

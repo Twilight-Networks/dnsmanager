@@ -539,6 +539,7 @@ return [
     'ERR_ZONE_NAME_INVALID'       => 'Ungültiger Zonenname.',
     'ERR_ZONE_PREFIX_LENGTH'      => 'Prefix-Length für Reverse-Zonen muss zwischen 8 und 128 liegen.',
     'ERR_ZONE_SOA_MAIL'           => 'Ungültige Administrator-Adresse (SOA Mail).',
+    'ERR_ZONE_SOA_NS'             => 'Ungültiger primärer Nameserver (SOA NS).',
     'ERR_ZONE_SOA_REFRESH'        => 'SOA-Refresh muss zwischen 1200 und 86400 Sekunden liegen.',
     'ERR_ZONE_SOA_RETRY'          => 'SOA-Retry muss zwischen 180 und 7200 Sekunden liegen.',
     'ERR_ZONE_SOA_EXPIRE'         => 'SOA-Expire muss zwischen 1209600 und 2419200 Sekunden liegen.',
