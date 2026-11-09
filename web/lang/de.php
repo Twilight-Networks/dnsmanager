@@ -479,7 +479,7 @@ return [
     'zone_warning_ns_glue'      => 'Zone wurde aktualisiert – Warnung beim Zonen-Rebuild.',
     'zone_updated'              => 'Zone <strong>%s</strong> erfolgreich aktualisiert.',
 
-    'zone_error_not_found'      => 'Zone nicht gefunden.',
+    'zone_error_invalid_id'     => 'Ungültige Zonen-ID.',
     'zone_deleted'              => 'Zone <strong>%s</strong> wurde gelöscht.',
     'zone_error_delete_failed'  => 'Fehler beim Löschen der Zone.',
 
