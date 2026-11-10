@@ -10,6 +10,9 @@
  * - allowDyndns:    bereits ausgewertet (Formular: Feld vorhanden)
  * - serverIds, masterServerId: nur für admin wirksam (Serverzuweisung); für zoneadmin ignoriert
  * - type:           nur für validateZoneInput() durchgereicht (wie bisher $_POST['type']; das Formular sendet es nicht)
+ * - expectedVersion: Bearbeitungsstand, auf dem die Eingabe beruht (ZoneReadService::getZone(), Feld
+ *                    "editVersion"; S21). Pflicht für jeden Aufrufkanal: fehlend, formal ungültig oder
+ *                    veraltet → "zone.update.conflict", keine Änderung. Es gibt keinen Modus ohne Prüfung.
  */
 
 final class ZoneUpdateInput
@@ -27,7 +30,8 @@ final class ZoneUpdateInput
         public readonly mixed $soaMinimum = null,
         public readonly mixed $serverIds = null,
         public readonly mixed $masterServerId = null,
-        public readonly mixed $type = null
+        public readonly mixed $type = null,
+        public readonly mixed $expectedVersion = null
     ) {
     }
 

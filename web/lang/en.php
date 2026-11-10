@@ -480,6 +480,7 @@ return [
     'zone_error_ns_glue_failed' => 'Zone structure could not be rebuilt.',
     'zone_warning_ns_glue'      => 'Zone updated – warning during NS/Glue rebuild.',
     'zone_updated'              => 'Zone <strong>%s</strong> updated successfully.',
+    'zone_error_conflict'       => 'The zone has been changed in the meantime. Please review the current values and save again.',
 
     'zone_error_invalid_id'     => 'Invalid zone ID.',
     'zone_deleted'              => 'Zone <strong>%s</strong> has been deleted.',

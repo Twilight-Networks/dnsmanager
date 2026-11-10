@@ -16,6 +16,11 @@
  * Web-Adapter: Eingaben lesen, ZoneService::updateZone() aufrufen, ServiceMessages in die bisherigen
  * Toasts/Logs/Redirects übersetzen. Validierung, Berechtigung (DB-Rolle/Zuweisung), Topologie-Lock,
  * Sperren und Transaktion liegen im Service.
+ *
+ * Bearbeitungsstand (S21): Das Formular sendet "edit_version" (aus ZoneReadService::getZone()). Fehlt es,
+ * ist es ungültig oder veraltet, speichert der Service nichts ("zone.update.conflict"); der Adapter
+ * leitet zum Bearbeitungsformular mit dem aktuellen Stand zurück. Verworfene Eingaben werden nicht
+ * übernommen.
  */
 
 require_once __DIR__ . '/../common.php';
@@ -48,7 +53,8 @@ $input = new ZoneUpdateInput(
     $_POST['soa_minimum'] ?? null,
     $_POST['server_ids'] ?? null,
     $_POST['master_server_id'] ?? null,
-    $_POST['type'] ?? null
+    $_POST['type'] ?? null,
+    $_POST['edit_version'] ?? null
 );
 
 $zoneService = new ZoneService($pdo, new LegacyZoneBuildBackend($pdo), new TopologyLock($pdo));
@@ -174,6 +180,18 @@ foreach ($result->messages as $message) {
             toastWarning(
                 $LANG['zone_warning_zonefile_check'],
                 $ctx['output']
+            );
+            break;
+
+        case 'zone.update.conflict':
+            $reasonText = match ($ctx['reason'] ?? '') {
+                'missing' => 'Bearbeitungsstand fehlt',
+                'invalid' => 'Bearbeitungsstand ungültig',
+                default   => 'Bearbeitungsstand veraltet',
+            };
+            toastError(
+                $LANG['zone_error_conflict'],
+                "Zone-Update abgelehnt: {$reasonText} (Zone {$ctx['name']}, ID {$id})"
             );
             break;
 

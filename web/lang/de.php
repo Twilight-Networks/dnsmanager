@@ -480,6 +480,7 @@ return [
     'zone_error_ns_glue_failed' => 'Zonenstruktur konnte nicht neu aufgebaut werden.',
     'zone_warning_ns_glue'      => 'Zone wurde aktualisiert – Warnung beim Zonen-Rebuild.',
     'zone_updated'              => 'Zone <strong>%s</strong> erfolgreich aktualisiert.',
+    'zone_error_conflict'       => 'Die Zone wurde zwischenzeitlich geändert. Bitte die aktuellen Werte prüfen und erneut speichern.',
 
     'zone_error_invalid_id'     => 'Ungültige Zonen-ID.',
     'zone_deleted'              => 'Zone <strong>%s</strong> wurde gelöscht.',

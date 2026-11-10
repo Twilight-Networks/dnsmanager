@@ -76,6 +76,7 @@ if ($edit_id !== null && in_array($edit_id, array_column($zones, 'id'), true)) {
             'soa_retry'     => $z['soa']['retry'],
             'soa_expire'    => $z['soa']['expire'],
             'soa_minimum'   => $z['soa']['minimum'],
+            'edit_version'  => $z['editVersion'],
         ];
         foreach ($z['servers'] as $srv) {
             $zone_edit_assigned[$srv['id']] = $srv['role'] === 'master' ? 1 : 0;
