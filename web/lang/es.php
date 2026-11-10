@@ -315,6 +315,8 @@ return [
     'server_error_db_update_failed'     => 'Ocurrió un error al actualizar el servidor.',
 
     'server_error_delete_assigned' => 'El servidor aún está asignado a al menos una zona y no puede eliminarse.',
+    'server_deleted'               => 'El servidor ha sido eliminado.',
+    'server_error_delete_failed'   => 'Error al eliminar el servidor.',
 
     // form
     'add_new_server' => 'Añadir nuevo servidor DNS',
