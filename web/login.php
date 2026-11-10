@@ -102,8 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="alert alert-success">✅ <?= $LANG['logout_success'] ?></div>
         <?php endif; ?>
 
-        <!-- Hinweis: Passwort geändert, neu anmelden -->
-        <?php if ($passwordChanged): ?>
+        <?php /* Hinweis: Passwort geändert, neu anmelden (PHP-Kommentar: keine zusätzliche HTML-Ausgabe) */ if ($passwordChanged): ?>
             <div class="alert alert-success">✅ <?= $LANG['password_changed_relogin'] ?></div>
         <?php endif; ?>
 

@@ -5,7 +5,8 @@
 # Aufruf (als Benutzer mit DDL-Rechten auf die Datenbank, z. B. root über den MariaDB-Socket):
 #   bash migrate_001_users_active_session_epoch.sh --db <name> --check
 #   bash migrate_001_users_active_session_epoch.sh --db <name> --apply --backup-dir <verzeichnis>
-#   bash migrate_001_users_active_session_epoch.sh --db <name> --apply --no-backup     (nur Testdatenbanken)
+#   bash migrate_001_users_active_session_epoch.sh --db <name> --apply --no-backup     (nur isolierte Testdatenbanken
+#                                                                                      dnsmgr_tNN_*, technisch erzwungen)
 # Optional: --client-opts "<Optionen für mariadb/mysqldump>" (z. B. "--defaults-extra-file=/root/.my.cnf")
 #
 # Exitcodes:
@@ -40,6 +41,11 @@ fail() { echo "ABBRUCH: $*" >&2; exit "${2:-2}"; }
 [ -n "$DB" ] || fail "--db fehlt"
 [ -n "$MODE" ] || fail "--check oder --apply angeben"
 [[ "$DB" =~ ^[A-Za-z0-9_]+$ ]] || fail "ungültiger Datenbankname"
+# --no-backup ist technisch auf isolierte Testdatenbanken beschränkt (Namensschema dnsmgr_tNN_…); geprüft
+# vor jedem Datenbankzugriff. Für jede andere Datenbank (z. B. dnsmanager) ist eine Sicherung Pflicht.
+if [ "$NO_BACKUP" -eq 1 ] && ! [[ "$DB" =~ ^dnsmgr_t[0-9]{2}_[a-z0-9_]+$ ]]; then
+    fail "--no-backup ist nur für isolierte Testdatenbanken (dnsmgr_tNN_*) zulässig, nicht für $DB – keine Verbindung, keine Änderung"
+fi
 [ -f "$SQL_FILE" ] || fail "Migrationsdatei fehlt: $SQL_FILE"
 command -v mariadb >/dev/null 2>&1 || fail "mariadb-Client nicht gefunden"
 
