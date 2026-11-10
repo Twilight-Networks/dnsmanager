@@ -22,6 +22,10 @@ define('ALLOW_UNAUTHENTICATED', true);
 // Zentrale Initialisierung (inkl. Session, CSRF etc.)
 require_once __DIR__ . '/common.php';
 require_once __DIR__ . '/inc/auth.php';
+require_once __DIR__ . '/inc/web/session_guard.php';
+
+// Schema muss zum Code passen (users.active, users.session_epoch); sonst 503 statt Anmeldung (Fail-Closed)
+session_guard_require_schema($pdo);
 require_once __DIR__ . '/config/version.php';
 
 // HTTP-Caching explizit deaktivieren
@@ -33,10 +37,15 @@ header('Expires: 0');
 $error = false;
 $logoutSuccess = false;
 $timeoutExpired = false;
+$passwordChanged = false;
 
 // Sessionstatus prüfen (nur bei GET-Anfragen relevant)
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    if (!empty($_SESSION['logout_success'])) {
+    if (!empty($_SESSION['password_changed_relogin'])) {
+        // Eigene Passwortänderung: Session wurde beendet, neue Anmeldung erforderlich (S26)
+        $passwordChanged = true;
+        unset($_SESSION['password_changed_relogin'], $_SESSION['session_expired'], $_SESSION['logout_success']);
+    } elseif (!empty($_SESSION['logout_success'])) {
         $logoutSuccess = true;
         unset($_SESSION['logout_success']);
         unset($_SESSION['session_expired']); // Timeout ignorieren, wenn Logout aktiv war
@@ -91,6 +100,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <!-- Hinweis: Erfolgreich abgemeldet -->
         <?php if ($logoutSuccess): ?>
             <div class="alert alert-success">✅ <?= $LANG['logout_success'] ?></div>
+        <?php endif; ?>
+
+        <!-- Hinweis: Passwort geändert, neu anmelden -->
+        <?php if ($passwordChanged): ?>
+            <div class="alert alert-success">✅ <?= $LANG['password_changed_relogin'] ?></div>
         <?php endif; ?>
 
         <!-- Hinweis: Session abgelaufen -->

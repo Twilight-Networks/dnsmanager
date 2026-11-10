@@ -29,6 +29,7 @@ return [
     'error_password_save'        => 'Error al guardar la contraseña.',
     'password_changed'           => 'Contraseña cambiada correctamente.',
     'password_changed_admin'     => 'La contraseña ha sido actualizada correctamente.',
+    'password_changed_relogin' => 'Contraseña cambiada. Inicie sesión de nuevo con la nueva contraseña.',
     'error_password_unauthorized' => 'Solo puede cambiar su propia contraseña.',
     'error_password_mismatch'     => 'Las contraseñas no coinciden.',
     'error_password_processing'   => 'Error al procesar la contraseña.',

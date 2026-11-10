@@ -7,6 +7,11 @@ CREATE TABLE users (
     username VARCHAR(50) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     role ENUM('admin', 'zoneadmin') NOT NULL DEFAULT 'zoneadmin',
+    -- Kontostatus (S27): 0 = deaktiviert (keine Anmeldung, keine Service-Operationen; Daten bleiben erhalten)
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    -- Sitzungsgeneration (S26/S27): steigt bei Passwort-, Rollen-, Namens- und Statusänderung;
+    -- Sessions mit abweichender Generation werden widerrufen
+    session_epoch BIGINT UNSIGNED NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

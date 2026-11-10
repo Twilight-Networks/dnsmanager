@@ -69,8 +69,19 @@ try {
 if ($result !== null) {
     switch ($result['status']) {
         case 'denied':
-            // Nicht erreichbar, solange requireRole() dieselben Rollen prüft; Verhalten wie requireRole()
-            logAccessDenied('publish_all', 'Unzureichende Berechtigungen für Rolle: ' . ($_SESSION['role'] ?? ''));
+            // Rolle: nicht erreichbar, solange requireRole() dieselben Rollen prüft; Verhalten wie requireRole().
+            // Datenbankstand (S27, z. B. Konto zwischen Revalidierung und Service deaktiviert): gleiche Antwort.
+            $deniedReason = '';
+            foreach ($serviceResult->messages as $message) {
+                if ($message->code === 'publish.access_denied') {
+                    $deniedReason = (string)($message->context['reason'] ?? '');
+                }
+            }
+            if ($deniedReason === 'db_role') {
+                logAccessDenied('publish_all', 'Benutzer-ID ' . (int)($_SESSION['user_id'] ?? 0) . ' ist laut Datenbank nicht (mehr) berechtigt (Konto deaktiviert, gelöscht oder Rolle geändert).');
+            } else {
+                logAccessDenied('publish_all', 'Unzureichende Berechtigungen für Rolle: ' . ($_SESSION['role'] ?? ''));
+            }
             http_response_code(403);
             exit('Zugriff verweigert: Unzureichende Berechtigungen.');
 

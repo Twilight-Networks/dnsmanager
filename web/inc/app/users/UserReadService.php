@@ -13,7 +13,7 @@
  *   Die Rolle im Actor wird nicht ausgewertet.
  * - Berechtigungsfilterung und Pagination erfolgen auf der Benutzerebene (abgeleitete Tabelle);
  *   die Zonenzuweisungen werden erst danach angehängt und verändern die Benutzerseite nicht.
- * - Expliziter Read-Contract: id, username, role, createdAt, allZones (= Rolle admin), zones
+ * - Expliziter Read-Contract: id, username, role, active (Kontostatus, S27), createdAt, allZones (= Rolle admin), zones
  *   (gespeicherte Zuweisungen [{id, name}]; für admin ohne Wirkung). Niemals password_hash.
  * - Stabile Sortierung: Rolle (admin vor zoneadmin), dann ID; Zonen je Benutzer nach Zonen-ID.
  *
@@ -29,8 +29,11 @@ final class UserReadService
     public const DEFAULT_LIMIT = 100;
     public const MAX_LIMIT = 500;
 
-    /** Sichtbarkeitsbedingung: a = Akteur (DB-Stand), u = gelesener Benutzer */
-    private const VISIBLE = "(a.role = 'admin' OR (a.role = 'zoneadmin' AND u.id = a.id))";
+    /**
+     * Sichtbarkeitsbedingung: a = Akteur (DB-Stand), u = gelesener Benutzer.
+     * Der Akteur muss aktiv sein (S27); ein deaktivierter Akteur sieht niemanden.
+     */
+    private const VISIBLE = "a.active = 1 AND (a.role = 'admin' OR (a.role = 'zoneadmin' AND u.id = a.id))";
 
     private PDO $pdo;
 
@@ -56,8 +59,8 @@ final class UserReadService
         }
 
         $stmt = $this->pdo->prepare(
-            'SELECT p.id, p.username, p.role, p.created_at, z.id AS zone_id, z.name AS zone_name'
-            . ' FROM (SELECT u.id, u.username, u.role, u.created_at FROM users u JOIN users a ON a.id = ?'
+            'SELECT p.id, p.username, p.role, p.active, p.created_at, z.id AS zone_id, z.name AS zone_name'
+            . ' FROM (SELECT u.id, u.username, u.role, u.active, u.created_at FROM users u JOIN users a ON a.id = ?'
             . ' WHERE ' . self::VISIBLE
             . ' ORDER BY u.role ASC, u.id ASC LIMIT ? OFFSET ?) p'
             . ' LEFT JOIN user_zones uz ON uz.user_id = p.id'
@@ -92,7 +95,7 @@ final class UserReadService
         }
 
         $stmt = $this->pdo->prepare(
-            'SELECT u.id, u.username, u.role, u.created_at, z.id AS zone_id, z.name AS zone_name'
+            'SELECT u.id, u.username, u.role, u.active, u.created_at, z.id AS zone_id, z.name AS zone_name'
             . ' FROM users u JOIN users a ON a.id = ?'
             . ' LEFT JOIN user_zones uz ON uz.user_id = u.id'
             . ' LEFT JOIN zones z ON z.id = uz.zone_id'
@@ -125,6 +128,7 @@ final class UserReadService
                     'id'        => $id,
                     'username'  => (string)$r['username'],
                     'role'      => (string)$r['role'],
+                    'active'    => (int)$r['active'] === 1,
                     'createdAt' => $r['created_at'] === null ? null : (string)$r['created_at'],
                     'allZones'  => $r['role'] === 'admin',
                     'zones'     => [],

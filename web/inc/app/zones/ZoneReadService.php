@@ -22,6 +22,7 @@
  */
 
 require_once __DIR__ . '/../Actor.php';
+require_once __DIR__ . '/../ActorAccess.php';
 require_once __DIR__ . '/../ZoneAccess.php';
 require_once __DIR__ . '/ZoneEditVersion.php';
 
@@ -187,6 +188,8 @@ final class ZoneReadService
      * Änderungen daran übernimmt ZoneService nur für admins), für alle anderen Rollen leer.
      * Nur öffentliche Serverdaten: ID, Name, DNS-Adressen, Aktivstatus – keine Tokens, keine API-Adressen.
      * Sortierung nach Name und ID.
+     * Der Akteur wird in derselben Abfrage gegen die Datenbank geprüft (Rolle wie im Actor, Konto aktiv;
+     * ActorAccess): ein deaktiviertes, gelöschtes oder umgestuftes Konto erhält eine leere Liste.
      *
      * @param bool $activeOnly true = nur aktive Server (Anlageformular)
      *
@@ -194,15 +197,20 @@ final class ZoneReadService
      */
     public function listAssignableServers(Actor $actor, bool $activeOnly): array
     {
-        if (!$actor->isAdmin() && $actor->role !== 'zoneadmin') {
+        $access = (new ActorAccess($this->pdo))->activeCondition($actor);
+        if ($access === null) {
             return [];
         }
 
         $stmt = $this->pdo->prepare(
             'SELECT s.id, s.name, s.dns_ip4, s.dns_ip6, s.active FROM servers s'
-            . ($activeOnly ? ' WHERE s.active = 1' : '')
+            . ' WHERE ' . $access['sql'] . ($activeOnly ? ' AND s.active = 1' : '')
             . ' ORDER BY s.name ASC, s.id ASC'
         );
+        $i = 1;
+        foreach ($access['params'] as $param) {
+            $stmt->bindValue($i++, $param, PDO::PARAM_INT);
+        }
         $stmt->execute();
 
         $servers = [];

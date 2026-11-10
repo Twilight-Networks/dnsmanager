@@ -12,8 +12,8 @@
  * - Maßgeblich ist der Datenbankstand des Akteurs, geprüft in der schreibenden Transaktion unter
  *   geteilter Zeilensperre (users LOCK IN SHARE MODE; zoneadmin zusätzlich user_zones). Die Rolle im
  *   Actor wählt nur den Pfad wie bisher (admin/zoneadmin) und kann ablehnen, nie erlauben: weicht die
- *   DB-Rolle von der Actor-Rolle ab (z. B. veraltete Web-Session) oder ist die Zuweisung entzogen,
- *   folgt "<operation>.access_denied".
+ *   DB-Rolle von der Actor-Rolle ab (z. B. veraltete Web-Session), ist das Konto deaktiviert (S27) oder
+ *   ist die Zuweisung entzogen, folgt "<operation>.access_denied".
  * - Anlegen/Löschen: nur admin. Ändern: admin (inkl. Serverzuweisung) oder zugewiesener zoneadmin.
  *
  * Sperren (E13/E14/E15):
@@ -688,14 +688,18 @@ final class ZoneService
         ];
     }
 
-    /** DB-Rolle des Akteurs unter geteilter Zeilensperre (null = Benutzer existiert nicht) */
+    /**
+     * DB-Rolle des Akteurs unter geteilter Zeilensperre (null = Benutzer existiert nicht oder ist
+     * deaktiviert, S27; gleiche Anweisung und gleiche gesperrte Zeile wie bisher)
+     */
     private function dbRole(int $userId): ?string
     {
-        $stmt = $this->pdo->prepare("SELECT role FROM users WHERE id = ? LOCK IN SHARE MODE");
+        $stmt = $this->pdo->prepare("SELECT role, active FROM users WHERE id = ? LOCK IN SHARE MODE");
         $stmt->execute([$userId]);
-        $role = $stmt->fetchColumn();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
 
-        return $role === false ? null : (string)$role;
+        return ($row === false || (int)$row['active'] !== 1) ? null : (string)$row['role'];
     }
 
     /** @param ServiceMessage[] $m */
