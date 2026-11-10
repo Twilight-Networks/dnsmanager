@@ -33,6 +33,15 @@
  *   Master und soa_domain; Änderung: Eingabe, sofern verwendet), vor Lock und Transaktion.
  * - Zonendatei-Erzeugung über ZoneBuildBackend; die Generatorprüfungen (SOA- und Record-Felder) wirken
  *   unverändert mit.
+ *
+ * Bearbeitungsstand (S21):
+ * - updateZone() verlangt den Bearbeitungsstand (ZoneEditVersion), auf dem die Eingabe beruht, und
+ *   vergleicht ihn in der Transaktion mit dem gesperrten Stand: nach den Berechtigungssperren und
+ *   zones FOR UPDATE (admin zusätzlich nach zone_servers FOR UPDATE), vor jeder Schreiboperation, vor
+ *   NS/Glue-Neuaufbau und Publish-Flags und vor der No-Change-Erkennung. Keine zusätzlichen Sperren.
+ * - Geltungsbereich nach der in der Transaktion bestätigten Rolle (admin inkl. Serverzuweisung,
+ *   zoneadmin ohne). Abweichung, fehlendes oder ungültiges Token: Rollback, Topologie-Lock frei,
+ *   "zone.update.conflict".
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -41,6 +50,7 @@ require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../TopologyLock.php';
 require_once __DIR__ . '/../../validators.php';
 require_once __DIR__ . '/ZoneBuildBackend.php';
+require_once __DIR__ . '/ZoneEditVersion.php';
 require_once __DIR__ . '/ZoneInput.php';
 require_once __DIR__ . '/ZoneUpdateInput.php';
 
@@ -254,7 +264,11 @@ final class ZoneService
      *        (errors), invalid_prefix_length, no_servers, master_not_in_list, master_inactive,
      *        invalid_soa_ns, lock_acquire_error, topology_locked, lock_release_unconfirmed,
      *        lock_release_error, ns_glue_failed, ns_glue_warning, server_assignment_failed,
-     *        zonefile_invalid, zonefile_warning, unchanged, failed, success
+     *        zonefile_invalid, zonefile_warning, conflict (reason: missing|invalid|stale), unchanged,
+     *        failed, success
+     *
+     * Reihenfolge: Rollen-/Eingabeprüfungen wie bisher → Transaktion: Berechtigung → Zone (not_found)
+     * → Bearbeitungsstand (conflict) → No-Change (unchanged) → Schreiben.
      */
     public function updateZone(Actor $actor, int $zoneId, ZoneUpdateInput $input): ServiceResult
     {
@@ -370,7 +384,7 @@ final class ZoneService
                 }
 
                 $stmt = $this->pdo->prepare("
-                    SELECT ttl, prefix_length, description, allow_dyndns, soa_ns, soa_mail,
+                    SELECT id, name, type, ttl, prefix_length, description, allow_dyndns, soa_ns, soa_mail,
                            soa_refresh, soa_retry, soa_expire, soa_minimum
                     FROM zones
                     WHERE id = ?
@@ -382,6 +396,16 @@ final class ZoneService
                     $this->rollbackIfActive();
                     $this->releaseLock('update', $m);
                     return self::fail($m, 'error', 'zone.update.not_found', ['zoneId' => $id]);
+                }
+
+                // Bearbeitungsstand zoneadmin (ohne Serverzuweisung) auf der gesperrten Zonenzeile
+                if (!$adminPath) {
+                    $conflict = self::versionConflict($input->expectedVersion, ZoneEditVersion::of(ZoneEditVersion::SCOPE_ZONEADMIN, $old, null));
+                    if ($conflict !== null) {
+                        $this->rollbackIfActive();
+                        $this->releaseLock('update', $m);
+                        return self::fail($m, 'error', 'zone.update.conflict', ['zoneId' => $id, 'name' => $name, 'reason' => $conflict]);
+                    }
                 }
             } catch (Throwable $e) {
                 $this->rollbackIfActive();
@@ -396,7 +420,18 @@ final class ZoneService
                 try {
                     $stmt = $this->pdo->prepare("SELECT server_id, is_master FROM zone_servers WHERE zone_id = ? FOR UPDATE");
                     $stmt->execute([$id]);
-                    $diff = self::assignmentDiff($stmt->fetchAll(PDO::FETCH_KEY_PAIR), $server_ids, $master_id, $active_ids);
+                    $lockedAssignment = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+
+                    // Bearbeitungsstand admin (inkl. Serverzuweisung) auf gesperrter Zone und Zuweisung,
+                    // vor jeder Schreiboperation, vor NS/Glue-Neuaufbau und vor Publish-Flags
+                    $conflict = self::versionConflict($input->expectedVersion, ZoneEditVersion::of(ZoneEditVersion::SCOPE_ADMIN, $old, $lockedAssignment));
+                    if ($conflict !== null) {
+                        $this->rollbackIfActive();
+                        $this->releaseLock('update', $m);
+                        return self::fail($m, 'error', 'zone.update.conflict', ['zoneId' => $id, 'name' => $name, 'reason' => $conflict]);
+                    }
+
+                    $diff = self::assignmentDiff($lockedAssignment, $server_ids, $master_id, $active_ids);
                     $serverListChanged = $diff['listChanged'];
                     $masterChanged = $diff['masterChanged'];
 
@@ -599,6 +634,23 @@ final class ZoneService
     /* ======================================================================================== */
     /* Hilfsfunktionen                                                                          */
     /* ======================================================================================== */
+
+    /**
+     * Bearbeitungsstand prüfen (S21): null = aktuell, sonst Grund des Konflikts.
+     *
+     * @return 'missing'|'invalid'|'stale'|null
+     */
+    private static function versionConflict(mixed $expected, string $current): ?string
+    {
+        if ($expected === null || $expected === '') {
+            return 'missing';
+        }
+        if (!ZoneEditVersion::isWellFormed($expected)) {
+            return 'invalid';
+        }
+
+        return ZoneEditVersion::matches($expected, $current) ? null : 'stale';
+    }
 
     /**
      * Vergleich der Serverzuweisung (unveränderte Logik aus zone_update.php).

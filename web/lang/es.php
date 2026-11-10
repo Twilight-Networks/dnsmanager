@@ -480,6 +480,7 @@ return [
     'zone_error_ns_glue_failed' => 'No se pudo reconstruir la estructura de la zona.',
     'zone_warning_ns_glue'      => 'Zona actualizada – advertencia durante la reconstrucción de NS/Glue.',
     'zone_updated'              => 'Zona <strong>%s</strong> actualizada correctamente.',
+    'zone_error_conflict'       => 'La zona ha sido modificada mientras tanto. Revise los valores actuales y vuelva a guardar.',
 
     'zone_error_invalid_id'     => 'ID de zona no válido.',
     'zone_deleted'              => 'Zona <strong>%s</strong> ha sido eliminada.',

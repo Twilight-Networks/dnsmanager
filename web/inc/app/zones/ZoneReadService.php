@@ -23,6 +23,7 @@
 
 require_once __DIR__ . '/../Actor.php';
 require_once __DIR__ . '/../ZoneAccess.php';
+require_once __DIR__ . '/ZoneEditVersion.php';
 
 final class ZoneReadService
 {
@@ -109,6 +110,10 @@ final class ZoneReadService
     /**
      * Details einer Zone, sofern sie existiert und der Akteur sie lesen darf.
      *
+     * editVersion (S21): Bearbeitungsstand für ZoneService::updateZone() (ZoneEditVersion), berechnet
+     * aus demselben Abfrageergebnis. Geltungsbereich nach der Rolle des Akteurs: admin inklusive
+     * Serverzuweisung, zoneadmin ohne; andere Rollen null (keine Bearbeitung möglich).
+     *
      * @return array|null null = Zone nicht vorhanden oder keine Berechtigung
      */
     public function getZone(Actor $actor, int $zoneId): ?array
@@ -156,12 +161,21 @@ final class ZoneReadService
             'minimum'   => (int)$row['soa_minimum'],
         ];
         $zone['servers'] = [];
+        $assignment = [];
         foreach ($rows as $r) {
             if ($r['server_id'] === null) {
                 continue; // Zone ohne Serverzuordnung (LEFT JOIN)
             }
             $zone['servers'][] = self::mapServer($r);
+            $assignment[(int)$r['server_id']] = (int)$r['server_is_master'];
         }
+
+        $scope = match ($actor->role) {
+            'admin'     => ZoneEditVersion::SCOPE_ADMIN,
+            'zoneadmin' => ZoneEditVersion::SCOPE_ZONEADMIN,
+            default     => null,
+        };
+        $zone['editVersion'] = $scope === null ? null : ZoneEditVersion::of($scope, $row, $assignment);
 
         return $zone;
     }

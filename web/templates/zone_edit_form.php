@@ -37,6 +37,7 @@ $assigned = $zone_edit_assigned ?? [];
 
             <?= csrf_input() ?>
             <input type="hidden" name="id" value="<?= (int)$zone['id'] ?>">
+            <input type="hidden" name="edit_version" value="<?= htmlspecialchars((string)($zone['edit_version'] ?? ''), ENT_QUOTES) ?>">
 
             <!-- Formularfelder: TTL, SOA-Werte, Beschreibung -->
             <div class="row g-3">
