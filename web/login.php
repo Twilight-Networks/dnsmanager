@@ -101,10 +101,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php if ($logoutSuccess): ?>
             <div class="alert alert-success">✅ <?= $LANG['logout_success'] ?></div>
         <?php endif; ?>
-
-        <?php /* Hinweis: Passwort geändert, neu anmelden (PHP-Kommentar: keine zusätzliche HTML-Ausgabe) */ if ($passwordChanged): ?>
+<?php /* Hinweis: Passwort geändert, neu anmelden. Steuerzeilen in Spalte 0: ohne Hinweis keine zusätzliche Ausgabe */ if ($passwordChanged): ?>
             <div class="alert alert-success">✅ <?= $LANG['password_changed_relogin'] ?></div>
-        <?php endif; ?>
+<?php endif; ?>
 
         <!-- Hinweis: Session abgelaufen -->
         <?php if ($timeoutExpired): ?>
