@@ -29,6 +29,7 @@ return [
     'error_password_save'        => 'Fehler beim Speichern des Passworts.',
     'password_changed'           => 'Passwort erfolgreich geändert.',
     'password_changed_admin'       => 'Das Passwort wurde erfolgreich aktualisiert.',
+    'password_changed_relogin' => 'Passwort geändert. Bitte mit dem neuen Passwort erneut anmelden.',
     'error_password_unauthorized'  => 'Du darfst nur dein eigenes Passwort ändern.',
     'error_password_mismatch'      => 'Die Passwörter stimmen nicht überein.',
     'error_password_processing'    => 'Fehler beim Verarbeiten des Passworts.',

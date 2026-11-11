@@ -29,6 +29,7 @@ return [
     'error_password_save'        => 'Error saving the password.',
     'password_changed'           => 'Password changed successfully.',
     'password_changed_admin'       => 'The password has been updated successfully.',
+    'password_changed_relogin' => 'Password changed. Please log in again with your new password.',
     'error_password_unauthorized'  => 'You may only change your own password.',
     'error_password_mismatch'      => 'The passwords do not match.',
     'error_password_processing'    => 'Error processing the password.',

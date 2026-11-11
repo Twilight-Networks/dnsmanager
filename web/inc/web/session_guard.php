@@ -7,11 +7,16 @@
  * Action-Code arbeitet – nur für geschützte Einstiegspunkte (nicht bei ALLOW_UNAUTHENTICATED: login.php,
  * logout.php, DynDNS-API).
  *
+ * Erweiterung S26/S27: Zusätzlich müssen users.active = 1 und die Sitzungsgeneration (users.session_epoch)
+ * mit der beim Login gespeicherten Generation übereinstimmen. Eine Session ohne Generation (z. B. aus der
+ * Zeit vor dem Update) ist nie gültig. Vor der Prüfung wird das Schema kontrolliert (SchemaCheck):
+ * fehlende oder abweichende Spalten → HTTP 503 (Fail-Closed), keine automatische Migration.
+ *
  * Regeln (Entscheidungen E30–E33, Variante c1):
  * - Identität und Rolle der Session werden bei jeder Anfrage mit der Datenbank abgeglichen
  *   (eine Abfrage über den Primärschlüssel, ohne Sperre, ohne Passwort-Hash).
- * - Benutzer nicht vorhanden, Benutzername geändert, Rolle geändert oder Rolle unbekannt
- *   → Session wird beendet; neue Rechte gelten erst nach erneuter Anmeldung. Die Session wird dabei
+ * - Benutzer nicht vorhanden, Benutzername geändert, Rolle geändert, Rolle unbekannt, Konto deaktiviert,
+ *   Sitzungsgeneration fehlt oder weicht ab → Session wird beendet; neue Rechte gelten erst nach erneuter Anmeldung. Die Session wird dabei
  *   nie angepasst (keine Rechteänderung „im Flug“).
  * - Beenden wie beim bestehenden Inaktivitäts-Timeout: Authentifizierungsdaten verwerfen, neue anonyme
  *   Session mit frischer Session-ID, die ausschließlich den Hinweis „session_expired“ enthält,
@@ -23,8 +28,35 @@
  * Abhängigkeiten: laufende Session (inc/session.php), appLog() (inc/logging.php), BASE_URL.
  */
 
+require_once __DIR__ . '/../app/SchemaCheck.php';
+
 /** Zulässige Rollen einer gültigen Session */
 const SESSION_GUARD_ROLES = ['admin', 'zoneadmin'];
+
+/**
+ * Prüft das vom Code vorausgesetzte Datenbankschema (SchemaCheck) und beendet die Anfrage bei
+ * Abweichung oder Prüffehler mit HTTP 503 (Fail-Closed). Nimmt keine Schemaänderungen vor.
+ *
+ * @param PDO $pdo Aktive Datenbankverbindung
+ *
+ * @return void
+ */
+function session_guard_require_schema(PDO $pdo): void
+{
+    try {
+        $problems = SchemaCheck::problems($pdo);
+    } catch (Throwable $e) {
+        $problems = ['Prüfung fehlgeschlagen (' . get_class($e) . ')'];
+    }
+    if ($problems === []) {
+        return;
+    }
+
+    appLog('error', 'event=schema_incompatible detail=' . implode('; ', $problems)
+        . ' hinweis=Migration sql/migrations/001 vor dem Code ausrollen', true);
+    http_response_code(503);
+    exit('Dienst vorübergehend nicht verfügbar.');
+}
 
 /**
  * Gleicht die angemeldete Session mit der Datenbank ab und beendet sie bei Abweichung.
@@ -50,8 +82,10 @@ function revalidate_session(PDO $pdo): void
         session_guard_revoke($sessionUser, 0, 'session_invalid');
     }
 
+    session_guard_require_schema($pdo);
+
     try {
-        $stmt = $pdo->prepare('SELECT id, username, role FROM users WHERE id = ?');
+        $stmt = $pdo->prepare('SELECT id, username, role, active, session_epoch FROM users WHERE id = ?');
         $stmt->bindValue(1, $userId, PDO::PARAM_INT);
         $stmt->execute();
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -82,6 +116,16 @@ function revalidate_session(PDO $pdo): void
     if (!in_array((string)$row['role'], SESSION_GUARD_ROLES, true)) {
         session_guard_revoke($sessionUser, $userId, 'role_invalid');
     }
+    if ((int)$row['active'] !== 1) {
+        session_guard_revoke($sessionUser, $userId, 'account_inactive');
+    }
+    $sessionEpoch = $_SESSION['session_epoch'] ?? null;
+    if (!is_string($sessionEpoch) || !ctype_digit($sessionEpoch)) {
+        session_guard_revoke($sessionUser, $userId, 'epoch_missing');
+    }
+    if ($sessionEpoch !== (string)$row['session_epoch']) {
+        session_guard_revoke($sessionUser, $userId, 'epoch_changed');
+    }
 }
 
 /**
@@ -91,6 +135,7 @@ function revalidate_session(PDO $pdo): void
  * @param string $sessionUser Benutzername laut bisheriger Session (nur für das Protokoll)
  * @param int    $userId      Benutzer-ID laut bisheriger Session (nur für das Protokoll)
  * @param string $reason      user_missing | username_changed | role_changed | role_invalid | session_invalid
+ *                            | account_inactive | epoch_missing | epoch_changed
  *
  * @return never
  */

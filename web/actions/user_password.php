@@ -9,6 +9,11 @@
  *
  * Web-Adapter: Eingaben lesen (trim wie bisher), UserService::changePassword() aufrufen,
  * ServiceMessages in Toasts/Logs übersetzen. Berechtigung (DB-Stand) und Transaktion liegen im Service.
+ *
+ * S26: Jede erfolgreiche Passwortänderung erhöht die Sitzungsgeneration des Kontos; alle Sessions dieses
+ * Kontos enden. Bei eigener Änderung beendet der Adapter die eigene Session sofort (neue anonyme Session
+ * mit frischer ID, Hinweis auf der Login-Seite). Ein Passwort-Reset durch einen Administrator für ein
+ * anderes Konto lässt dessen eigene Session bestehen.
  */
 
 require_once __DIR__ . '/../common.php';
@@ -76,11 +81,21 @@ foreach ($result->messages as $message) {
             break;
 
         case 'user.password.success':
+            if ($ctx['self']) {
+                // Eigene Session beenden (Generation gilt nicht mehr); neue anonyme Session nur mit Hinweis
+                appLog('info', "Passwort erfolgreich geändert für Benutzer-ID {$user_id} (eigenes Konto); Sitzungen des Kontos beendet, neue Anmeldung erforderlich.");
+                $_SESSION = [];
+                session_unset();
+                session_destroy();
+                session_start();
+                session_regenerate_id(true);
+                $_SESSION = ['password_changed_relogin' => true];
+                header("Location: " . rtrim(BASE_URL, '/') . "/login.php");
+                exit;
+            }
             toastSuccess(
-                $ctx['self']
-                    ? $LANG['password_changed']
-                    : $LANG['password_changed_admin'],
-                "Passwort erfolgreich geändert für Benutzer-ID {$user_id}" . ($ctx['self'] ? " (eigenes Konto)" : " (durch Admin)")
+                $LANG['password_changed_admin'],
+                "Passwort erfolgreich geändert für Benutzer-ID {$user_id} (durch Admin)"
             );
             break;
 

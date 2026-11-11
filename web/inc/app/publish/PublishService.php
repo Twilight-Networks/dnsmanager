@@ -11,7 +11,10 @@
  * - Logger:         optionales callable(string $level, string $message) für Laufzeit-Logereignisse
  *
  * Ablauf (fachlich unverändert aus actions/publish_all.php übernommen):
- * 1. Autorisierung anhand des Actors (admin, zoneadmin) - ohne Lock und ohne Datenbankänderung.
+ * 1. Autorisierung anhand des Actors (admin, zoneadmin) und – S27 – des Datenbankstands (Konto vorhanden,
+ *    aktiv, Rolle wie im Actor; ActorAccess) - ohne Lock und ohne Datenbankänderung. Die Prüfung ist eine
+ *    Momentaufnahme vor dem Lauf: Eine Deaktivierung während eines laufenden Publish beendet diesen nicht
+ *    (kein In-Flight-Abbruch; Publish ist global und nicht zonenbezogen).
  * 2. Globaler Advisory-Lock GET_LOCK('dnsmanager_publish_all', 0) auf der übergebenen Verbindung.
  *    Derselbe Lock dient zone_add/zone_update/zone_delete/server_update als Topologie-Lock.
  *    Ohne Lock werden keine Flags verändert und nichts veröffentlicht.
@@ -45,6 +48,7 @@
  */
 
 require_once __DIR__ . '/../Actor.php';
+require_once __DIR__ . '/../ActorAccess.php';
 require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/PublishBackend.php';
@@ -102,11 +106,12 @@ final class PublishService
     {
         $messages = [];
 
-        // 1. Autorisierung (ohne Lock, ohne Datenbankzugriff)
+        // 1. Autorisierung: Rolle (ohne Datenbankzugriff)
         if (!in_array($actor->role, self::ALLOWED_ROLES, true)) {
             $messages[] = new ServiceMessage('audit', 'publish.access_denied', [
                 'userId' => $actor->userId,
                 'role'   => $actor->role,
+                'reason' => 'role',
             ]);
             return $this->finish($messages, $this->emptyReport('denied'));
         }
@@ -117,6 +122,27 @@ final class PublishService
                 'detail' => 'Publish All darf nicht innerhalb einer offenen Transaktion ausgeführt werden.',
             ]);
             return $this->finish($messages, $this->emptyReport('invalid_state'));
+        }
+
+        // 1b. Autorisierung: Datenbankstand (S27) – vorhanden, aktiv, Rolle wie im Actor; ohne Lock, ohne Änderung
+        try {
+            $actorActive = (new ActorAccess($this->pdo))->isActive($actor);
+        } catch (Throwable $e) {
+            // Fail-Closed: ohne bestätigten Akteur kein Lock, keine Flag-Änderung, kein Publish
+            $messages[] = new ServiceMessage('error', 'publish.exception', [
+                'detail' => $e->getMessage(),
+            ]);
+            $report = $this->emptyReport('exception');
+            $report['exception'] = $e->getMessage();
+            return $this->finish($messages, $report);
+        }
+        if (!$actorActive) {
+            $messages[] = new ServiceMessage('audit', 'publish.access_denied', [
+                'userId' => $actor->userId,
+                'role'   => $actor->role,
+                'reason' => 'db_role',
+            ]);
+            return $this->finish($messages, $this->emptyReport('denied'));
         }
 
         // 2. Globalen Publish-Lock beziehen (Timeout 0, kein Warten)

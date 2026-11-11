@@ -15,14 +15,22 @@
  *   Datenbankzugriff abzulehnen (kann nur verweigern, nie erlauben). Ein Akteur, dessen
  *   Datensatz fehlt oder dessen DB-Rolle nicht passt (z. B. veraltete Web-Session), erhält
  *   "<operation>.access_denied".
- * - Benutzerverwaltung (anlegen, ändern, löschen): nur admin.
+ * - Benutzerverwaltung (anlegen, ändern, löschen, deaktivieren, reaktivieren): nur admin.
  * - Passwortänderung: admin für jedes Konto, sonst nur das eigene Konto.
+ * - Kontostatus (S27): Ein Akteur mit users.active = 0 gilt wie ein fehlender Datensatz
+ *   ("<operation>.access_denied"), geprüft auf der gesperrten Akteurszeile. Ein altes Actor-Objekt
+ *   gewährt nach einer Deaktivierung keine Rechte mehr.
  *
- * Nebenläufigkeit / Schutz des letzten Administrators:
- * - Jede Operation, die die Anzahl der Admins verringern kann (Löschen eines Admins,
- *   Herabstufen admin → zoneadmin), sperrt in EINER Anweisung Akteur, Ziel und ALLE aktuell
- *   committeten Admin-Zeilen (SELECT … WHERE id IN (…) OR role = 'admin' … FOR UPDATE) und
- *   prüft die Anzahl auf genau diesem gesperrten Stand. Zwei solche Transaktionen benötigen
+ * Sitzungsgeneration (S26/S27): users.session_epoch steigt in derselben Transaktion wie die Änderung
+ * bei jeder erfolgreichen Passwortänderung, Rollenänderung, Umbenennung, Deaktivierung und
+ * Reaktivierung (nicht bei reinen Zonenänderungen und nicht bei "unchanged"). Die Web-Revalidierung
+ * widerruft daraufhin alle Sessions des Kontos.
+ *
+ * Nebenläufigkeit / Schutz des letzten aktiven Administrators:
+ * - Jede Operation, die die Anzahl der aktiven Admins verringern kann (Löschen, Herabstufen
+ *   admin → zoneadmin, Deaktivieren), sperrt in EINER Anweisung Akteur, Ziel und ALLE aktuell
+ *   committeten Admin-Zeilen (SELECT … WHERE id IN (…) OR role = 'admin' … FOR UPDATE, unverändert)
+ *   und zählt auf genau diesem gesperrten Stand nur aktive Admins (active = 1). Zwei solche Transaktionen benötigen
  *   dieselben Admin-Zeilen und werden dadurch serialisiert; die zweite liest nach dem Commit der
  *   ersten den neuen Stand (sperrende Lesezugriffe lesen unter RR und RC die letzte committete
  *   Version). Dadurch bleibt mindestens ein Admin erhalten.
@@ -191,13 +199,14 @@ final class UserService
                 return self::result(true, 'success', 'user.update.unchanged', $ctx);
             }
 
-            if ($old['role'] === 'admin' && $input->role !== 'admin' && self::countAdmins($locked) <= 1) {
+            if ($old['role'] === 'admin' && $old['active'] && $input->role !== 'admin' && self::countActiveAdmins($locked) <= 1) {
                 $this->rollbackIfActive();
                 return self::result(false, 'error', 'user.update.last_admin', $ctx);
             }
 
-            $stmt = $this->pdo->prepare("UPDATE users SET username = ?, role = ? WHERE id = ?");
-            $stmt->execute([$input->username, $input->role, $userId]);
+            // Sitzungsgeneration nur bei Umbenennung oder Rollenänderung erhöhen (nicht bei reiner Zonenänderung)
+            $stmt = $this->pdo->prepare("UPDATE users SET username = ?, role = ?, session_epoch = session_epoch + ? WHERE id = ?");
+            $stmt->execute([$input->username, $input->role, ($usernameChanged || $roleChanged) ? 1 : 0, $userId]);
 
             $stmt = $this->pdo->prepare("DELETE FROM user_zones WHERE user_id = ?");
             $stmt->execute([$userId]);
@@ -217,7 +226,7 @@ final class UserService
 
     /**
      * Löscht einen Benutzer inkl. Zonenzuweisungen (nur admin). Das eigene Konto darf gelöscht
-     * werden, solange ein weiterer Admin existiert.
+     * werden, solange ein weiterer aktiver Admin existiert. Deaktivierte Admins zählen nicht.
      *
      * Codes: access_denied, invalid_id, not_found, last_admin, failed, success (Kontext: userId, self)
      */
@@ -244,7 +253,7 @@ final class UserService
                 $this->rollbackIfActive();
                 return self::result(false, 'error', 'user.delete.not_found', $ctx);
             }
-            if ($locked[$userId]['role'] === 'admin' && self::countAdmins($locked) <= 1) {
+            if ($locked[$userId]['role'] === 'admin' && $locked[$userId]['active'] && self::countActiveAdmins($locked) <= 1) {
                 $this->rollbackIfActive();
                 return self::result(false, 'error', 'user.delete.last_admin', $ctx);
             }
@@ -265,6 +274,9 @@ final class UserService
      * Ändert ein Passwort. admin: jedes Konto (keine Wiederholung nötig); eigenes Konto: Wiederholung
      * muss übereinstimmen (auch für admins). Reihenfolge der Prüfungen wie bisher user_password.php.
      * Das Passwort wird unverändert übernommen (Bereinigung, z. B. trim, ist Sache des Aufrufers).
+     * Der Akteur muss aktiv sein; das Zielkonto darf deaktiviert sein (Reset durch admin).
+     * Erfolg erhöht die Sitzungsgeneration des Zielkontos: Alle Sessions dieses Kontos enden – bei
+     * eigener Änderung auch die eigene (Kontext self = true; der Web-Adapter beendet sie sofort).
      *
      * Codes: unauthorized, password_too_short, mismatch, hash_failed, access_denied, not_found,
      *        failed, success (Kontext: userId, actorId, self)
@@ -293,7 +305,8 @@ final class UserService
             $this->pdo->beginTransaction();
 
             $locked = $this->lockUsers($actor->userId, $userId, false);
-            if (!isset($locked[$actor->userId]) || (!$isSelf && $locked[$actor->userId]['role'] !== 'admin')) {
+            if (!isset($locked[$actor->userId]) || !$locked[$actor->userId]['active']
+                || (!$isSelf && $locked[$actor->userId]['role'] !== 'admin')) {
                 $this->rollbackIfActive();
                 return self::result(false, 'audit', 'user.password.access_denied', $ctx + ['reason' => 'db_role']);
             }
@@ -302,7 +315,7 @@ final class UserService
                 return self::result(false, 'error', 'user.password.not_found', $ctx);
             }
 
-            $stmt = $this->pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
+            $stmt = $this->pdo->prepare("UPDATE users SET password_hash = ?, session_epoch = session_epoch + 1 WHERE id = ?");
             $stmt->execute([$hash, $userId]);
 
             $this->pdo->commit();
@@ -315,15 +328,81 @@ final class UserService
     }
 
     /**
+     * Deaktiviert ($active = false) oder reaktiviert ($active = true) ein Konto (nur admin, S27).
+     *
+     * - Name, Rolle und Zonenzuweisungen bleiben erhalten.
+     * - Das eigene Konto kann nicht deaktiviert werden (self).
+     * - Der letzte aktive Admin kann nicht deaktiviert werden (last_admin; Sperrung wie beim Löschen).
+     * - Erfolg erhöht die Sitzungsgeneration; bestehende Sessions des Kontos enden.
+     * - Bereits im Zielzustand: unchanged, nichts geschrieben.
+     *
+     * Codes (Präfix user.disable bzw. user.enable): access_denied (reason: role|db_role), invalid_id, self,
+     *        not_found, last_admin, unchanged, failed, success (Kontext: userId, username, role, self)
+     */
+    public function setActive(Actor $actor, int $userId, bool $active): ServiceResult
+    {
+        $op = $active ? 'user.enable' : 'user.disable';
+        $ctx = ['userId' => $userId, 'self' => $userId === $actor->userId];
+
+        if (!$actor->isAdmin()) {
+            return self::result(false, 'audit', "$op.access_denied", $ctx + ['actorId' => $actor->userId, 'reason' => 'role']);
+        }
+        if ($userId <= 0) {
+            return self::result(false, 'error', "$op.invalid_id", $ctx);
+        }
+        if (!$active && $userId === $actor->userId) {
+            return self::result(false, 'error', "$op.self", $ctx);
+        }
+
+        try {
+            $this->pdo->beginTransaction();
+
+            // Deaktivieren kann die Zahl aktiver Admins verringern: alle Admin-Zeilen mitsperren
+            $locked = $this->lockUsers($actor->userId, $userId, !$active);
+            if (!self::isDbAdmin($locked, $actor->userId)) {
+                $this->rollbackIfActive();
+                return self::result(false, 'audit', "$op.access_denied", $ctx + ['actorId' => $actor->userId, 'reason' => 'db_role']);
+            }
+            if (!isset($locked[$userId])) {
+                $this->rollbackIfActive();
+                return self::result(false, 'error', "$op.not_found", $ctx);
+            }
+
+            $target = $locked[$userId];
+            $ctx += ['username' => $target['username'], 'role' => $target['role']];
+
+            if ($target['active'] === $active) {
+                $this->rollbackIfActive();
+                return self::result(true, 'success', "$op.unchanged", $ctx);
+            }
+            if (!$active && $target['role'] === 'admin' && self::countActiveAdmins($locked) <= 1) {
+                $this->rollbackIfActive();
+                return self::result(false, 'error', "$op.last_admin", $ctx);
+            }
+
+            $stmt = $this->pdo->prepare("UPDATE users SET active = ?, session_epoch = session_epoch + 1 WHERE id = ?");
+            $stmt->execute([$active ? 1 : 0, $userId]);
+
+            $this->pdo->commit();
+
+            return self::result(true, 'success', "$op.success", $ctx);
+        } catch (Throwable $e) {
+            $this->rollbackIfActive();
+            return self::result(false, 'error', "$op.failed", $ctx + ['detail' => $e->getMessage()]);
+        }
+    }
+
+    /**
      * Sperrt Akteur und Ziel sowie – mit $includeAdmins – alle aktuell committeten Admin-Zeilen in
      * EINER Anweisung (erste Anweisung der Transaktion). Liefert die gesperrten Zeilen nach ID.
+     * Die Sperrmenge ist gegenüber vor S27 unverändert (alle Admin-Zeilen, aktiv oder nicht).
      *
-     * @return array<int, array{id: int, username: string, role: string}>
+     * @return array<int, array{id: int, username: string, role: string, active: bool}>
      */
     private function lockUsers(int $actorId, int $targetId, bool $includeAdmins): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, username, role FROM users WHERE id IN (?, ?)'
+            'SELECT id, username, role, active FROM users WHERE id IN (?, ?)'
             . ($includeAdmins ? " OR role = 'admin'" : '')
             . ' ORDER BY id FOR UPDATE'
         );
@@ -333,7 +412,7 @@ final class UserService
 
         $rows = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $rows[(int)$row['id']] = ['id' => (int)$row['id'], 'username' => (string)$row['username'], 'role' => (string)$row['role']];
+            $rows[(int)$row['id']] = ['id' => (int)$row['id'], 'username' => (string)$row['username'], 'role' => (string)$row['role'], 'active' => (int)$row['active'] === 1];
         }
 
         return $rows;
@@ -358,19 +437,23 @@ final class UserService
     }
 
     /**
-     * @param array<int, array{role: string}> $locked
+     * Akteur ist laut gesperrter Zeile aktiver admin.
+     *
+     * @param array<int, array{role: string, active: bool}> $locked
      */
     private static function isDbAdmin(array $locked, int $actorId): bool
     {
-        return isset($locked[$actorId]) && $locked[$actorId]['role'] === 'admin';
+        return isset($locked[$actorId]) && $locked[$actorId]['role'] === 'admin' && $locked[$actorId]['active'];
     }
 
     /**
-     * @param array<int, array{role: string}> $locked
+     * Anzahl aktiver Admins im gesperrten Stand (deaktivierte Admins zählen nicht).
+     *
+     * @param array<int, array{role: string, active: bool}> $locked
      */
-    private static function countAdmins(array $locked): int
+    private static function countActiveAdmins(array $locked): int
     {
-        return count(array_filter($locked, static fn (array $r): bool => $r['role'] === 'admin'));
+        return count(array_filter($locked, static fn (array $r): bool => $r['role'] === 'admin' && $r['active']));
     }
 
     /**

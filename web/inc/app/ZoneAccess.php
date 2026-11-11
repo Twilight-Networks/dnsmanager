@@ -9,6 +9,8 @@
  * - admin      -> alle Zonen, sofern users.role = 'admin'
  * - zoneadmin  -> nur Zonen mit Eintrag in user_zones, sofern users.role = 'zoneadmin'
  * - jede andere Rolle -> verweigert, ohne Datenbankabfrage
+ * - deaktiviertes Konto (users.active = 0, S27) -> verweigert wie ein fehlender Benutzer; geprüft in
+ *   derselben Abfrage bzw. auf derselben gesperrten users-Zeile (keine zusätzliche Sperre)
  * - Rolle und Zonenzuweisung werden in derselben SQL-Abfrage geprüft (live, kein Caching).
  * - canWriteZone()/readableZoneCondition(): nicht sperrende Lesung (Vorabprüfung, Lesepfade);
  *   innerhalb einer offenen Transaktion gilt deren Lesesicht.
@@ -42,12 +44,12 @@ final class ZoneAccess
     public function canWriteZone(Actor $actor, int $zoneId): bool
     {
         if ($actor->isAdmin()) {
-            $stmt = $this->pdo->prepare("SELECT 1 FROM users WHERE id = ? AND role = 'admin'");
+            $stmt = $this->pdo->prepare("SELECT 1 FROM users WHERE id = ? AND role = 'admin' AND active = 1");
             $stmt->bindValue(1, $actor->userId, PDO::PARAM_INT);
         } elseif ($actor->role === 'zoneadmin') {
             $stmt = $this->pdo->prepare(
                 "SELECT 1 FROM users u JOIN user_zones uz ON uz.user_id = u.id"
-                . " WHERE u.id = ? AND u.role = 'zoneadmin' AND uz.zone_id = ?"
+                . " WHERE u.id = ? AND u.role = 'zoneadmin' AND u.active = 1 AND uz.zone_id = ?"
             );
             $stmt->bindValue(1, $actor->userId, PDO::PARAM_INT);
             $stmt->bindValue(2, $zoneId, PDO::PARAM_INT);
@@ -64,7 +66,7 @@ final class ZoneAccess
      * Sperrende Prüfung der Schreibberechtigung innerhalb einer laufenden Transaktion (R4, E40).
      *
      * Sperrt die BERECHTIGUNG des Akteurs bis zum Ende der Transaktion – nicht die Zonen selbst:
-     *   1. users (S):      SELECT role FROM users WHERE id = ? LOCK IN SHARE MODE
+     *   1. users (S):      SELECT role, active FROM users WHERE id = ? LOCK IN SHARE MODE
      *   2. user_zones (S): nur zoneadmin – je Zonen-ID aufsteigend eine Punktabfrage über den
      *                      Primärschlüssel (user_id, zone_id) mit LOCK IN SHARE MODE
      * Die Reihenfolge users → user_zones ist durch getrennte Anweisungen festgelegt (kein Join).
@@ -75,7 +77,7 @@ final class ZoneAccess
      * Muss vor dem Sperren der Zonen (dyndnsLockZones, zones X) und vor jedem einfachen SELECT der
      * Transaktion aufgerufen werden: users (S) → user_zones (S) → zones (X), wie ZoneService (E13).
      *
-     * Fail-closed: Benutzer fehlt, DB-Rolle ≠ Actor-Rolle oder andere Rolle → leeres Ergebnis.
+     * Fail-closed: Benutzer fehlt, Konto deaktiviert, DB-Rolle ≠ Actor-Rolle oder andere Rolle → leeres Ergebnis.
      * admin (DB-Rolle admin): alle angefragten Zonen-IDs, ohne Zuweisungsprüfung.
      * zoneadmin (DB-Rolle zoneadmin): nur Zonen-IDs mit vorhandener Zuweisung.
      *
@@ -99,14 +101,14 @@ final class ZoneAccess
             return [];
         }
 
-        // 1. DB-Rolle sperrend lesen (users, S)
-        $stmt = $this->pdo->prepare('SELECT role FROM users WHERE id = ? LOCK IN SHARE MODE');
+        // 1. DB-Rolle und Kontostatus sperrend lesen (users, S)
+        $stmt = $this->pdo->prepare('SELECT role, active FROM users WHERE id = ? LOCK IN SHARE MODE');
         $stmt->bindValue(1, $actor->userId, PDO::PARAM_INT);
         $stmt->execute();
-        $dbRole = $stmt->fetchColumn();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
         $stmt->closeCursor();
 
-        if ($dbRole === false || (string)$dbRole !== $actor->role) {
+        if ($row === false || (string)$row['role'] !== $actor->role || (int)$row['active'] !== 1) {
             return [];
         }
 
@@ -155,7 +157,7 @@ final class ZoneAccess
 
         if ($actor->isAdmin()) {
             return [
-                'sql'    => "EXISTS (SELECT 1 FROM users ua_read WHERE ua_read.id = ? AND ua_read.role = 'admin')",
+                'sql'    => "EXISTS (SELECT 1 FROM users ua_read WHERE ua_read.id = ? AND ua_read.role = 'admin' AND ua_read.active = 1)",
                 'params' => [$actor->userId],
             ];
         }
@@ -166,7 +168,7 @@ final class ZoneAccess
 
         return [
             'sql'    => "EXISTS (SELECT 1 FROM user_zones uz_read JOIN users ua_read ON ua_read.id = uz_read.user_id"
-                . " WHERE uz_read.zone_id = $zoneIdColumn AND uz_read.user_id = ? AND ua_read.role = 'zoneadmin')",
+                . " WHERE uz_read.zone_id = $zoneIdColumn AND uz_read.user_id = ? AND ua_read.role = 'zoneadmin' AND ua_read.active = 1)",
             'params' => [$actor->userId],
         ];
     }
