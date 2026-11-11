@@ -40,8 +40,14 @@ do {
     $offset += ZoneReadService::MAX_LIMIT;
 } while ($page['hasMore']);
 
-// Anzahl der Admins (für Löschsperre); die Liste ist für Admins vollständig
+// Anzahl der Admins (Bestandsvariable); die Liste ist für Admins vollständig
 $admin_count = count(array_filter($users, static fn (array $u): bool => $u['role'] === 'admin'));
+
+// Anzahl der aktiven Admins (S27, PR B): steuert die Anzeige von „Löschen“ und „Deaktivieren“ wie die
+// Prüfung im UserService (last_admin) – deaktivierte Admins zählen nicht und bleiben löschbar.
+// Maßgeblich bleibt in allen Fällen der Service.
+$active_admin_count = count(array_filter($users, static fn (array $u): bool => $u['role'] === 'admin' && $u['active']));
+$current_user_id = (int)$_SESSION['user_id'];
 ?>
 
 <br><br>
@@ -62,6 +68,7 @@ $admin_count = count(array_filter($users, static fn (array $u): bool => $u['role
             <tr>
                 <th class="coltbl-users-name"><?= $LANG['username'] ?></th>
                 <th class="coltbl-users-role">Rolle</th>
+                <th><?= $LANG['user_status'] ?></th>
                 <th class="coltbl-users-zones"><?= $LANG['zones'] ?></th>
                 <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
             </tr>
@@ -76,6 +83,7 @@ $admin_count = count(array_filter($users, static fn (array $u): bool => $u['role
                 <tr class="table-warning">
                     <td><?= htmlspecialchars($u['username']) ?></td>
                     <td><?= htmlspecialchars($u['role']) ?></td>
+                    <td><?= $u['active'] ? '<span class="badge bg-success">' . $LANG['user_status_active'] . '</span>' : '<span class="badge bg-secondary">' . $LANG['user_status_inactive'] . '</span>' ?></td>
                     <td><em><?= $LANG['edit_mode'] ?></em></td>
                     <td>
                         <div class="d-flex flex-wrap gap-1">
@@ -88,9 +96,10 @@ $admin_count = count(array_filter($users, static fn (array $u): bool => $u['role
                 include __DIR__ . '/../templates/user_edit_form.php';
                 ?>
             <?php else: ?>
-                <tr>
+                <tr<?= $u['active'] ? '' : ' class="text-muted"' ?>>
                     <td><?= htmlspecialchars($u['username']) ?></td>
                     <td><?= htmlspecialchars($u['role']) ?></td>
+                    <td><?= $u['active'] ? '<span class="badge bg-success">' . $LANG['user_status_active'] . '</span>' : '<span class="badge bg-secondary">' . $LANG['user_status_inactive'] . '</span>' ?></td>
                     <td>
                         <?php if ($u['role'] === 'admin'): ?>
                             <em><?= $LANG['all_zones'] ?></em>
@@ -107,7 +116,18 @@ $admin_count = count(array_filter($users, static fn (array $u): bool => $u['role
                             <a href="pages/users.php?edit_id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
                         <?php endif; ?>
                         <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $u['id'] ?>"><?= $LANG['password'] ?></button>
-                        <?php if ($_SESSION['role'] === 'admin' && !($u['role'] === 'admin' && $admin_count <= 1)): ?>
+                        <?php if ($_SESSION['role'] === 'admin' && $u['active'] && $u['id'] !== $current_user_id && !($u['role'] === 'admin' && $active_admin_count <= 1)): ?>
+                            <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#disableModal<?= $u['id'] ?>"><?= $LANG['user_disable'] ?></button>
+                        <?php endif; ?>
+                        <?php if ($_SESSION['role'] === 'admin' && !$u['active']): ?>
+                            <form method="post" action="actions/user_set_active.php" class="d-inline">
+                                <?= csrf_input() ?>
+                                <input type="hidden" name="id" value="<?= $u['id'] ?>">
+                                <input type="hidden" name="active" value="1">
+                                <button class="btn btn-sm btn-outline-success"><?= $LANG['user_enable'] ?></button>
+                            </form>
+                        <?php endif; ?>
+                        <?php if ($_SESSION['role'] === 'admin' && !($u['role'] === 'admin' && $u['active'] && $active_admin_count <= 1)): ?>
                             <form method="post" action="actions/user_delete.php" class="d-inline confirm-delete">
                                 <?= csrf_input() ?>
                                 <input type="hidden" name="id" value="<?= $u['id'] ?>">
@@ -116,6 +136,32 @@ $admin_count = count(array_filter($users, static fn (array $u): bool => $u['role
                         <?php endif; ?>
                     </td>
                 </tr>
+            <?php endif; ?>
+
+            <?php if ($_SESSION['role'] === 'admin' && $u['active'] && $u['id'] !== $current_user_id && !($u['role'] === 'admin' && $active_admin_count <= 1)): ?>
+            <!-- Deaktivieren-Modal (S27, PR B) -->
+            <div class="modal fade" id="disableModal<?= $u['id'] ?>" tabindex="-1" aria-labelledby="disableModalLabel<?= $u['id'] ?>" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <form method="post" action="actions/user_set_active.php">
+                            <?= csrf_input() ?>
+                            <input type="hidden" name="id" value="<?= $u['id'] ?>">
+                            <input type="hidden" name="active" value="0">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="disableModalLabel<?= $u['id'] ?>"><?= $LANG['user_disable_confirm_title'] ?></h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?= $LANG['close'] ?>"></button>
+                            </div>
+                            <div class="modal-body">
+                                <?= sprintf($LANG['user_disable_confirm_text'], htmlspecialchars($u['username'])) ?>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
+                                <button type="submit" class="btn btn-sm btn-warning"><?= $LANG['user_disable'] ?></button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
             <?php endif; ?>
 
             <!-- Passwort-Modal -->
