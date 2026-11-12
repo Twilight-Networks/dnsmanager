@@ -15,8 +15,12 @@
 
 define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
-require_once __DIR__ . '/../inc/glue_check.php';
 require_once __DIR__ . '/../inc/ttl_defaults.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
+require_once __DIR__ . '/../inc/app/records/RecordReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 include __DIR__ . '/../templates/layout.php';
 
 // Zugriffskontrolle: Nur Admins oder Zone-Admins erlaubt
@@ -26,43 +30,43 @@ requireRole(['admin', 'zoneadmin']);
 $zone_id = isset($_GET['zone_id']) ? (int)$_GET['zone_id'] : 0;
 $edit_record_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
 
-// Zonenberechtigung prüfen
-if ($_SESSION['role'] === 'admin') {
-    $stmt = $pdo->prepare("SELECT * FROM zones WHERE id = ?");
-    $stmt->execute([$zone_id]);
-} else {
-    $stmt = $pdo->prepare("
-        SELECT z.* FROM zones z
-        JOIN user_zones uz ON uz.zone_id = z.id
-        WHERE z.id = ? AND uz.user_id = ?
-    ");
-    $stmt->execute([$zone_id, $_SESSION['user_id']]);
-}
+// Zone und Records über die Read-Services (Berechtigung nach ZoneAccess in derselben Abfrage).
+// Nicht vorhandene und nicht berechtigte Zonen werden wie bisher gleich behandelt (403).
+$actor = actorFromSession();
+$zoneAccess = new ZoneAccess($pdo);
+$zoneReadService = new ZoneReadService($pdo, $zoneAccess);
+$zoneData = $zoneReadService->getZone($actor, $zone_id);
+$recordView = $zoneData === null ? null : (new RecordReadService($pdo, $zoneAccess))->getZoneRecordView($actor, $zone_id);
 
-$zone = $stmt->fetch();
-
-if (!$zone) {
+if ($zoneData === null || $recordView === null) {
     logAccessDenied('records', 'Benutzer-ID ' . ($_SESSION['user_id'] ?? 'unbekannt') . ' versucht unbefugten Zugriff auf Zone-ID ' . $zone_id);
     http_response_code(403);
     exit('Zugriff verweigert: Keine Berechtigung für diese Zone.');
 }
 
-// Records laden (nach Typ alphabetisch sortieren)
-$stmt = $pdo->prepare("SELECT * FROM records WHERE zone_id = ? ORDER BY type ASC, name ASC");
-$stmt->execute([$zone_id]);
-$all_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// Übersetzung in die bisherige Struktur für die unveränderte Darstellung und die Formulare
+$zone = ['id' => $zoneData['id'], 'name' => $zoneData['name'], 'type' => $zoneData['type']];
+$all_records = [];
+foreach ($recordView['records'] as $rec) {
+    $row = [
+        'id'         => $rec['id'],
+        'name'       => $rec['name'],
+        'type'       => $rec['type'],
+        'content'    => $rec['content'],
+        'ttl'        => $rec['ttl'],
+        'is_glue'    => $rec['isGlue'],
+        'is_ns_glue' => $rec['isProtectedNs'],
+    ];
+    if ($rec['isDkim']) {
+        $row['is_dkim'] = true;
+    }
+    $all_records[] = $row;
+}
 
-// Records gruppieren
+// Records gruppieren (Darstellung)
 $groups = ['NS' => [], 'MAIL' => [], 'OTHER' => []];
 foreach ($all_records as $r) {
-    // DKIM heuristisch erkennen
-    $is_dkim = $r['type'] === 'TXT'
-        && str_contains($r['content'], 'v=DKIM1')
-        && str_contains($r['name'], '._domainkey');
-
-    if ($is_dkim) {
-        $r['is_dkim'] = true;
-    }
+    $is_dkim = !empty($r['is_dkim']);
 
     // Gruppierung
     if ($r['type'] === 'NS') {
@@ -77,9 +81,9 @@ foreach ($all_records as $r) {
 /**
  * Helper-Funktion zum Anzeigen einer Tabelle von Records.
  */
-function render_records_table(array $records, string $title, int $zone_id, ?int $edit_record_id, PDO $pdo): void
+function render_records_table(array $records, string $title, int $zone_id, ?int $edit_record_id): void
 {
-    global $all_records, $zone, $LANG;
+    global $zone, $LANG;
 
     if (empty($records)) {
         return;
@@ -99,8 +103,9 @@ function render_records_table(array $records, string $title, int $zone_id, ?int 
     echo "</tr></thead><tbody>";
 
     foreach ($records as $r) {
-        $is_glue = isGlueRecord($r, $all_records, $zone['name']);
-        $is_ns_glue = ($r['type'] === 'NS') ? isProtectedNsRecord($r, $all_records, $zone['name'], $pdo, $zone_id) : false;
+        // Schutzkennzeichen aus dem RecordReadService (Glue bzw. geschützter NS-Record)
+        $is_glue = $r['is_glue'];
+        $is_ns_glue = $r['is_ns_glue'];
         $is_editing = ($edit_record_id === (int)$r['id']);
         $row_class = $is_editing ? 'table-warning' : '';
 
@@ -192,18 +197,14 @@ function render_records_table(array $records, string $title, int $zone_id, ?int 
 
 <?php
 
-// Zonendiagnose aus der Datenbank laden
-require_once __DIR__ . '/../inc/diagnostics.php';
-$diagnostics = getDiagnosticResults($pdo);
-$zone_diag = $diagnostics['zone'];
-
+// Zonendiagnosen dieser Zone (ZoneReadService, Berechtigung in derselben Abfrage)
 $results = [];
-foreach ($zone_diag as $entry) {
-    if (($entry['zone'] ?? '') === $zone['name']) {
+foreach ($zoneReadService->listZoneDiagnostics($actor) as $entry) {
+    if ($entry['zoneId'] === (int)$zone['id'] && $entry['checkType'] === 'zone_status') {
         $results[] = [
-            'server' => htmlspecialchars($entry['server'] ?? '(unbekannt)'),
-            'status' => $entry['zone_status']['status'],
-            'message' => $entry['zone_status']['message']
+            'server' => htmlspecialchars($entry['serverName'] ?? '(unbekannt)'),
+            'status' => $entry['status'],
+            'message' => $entry['message']
         ];
     }
 }
@@ -239,9 +240,9 @@ $record_title_other = $zone['type'] === 'reverse'
     ? $LANG['records_host_reverse']
     : $LANG['records_host'];
 
-render_records_table($groups['NS'], $record_title_ns, $zone['id'], $edit_record_id, $pdo);
-render_records_table($groups['MAIL'], $record_title_mail, $zone['id'], $edit_record_id, $pdo);
-render_records_table($groups['OTHER'], $record_title_other, $zone['id'], $edit_record_id, $pdo);
+render_records_table($groups['NS'], $record_title_ns, $zone['id'], $edit_record_id);
+render_records_table($groups['MAIL'], $record_title_mail, $zone['id'], $edit_record_id);
+render_records_table($groups['OTHER'], $record_title_other, $zone['id'], $edit_record_id);
 ?>
 
 <!-- JavaScript auslagern -->

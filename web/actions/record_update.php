@@ -6,13 +6,15 @@
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
-require_once __DIR__ . '/../inc/record_content_builder.php';
 require_once __DIR__ . '/../inc/ttl_defaults.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/records/RecordInput.php';
 require_once __DIR__ . '/../inc/app/records/RecordService.php';
+require_once __DIR__ . '/../inc/app/records/RecordContentBuilder.php';
+require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
+require_once __DIR__ . '/../inc/web/record_messages.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     requireRole(['admin', 'zoneadmin']);
@@ -20,25 +22,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $id      = isset($_POST['id']) ? (int)$_POST['id'] : 0;
     $zone_id = isset($_POST['zone_id']) ? (int)$_POST['zone_id'] : 0;
 
-    // Zonennamen für Toast-Ausgaben ermitteln
-    $stmt = $pdo->prepare("SELECT name FROM zones WHERE id = ?");
-    $stmt->execute([$zone_id]);
-    $zone_name = rtrim($stmt->fetchColumn(), '.');
-
     $raw_type = $_POST['type'] ?? '';
     $is_dkim = !empty($_POST['is_dkim']); // z. B. aus hidden input
 
     // Sonderfall: Wenn DKIM als TXT gespeichert wird, aber speziell validiert werden muss
-    // (Validator-Typ wird vor buildRecordContent() aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
+    // (Validator-Typ wird vor dem Zusammensetzen aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
     $validator_type = ($raw_type === 'TXT' && $is_dkim) ? 'DKIM' : $raw_type;
 
     // Content zusammensetzen (inkl. spezieller Typ-Logik)
-    $result = buildRecordContent($raw_type, $_POST);
+    $result = RecordContentBuilder::build($raw_type, $_POST);
 
-    if (isset($result['error'])) {
+    if (isset($result['errorCode'])) {
+        // Zonenname nur für die Logzeile; über den ZoneReadService (nur bei Leseberechtigung, sonst leer)
+        $zoneForLog = (new ZoneReadService($pdo, new ZoneAccess($pdo)))->getZone(actorFromSession(), $zone_id);
+        $zone_name = rtrim($zoneForLog['name'] ?? '', '.');
+        $error = recordBuildErrorText($result['errorCode']);
         toastError(
-            $result['error'],
-            "Record-Update fehlgeschlagen: {$result['error']} (Typ: {$raw_type}, Zone: {$zone_name})"
+            $error,
+            "Record-Update fehlgeschlagen: {$error} (Typ: {$raw_type}, Zone: {$zone_name})"
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=$zone_id");
         exit;

@@ -12,7 +12,7 @@
  * - Formularinhalte werden serverseitig vorbereitet, clientseitig dynamisch angepasst.
  *
  * Anforderungen:
- * - Globale Variablen: $r (Record), $zone (Zonendaten), $zone_id, $all_records
+ * - Variablen aus pages/records.php: $r (Record inkl. is_glue, is_ns_glue, optional is_dkim), $zone (id, name, type), $zone_id
  * - Sicherheitskonstante IN_APP muss definiert sein.
  */
 
@@ -30,7 +30,7 @@ if (!isset($r) || !isset($zone)) {
     return;
 }
 
-global $pdo;
+require_once __DIR__ . '/../inc/app/records/RecordContentParser.php';
 
 // Erlaubte Record-Typen je nach Zonentyp
 $zone_type = $zone['type'];
@@ -38,129 +38,46 @@ $allowed_types = $zone_type === 'reverse'
     ? ['PTR', 'NAPTR', 'TXT']
     : ['A','AAAA','CNAME','MX','NS','TXT','SPF','DKIM','LOC','CAA','SRV','NAPTR'];
 
-// MX-Parsing: Priorität extrahieren, Rest als Ziel belassen
-$mx_priority = '';
-if ($r['type'] === 'MX') {
-    $parts = explode(' ', $r['content'], 2);
-    if (ctype_digit($parts[0] ?? '')) {
-        $mx_priority = $parts[0];
-        $r['content'] = $parts[1] ?? '';
-        $r['content'] = rtrim($r['content'], '.');
-    }
-}
+// Inhalt in die Formularfelder zerlegen (MX, SRV, DKIM, NAPTR, URI, CAA/NAPTR-Präfix) – RecordContentParser
+$parsed = RecordContentParser::parse($r['type'], $r['name'], $r['content'], !empty($r['is_dkim']), $zone['name']);
+$r['name']    = $parsed['name'];
+$r['content'] = $parsed['content'];
 
-// SRV-Parsing: Werte extrahieren und Protokoll aus Name ermitteln
-$srv_priority = $weight = $port = $target = $srv_proto = '';
-if ($r['type'] === 'SRV') {
-    $parts = preg_split('/\s+/', $r['content'], 4);
-    if (count($parts) === 4 && array_filter(array_slice($parts, 0, 3), 'ctype_digit') === array_slice($parts, 0, 3)) {
-        [$srv_priority, $weight, $port, $target] = $parts;
-    }
+$mx_priority = $parsed['mxPriority'];
 
-    if (preg_match('/^(_[^.]+)\._(tcp|udp)\.?$/i', $r['name'], $m)) {
-        $srv_proto = strtolower($m[2]);
-    }
-    if ($r['type'] === 'SRV' && isset($m[1])) {
-    // Nur den Dienstnamen (_sip) ins Namensfeld schreiben
-    $r['name'] = $m[1];
-    }
-}
+$srv_priority = $parsed['srvPriority'];
+$weight       = $parsed['srvWeight'];
+$port         = $parsed['srvPort'];
+$target       = $parsed['srvTarget'];
+$srv_proto    = $parsed['srvProto'];
 
-// DKIM: Variablen initialisieren – auch wenn kein DKIM-Eintrag bearbeitet wird
-$dkim_key_type = 'rsa';
-$dkim_hash_algos = '';
-$dkim_flags = '';
-$dkim_selector = '';
-$dkim_subdomain = '';
-$dkim_key = '';
+$dkim_key_type   = $parsed['dkimKeyType'];
+$dkim_hash_algos = $parsed['dkimHashAlgos'];
+$dkim_flags      = $parsed['dkimFlags'];
+$dkim_selector   = $parsed['dkimSelector'];
+$dkim_subdomain  = $parsed['dkimSubdomain'];
+$dkim_key        = $parsed['dkimKey'];
 
-// DKIM Parsing aus TXT-Record
-if (!empty($r['is_dkim'])) {
-    // Extrahiere Selector und optionale Subdomain aus dem Namen
-    if (preg_match(
-        '/^([^.]+)\._domainkey(?:\.([^.]+))?(?:\.' . preg_quote(rtrim($zone['name'], '.'), '/') . ')?\.?$/',
-        $r['name'],
-        $matches
-    )) {
-        $dkim_selector = $matches[1];                  // z. B. default
-        $dkim_subdomain = $matches[2] ?? '';           // z. B. mail oder leer
-    }
+$naptr_order   = $parsed['naptrOrder'];
+$naptr_pref    = $parsed['naptrPref'];
+$naptr_flags   = $parsed['naptrFlags'];
+$naptr_service = $parsed['naptrService'];
+$naptr_regexp  = $parsed['naptrRegexp'];
+$naptr_replace = $parsed['naptrReplace'];
 
-    // DKIM-Key aus gejointem TXT-Content extrahieren
-    $dkim_key = '';
-    if (preg_match_all('/"([^"]+)"/', $r['content'], $matches)) {
-        $joined = implode('', $matches[1]);
-        if (preg_match('/\bp=([A-Za-z0-9+\/=]+)\b/', $joined, $m)) {
-            $dkim_key = $m[1];
-        }
-    }
+$uri_service  = $parsed['uriService'];
+$uri_proto    = $parsed['uriProto'];
+$uri_priority = $parsed['uriPriority'];
+$uri_weight   = $parsed['uriWeight'];
+$uri_target   = $parsed['uriTarget'];
 
-    // Zusätzliche DKIM-Parameter extrahieren
-    $dkim_key_type = 'rsa';   // Standardwert
-    $dkim_hash_algos = '';
-    $dkim_flags = '';
+// Glue-/NS-Schutz: Kennzeichen aus dem RecordReadService (Name nicht änderbar)
+$is_glue    = !empty($r['is_glue']);
+$is_ns_glue = !empty($r['is_ns_glue']);
 
-    if (preg_match('/\bk=(rsa|ed25519)\b/i', $r['content'], $m)) {
-        $dkim_key_type = strtolower($m[1]);
-    }
-    if (preg_match('/\bh=([a-z0-9:+\-]+)\b/i', $r['content'], $m)) {
-        $dkim_hash_algos = $m[1];
-    }
-    if (preg_match('/\bt=([a-z]+)\b/i', $r['content'], $m)) {
-        $dkim_flags = $m[1];
-    }
-}
-
-// NAPTR-Parsing mit Trimming der Anführungszeichen
-$naptr_order = $naptr_pref = $naptr_flags = $naptr_service = $naptr_regexp = $naptr_replace = '';
-if ($r['type'] === 'NAPTR') {
-    $parts = preg_split('/\s+/', $r['content'], 7); // max. 7 Teile extrahieren
-
-    if (count($parts) === 7) {
-        [$naptr_order, $naptr_pref, $naptr_flags, $naptr_service, $naptr_regexp, $naptr_replace] = array_slice($parts, 0, 6);
-        $naptr_replace = $parts[6]; // siebtes Element ist Replacement
-    } elseif (count($parts) === 6) {
-        [$naptr_order, $naptr_pref, $naptr_flags, $naptr_service, $naptr_regexp, $naptr_replace] = $parts;
-    }
-
-    $naptr_flags = trim($naptr_flags, '"');
-    $naptr_service = trim($naptr_service, '"');
-    $naptr_regexp = trim($naptr_regexp, '"');
-    $naptr_replace = trim($naptr_replace, '"');
-}
-
-// URI-Parsing: Name zerlegen in Service und Protokoll, Content zerlegen
-$uri_service = $uri_proto = $uri_priority = $uri_weight = $uri_target = '';
-if ($r['type'] === 'URI') {
-    if (preg_match('/^(_[^.]+)\._(tcp|udp)\.?$/i', $r['name'], $m)) {
-        $uri_service = $m[1];
-        $uri_proto = '_' . strtolower($m[2]);
-    }
-
-    $parts = preg_split('/\s+/', trim($r['content']), 3);
-    if (count($parts) === 3) {
-        [$uri_priority, $uri_weight, $uri_target] = $parts;
-        $uri_target = trim($uri_target, '"');
-    }
-}
-
-// Glue-Check: Verhindert Änderung am Namen, wenn NS-Glue-Record
-$is_glue = isGlueRecord($r, $all_records, $zone['name']);
-$is_ns_glue = ($r['type'] === 'NS') ? isProtectedNsRecord($r, $all_records, $zone['name'], $pdo, $zone_id) : false;
-
-// CAA/NAPTR: Präfix extrahieren (Zone-Suffix abtrennen)
+// CAA/NAPTR: Präfix ohne Zonen-Suffix
 $zone_suffix = rtrim($zone['name'], '.');
-$caa_prefix = $r['name'];
-if (in_array($r['type'], ['CAA', 'NAPTR'])) {
-    // Wenn Name exakt der Zonenname ist → @
-    if (rtrim($r['name'], '.') === $zone_suffix) {
-        $caa_prefix = '@';
-    }
-    // Wenn Name auf ".zone" endet → Präfix extrahieren
-    elseif (preg_match('/^(.*)\.' . preg_quote($zone_suffix, '/') . '\.?$/', $r['name'], $m)) {
-        $caa_prefix = $m[1];
-    }
-}
+$caa_prefix  = $parsed['caaPrefix'];
 
 // Auto TTL
 $ttl_default = getAutoTTL($r['type']);

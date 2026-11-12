@@ -1,6 +1,6 @@
 # DNS Manager – Core-/UI-Trennung: Architektur-Inventar und Restarbeiten
 
-Stand: 12.11.2026, Basis `main` = `4860f05` (nach Paket 1). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
+Stand: 12.11.2026, Basis `main` = `426fd30` (nach Paket 2). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
 „vollständige Trennung der Fachlogik von der Weboberfläche“. Es wird mit jedem Arbeitspaket aktualisiert.
 
 **Legende:**
@@ -38,7 +38,7 @@ Stand: 12.11.2026, Basis `main` = `4860f05` (nach Paket 1). Dieses Dokument ist 
 |---|---|---|---|
 | Benutzer | ✅ | `UserService` (anlegen, ändern, Passwort, löschen, aktivieren/deaktivieren), `UserReadService`, Sitzungsgeneration (S26/S27) | – |
 | Zonen | ✅ | `ZoneService` (anlegen, ändern inkl. Serverzuweisung, löschen; `TopologyLock`; Bearbeitungsstand S21), `ZoneReadService` (Liste, Detail, zuweisbare Server, Zonendiagnosen), `ZoneAccess` | `pages/zones.php` nur Statusaggregation/Darstellung (🌐) |
-| Records | 🟡 | `RecordService` (anlegen, ändern, löschen inkl. AutoPTR, DynDNS-Schutz), `RecordReadService` | siehe 3.3 |
+| Records | ✅ **mit Paket 3** | `RecordService` (anlegen, ändern, löschen inkl. AutoPTR, DynDNS-Schutz), `RecordReadService` (Liste, Verwaltungsansicht mit Schutzkennzeichen), `RecordContentBuilder`, `RecordContentParser` | `RecordService` nutzt `glue_check.php`-Lesefunktionen; Rebuild-Callback auf `helpers.php` (Paket 4) |
 | Publish (alle Zonen) | ✅ / 🔧 | `PublishService` (Advisory-Lock, Tri-State `bind_dirty`/`changed`), `PublishBackend` | Legacy-Generator/Distributor hinter `LegacyBindPublishBackend` (siehe 3.4) |
 | **Server** | ✅ **mit Paket 1** | `ServerService` (anlegen, ändern inkl. Topologie-Lock, NS/Glue-Neuaufbau und `bind_dirty`, löschen, BIND-Reload), `ServerReadService` (Liste, Bearbeitungsdaten, Serverdiagnosen), `ServerControlBackend` + `LegacyAgentServerControlBackend` | NS/Glue-Neuaufbau weiter über `LegacyZoneBuildBackend` → `helpers.php` (Paket 4) |
 | DynDNS-Konten | ✅ **mit Paket 2** | `DyndnsAccountService`, `DyndnsReadService` (auf Basis `dyndns_guard.php`) | – |
@@ -71,7 +71,7 @@ Noch offen, bewusst in Paket 4: `rebuild_ns_and_glue_for_zone_and_flag_if_valid(
 
 Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert. Eine echte Absicherung (Schema-Constraint) wäre eine gesonderte Entscheidung.
 
-### 3.2 DynDNS (Paket 2 – Draft-PR)
+### 3.2 DynDNS (Paket 2 – erledigt, PR #56, `main` `426fd30`)
 
 **Erledigt:**
 - **Kontenverwaltung:** `DyndnsAccountService` (`createAccount`, `updateAccount`, `changePassword`, `deleteAccount`) mit unveränderter Fachlogik aus den vier Actions: Regeln, Reihenfolge, Hash-Verfahren, Record-Behandlung, Rebuild in derselben Transaktion über `ZoneBuildBackend::validateAndFlag()`. Die Actions sind dünne Adapter; Toasts, Logtexte und Redirects sind unverändert (Hilfe `inc/web/dyndns_messages.php`).
@@ -92,20 +92,25 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 
 **Offen** für Paket 4: `publish_single.php` lädt den Web-Bootstrap und nutzt die globale Verbindung. `DyndnsActionError`, `DyndnsApiReject` und `dyndnsLangKey()` in `dyndns_guard.php` werden nicht mehr verwendet und können mit Paket 4 entfallen.
 
-### 3.3 Records und Zonen-Reste (Paket 3)
+### 3.3 Records und Zonen-Reste (Paket 3 – Draft-PR)
 
-- `pages/records.php`:
-  - eigene Rechte-SQL (`SELECT * FROM zones`, `user_zones`-Join) nach Session-Rolle;
-  - `SELECT * FROM records`;
-  - `isProtectedNsRecord` je Zeile;
-  - ungefiltertes `getDiagnosticResults()`.
-  - **`RecordReadService::listRecords()` existiert, wird aber nicht genutzt.**
-- `actions/record_update.php`: eine direkte Abfrage `SELECT name FROM zones` vor der Rechteprüfung (nur für den Logtext).
-- `templates/record_edit_form.php`: `global $pdo`, Glue-/NS-Schutzprüfung mit DB-Zugriff, Parsing von MX/SRV/DKIM/URI/CAA/NAPTR.
-- `inc/record_content_builder.php` (`buildRecordContent`): fest kodierte deutsche Fehlertexte statt Codes.
-- `inc/helpers.php`:
-  - mischt Web-Funktionen (`requireRole`, `csrf_input`, `isActive`, `safe_return_path`) mit Fachlogik (`rebuild_*`);
-  - `get_zone_by_id()` ist ungenutzt.
+**Erledigt:**
+- `pages/records.php` liest die Zone über `ZoneReadService::getZone()`, die Records über die neue Methode `RecordReadService::getZoneRecordView()` und die Diagnosen über `ZoneReadService::listZoneDiagnostics()`, gefiltert auf die Zone und `zone_status`.
+  - `getZoneRecordView()` liefert die vollständige Liste ohne Seitenbegrenzung, mit den fachlichen Kennzeichen `isDkim`, `isGlue` und `isProtectedNs`.
+  - Berechtigung nach `ZoneAccess` in derselben Abfrage, für die Records und für die Servernamen.
+  - Entfallen sind die eigene Rechte-SQL nach Session-Rolle, `SELECT *`, die Serverabfrage je NS-Zeile und `getDiagnosticResults()`.
+- `templates/record_edit_form.php`: kein `global $pdo`, keine DB-Zugriffe mehr. Die Schutzkennzeichen kommen aus dem Read-Service; die Zerlegung von MX/SRV/DKIM/NAPTR/URI/CAA übernimmt `RecordContentParser` (Core, rein funktional).
+- `actions/record_update.php`: Die direkte Abfrage `SELECT name FROM zones` ist entfallen. Der Zonenname für die Logzeile bei Builder-Fehlern kommt aus `ZoneReadService::getZone()`.
+- `buildRecordContent()` ist ersetzt durch `RecordContentBuilder::build()` (Core) mit fachlichen Codes `RECORD_BUILD_*`. Die bisherigen Texte liefert `inc/web/record_messages.php`; `inc/record_content_builder.php` ist entfernt.
+- `inc/glue_check.php`: neue reine Funktion `isProtectedNsRecordForServers()`; `isProtectedNsRecord()` (PDO, weiter vom `RecordService` genutzt) delegiert darauf.
+- `inc/helpers.php`: Die Abgrenzung Web/Legacy-Infrastruktur ist im Dateikopf dokumentiert; das ungenutzte `get_zone_by_id()` ist entfernt.
+
+**Bewusst unverändert / offen:**
+- `RecordService` liest weiterhin über `getAllZoneRecords()`/`getZoneName()` (`glue_check.php`) und `isProtectedNsRecord()`.
+- Die Rebuilds übergeben die Actions als Callback auf `rebuild_zone_and_flag_if_valid()` (Paket 4).
+- `getAutoTTL()` (`inc/ttl_defaults.php`) bleibt Web-/Formularhilfe.
+- In `helpers.php` sind `validatePassword()` und `rebuild_zone_and_validate()` ungenutzt (Bereinigung in Paket 4/6).
+- Die DKIM-Datei-Prüfung in `record_add.php` (Upload, Dateiendung, verbotene Zeichenfolgen) ist Transportlogik und bleibt im Adapter.
 
 ### 3.4 BIND-/Publish-Infrastruktur und Legacy-Adapter (Paket 4)
 
@@ -179,8 +184,8 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | Paket | Inhalt | Status |
 |---|---|---|
 | **1 Server** | `ServerService` (CRUD, BIND-Reload), `ServerReadService` (Liste, Bearbeitungsdaten, Serverdiagnosen), Actions und Seite als Adapter | **erledigt** (PR #55) |
-| **2 DynDNS** | `DyndnsAccountService` (anlegen, ändern, Passwort, löschen), `DyndnsReadService` (Liste ohne Hash, zulässige Zonen für beide Formulare), `DyndnsUpdateService` (API: authentifizieren, sperren, planen, anwenden, publizieren; Antwortprotokoll bleibt im Endpunkt). Die DynDNS-eigenen Record-Mutationen werden im Service gebündelt, mit den Sperrfunktionen aus `dyndns_guard`. Das Einzel-Publish wird über eine Schnittstelle mit **unverändertem** Verhalten angebunden. | **Draft-PR** |
-| **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | offen |
+| **2 DynDNS** | `DyndnsAccountService` (anlegen, ändern, Passwort, löschen), `DyndnsReadService` (Liste ohne Hash, zulässige Zonen für beide Formulare), `DyndnsUpdateService` (API: authentifizieren, sperren, planen, anwenden, publizieren; Antwortprotokoll bleibt im Endpunkt). Die DynDNS-eigenen Record-Mutationen werden im Service gebündelt, mit den Sperrfunktionen aus `dyndns_guard`. Das Einzel-Publish wird über eine Schnittstelle mit **unverändertem** Verhalten angebunden. | **erledigt** (PR #56) |
+| **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **Draft-PR** |
 | **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | offen |
 | **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | offen |
 | **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | offen |
@@ -217,5 +222,6 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | 12.11.2026 | – | Erstes vollständiges Inventar, Basis `71eaa4e` |
 | 12.11.2026 | 1 | Serververwaltung entkoppelt (PR #55, gemergt als `4860f05`) |
 | 12.11.2026 | 1 | Einschränkung „nur ein lokaler Server“ (nicht nachgewiesen race-sicher) dokumentiert |
-| 12.11.2026 | 2 | DynDNS-Kontenverwaltung, Lesezugriffe und Update-API entkoppelt (Draft-PR); S32 bewertet |
+| 12.11.2026 | 2 | DynDNS-Kontenverwaltung, Lesezugriffe und Update-API entkoppelt (PR #56, gemergt als `426fd30`); S32 bewertet |
 | 12.11.2026 | 2 | Review-Korrektur PR #56: DynDNS-Protokoll und Sprachschlüssel aus dem Core entfernt; `/tmp`-Zonendateien (Paket 4) und Fundort S30 ergänzt |
+| 12.11.2026 | 3 | Records-Seite, Bearbeitungsformular, `record_update.php` und Content-Builder entkoppelt (Draft-PR); `helpers.php` abgegrenzt |

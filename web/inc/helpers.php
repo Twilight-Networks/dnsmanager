@@ -1,13 +1,17 @@
 <?php
 /**
  * Datei: helpers.php
- * Zweck: Sammlung von Hilfsfunktionen für Zugriffsprüfungen, Validierungen und kleinere Utilities.
+ * Zweck: Sammlung von Hilfsfunktionen der Weboberfläche sowie Legacy-Funktionen für Zonen-Rebuilds.
  *
- * Enthalten:
- * - Zugriffskontrolle auf Basis der Benutzerrolle (requireRole)
- * - Zugriff verweigert protokollieren (logAccessDenied)
- * - Passwort-Validierung gegen Mindestlänge (validatePassword)
- * - Markieren des aktuellen Navigationslinks (isActive)
+ * Abgrenzung (Core-/UI-Trennung, docs/ARCHITECTURE_CORE.md):
+ * - Web (bleibt in der Weboberfläche): requireRole (Rollenprüfung nach Session, 403), isActive
+ *   (Navigation), csrf_input (Formularfeld), safe_return_path (Rücksprungziel), validatePassword
+ *   (derzeit ungenutzt).
+ * - Legacy-Infrastruktur (kein Web-Bezug, Ablösung in Paket 4): rebuild_zone_and_validate (derzeit
+ *   ungenutzt), rebuild_zone_and_flag_if_valid, rebuild_ns_and_glue_for_zone_and_flag_if_valid. Services
+ *   nutzen diese nur über LegacyZoneBuildBackend bzw. den an RecordService übergebenen Callback, nie direkt.
+ * Fachlogik der Records liegt in inc/app/records (RecordService, RecordReadService, RecordContentBuilder,
+ * RecordContentParser).
  */
 require_once __DIR__ . '/diagnostics.php';
 require_once __DIR__ . '/deploy/bind_file_generator.php';
@@ -62,23 +66,6 @@ function validatePassword(string $password): bool
 function isActive(string $page): string
 {
     return basename($_SERVER['PHP_SELF']) === $page ? 'active' : '';
-}
-
-/**
- * get_zone_by_id
- *
- * Lädt eine vollständige Zonenbeschreibung aus der Datenbank anhand ihrer ID.
- *
- * @param int $zone_id ID der gesuchten Zone
- * @return array|false Assoziatives Array mit Zonendaten oder false, wenn nicht gefunden
- */
-function get_zone_by_id(int $zone_id)
-{
-    global $pdo;
-
-    $stmt = $pdo->prepare("SELECT * FROM zones WHERE id = ?");
-    $stmt->execute([$zone_id]);
-    return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
 /**
