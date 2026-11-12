@@ -4,33 +4,46 @@
  * Zweck: DynDNS-Update (FRITZ!Box/OpenWRT-kompatibel) als webunabhängiger Ablauf: authentifizieren, sperren,
  *        planen, anwenden, validieren, veröffentlichen.
  *
- * Fachlogik unverändert aus api/v1/dyndns/update.php übernommen (PR #37: strenge IP-Prüfung je Familie,
- * Authentifizierung ohne Transaktion, Zonensperre als erste Abfrage der Transaktion, Account unter Sperre neu
- * laden und abgleichen, Records der Zone sperren, Kollisions- und Zuordnungsprüfung, bedingte Updates,
- * Rebuild und Einzel-Publish nur bei Änderung, Publish vor dem Commit).
+ * Fachlogik aus api/v1/dyndns/update.php (PR #37: strenge IP-Prüfung je Familie, Authentifizierung ohne
+ * Transaktion, Zonensperre als erste Abfrage der Transaktion, Account unter Sperre neu laden und abgleichen,
+ * Records der Zone sperren, Kollisions- und Zuordnungsprüfung, bedingte Updates).
+ *
+ * Paket 4b (S32) – Reihenfolge:
+ * 1. Transaktion: prüfen, Records/Account schreiben, Zonenprüfung und changed = 1 (ZoneBuildBackend), Commit.
+ *    Ein Prüffehler oder eine Ablehnung verwirft die Änderung vollständig (Rollback).
+ * 2. Danach Veröffentlichung über PublishService::publishZone() (gemeinsame Zonenlogik und Lock mit Publish
+ *    All; Serial vor der Verteilung festgeschrieben). Ein Verteilungsfehler rollt die festgeschriebene Änderung
+ *    nicht zurück; die Zone bleibt ausstehend (changed = 1).
+ * 3. Ohne Änderung (alle Adressfamilien unverändert) wird ein noch ausstehender Publish der Zone erneut
+ *    versucht (F1/F2: die vollständige Zone einschließlich zwischenzeitlicher Admin-Änderungen). Ohne IP-Parameter
+ *    bleibt es bei no_ip ohne Wiederholung (F3).
  *
  * Keine Session, kein HTTP, kein Logging und kein DynDNS-Antwortprotokoll: Der Service liefert strukturierte
  * fachliche Ergebnisse; die Übersetzung in Protokollantworten, HTTP-Status/-Header und Logzeilen erfolgt
  * ausschließlich im Endpunkt api/v1/dyndns/update.php. Ergebnis: ServiceResult mit ServiceMessages
- * "dyndns.api.<ergebnis>" in der bisherigen Reihenfolge der Logzeilen; die letzte Message ist das Endergebnis:
+ * "dyndns.api.<ergebnis>"; die letzte Message ist das Endergebnis:
  * - empty_credentials                     Zugangsdaten fehlen
  * - auth_failed (username)                Anmeldung fehlgeschlagen
  * - rejected (credentialsInvalid, reason, detail)
  *                                         Anfrage abgelehnt; credentialsInvalid = true, wenn die Zugangsdaten
  *                                         unter Sperre nicht mehr gültig sind (Account gelöscht bzw.
  *                                         Benutzername/Passwort geändert), sonst false
- * - no_ip                                 keine IP-Adresse übergeben, keine Änderung
- * - validate_failed / publish_failed (zoneName, output)
- *                                         Validierung bzw. Verteilung fehlgeschlagen, Rollback
- * - exception (lockError, message)        unerwarteter Fehler, Rollback
- * - done (results)                        abgeschlossen; results = Liste je Adressfamilie in Reihenfolge A, AAAA:
- *                                         ['type' => 'A'|'AAAA', 'ip' => string, 'changed' => bool]
- *                                         (leer, wenn keine Familie betroffen war)
- * Zwischenmeldungen: publish_warning, publish_success (zoneName), rollback_failed (message).
+ * - no_ip                                 keine IP-Adresse übergeben, keine Änderung, kein Publish
+ * - validate_failed (zoneName, output)    Zonenprüfung fehlgeschlagen, Rollback
+ * - exception (lockError, message)        unerwarteter Fehler vor dem Commit, Rollback
+ * - publish_pending (zoneName, status, errors, warnings, exception, retry)
+ *                                         Änderung festgeschrieben bzw. unverändert, Veröffentlichung aber
+ *                                         zurückgestellt (Lock belegt), teilweise oder nicht erfolgt; Zone bleibt
+ *                                         ausstehend
+ * - done (results, retry)                 abgeschlossen; results = Liste je Adressfamilie in Reihenfolge A, AAAA:
+ *                                         ['type' => 'A'|'AAAA', 'ip' => string, 'changed' => bool]; retry = true,
+ *                                         wenn ein ausstehender Publish ohne Änderung erfolgreich wiederholt wurde
+ * Zwischenmeldungen: publish_retry (zoneName), publish_success (zoneName, status published|already_published,
+ * keptPending, retry), rollback_failed (message).
  * Kontext ab erfolgreicher Authentifizierung zusätzlich: username, fqdn.
  *
- * Bekannte, bewusst unveränderte Grenzen (Architektur-Inventar S31, S32): kein Dummy-password_verify bei
- * unbekanntem Benutzer; Verteilung vor dem Commit ohne Publish-Advisory-Lock.
+ * Bekannte, bewusst unveränderte Grenze (Architektur-Inventar S31): kein Dummy-password_verify bei
+ * unbekanntem Benutzer.
  */
 
 declare(strict_types=1);
@@ -39,7 +52,7 @@ require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../zones/ZoneBuildBackend.php';
 require_once __DIR__ . '/../../dyndns_guard.php';
-require_once __DIR__ . '/DyndnsPublishBackend.php';
+require_once __DIR__ . '/../publish/PublishService.php';
 
 /**
  * Interne fachliche Ablehnung des Updates (nur innerhalb des Service verwendet). Die Ausnahmenachricht lautet
@@ -60,13 +73,18 @@ final class DyndnsUpdateService
 {
     private PDO $pdo;
     private ZoneBuildBackend $build;
-    private DyndnsPublishBackend $publish;
+    private PublishService $publisher;
 
-    public function __construct(PDO $pdo, ZoneBuildBackend $build, DyndnsPublishBackend $publish)
+    /**
+     * @param PDO              $pdo       Verbindung (dieselbe wie die des PublishService; Lock und Flags)
+     * @param ZoneBuildBackend $build     Zonenprüfung in der Transaktion
+     * @param PublishService   $publisher Einzelzonen-Publish nach dem Commit (publishZone)
+     */
+    public function __construct(PDO $pdo, ZoneBuildBackend $build, PublishService $publisher)
     {
         $this->pdo = $pdo;
         $this->build = $build;
-        $this->publish = $publish;
+        $this->publisher = $publisher;
     }
 
     /**
@@ -236,7 +254,8 @@ final class DyndnsUpdateService
                 $changed = true;
             }
 
-            // 8. Nur wenn mindestens ein Record geändert wurde → Rebuild + Deployment
+            // 8. Nur wenn mindestens ein Record geändert wurde → Zonenprüfung und Markierung (changed = 1)
+            //    in derselben Transaktion; ein Prüffehler verwirft die gesamte Änderung
             if ($changed) {
                 $rebuild = $this->build->validateAndFlag($zone_id);
                 if ($rebuild['status'] === 'error') {
@@ -244,26 +263,10 @@ final class DyndnsUpdateService
                     $m[] = new ServiceMessage('error', 'dyndns.api.validate_failed', $ctx + ['zoneName' => $zone_name, 'output' => $rebuild['output']]);
                     return new ServiceResult(false, $m);
                 }
-
-                $publish = $this->publish->publishZone($zone_id, $zone_name);
-                if ($publish['status'] === 'error') {
-                    $this->pdo->rollBack();
-                    $m[] = new ServiceMessage('error', 'dyndns.api.publish_failed', $ctx + ['zoneName' => $zone_name, 'output' => $publish['output']]);
-                    return new ServiceResult(false, $m);
-                }
-
-                if ($publish['status'] === 'warning') {
-                    $m[] = new ServiceMessage('warning', 'dyndns.api.publish_warning', $ctx + ['zoneName' => $zone_name, 'output' => $publish['output']]);
-                } else {
-                    $m[] = new ServiceMessage('success', 'dyndns.api.publish_success', $ctx + ['zoneName' => $zone_name]);
-                }
             }
 
-            // Hinweis: Bei einem Fehler ab hier ist die Zone bereits verteilt; ein Rollback betrifft nur die Datenbank.
+            // 9. Festschreiben – vor jeder Verteilung (S32)
             $this->pdo->commit();
-            $m[] = new ServiceMessage('success', 'dyndns.api.done', $ctx + ['results' => $results]);
-
-            return new ServiceResult(true, $m);
         } catch (Throwable $e) {
             try {
                 if ($this->pdo->inTransaction()) {
@@ -283,6 +286,54 @@ final class DyndnsUpdateService
 
             return new ServiceResult(false, $m);
         }
+
+        // 10. Veröffentlichen – nach dem Commit; ein Verteilungsfehler rollt die festgeschriebene Änderung nicht zurück.
+        //     Ohne Änderung nur, wenn für die Zone noch ein Publish aussteht (Wiederholung, F1/F2); sonst nochg.
+        $retry = false;
+        if (!$changed) {
+            try {
+                $stmt = $this->pdo->prepare("SELECT changed FROM zones WHERE id = ?");
+                $stmt->execute([$zone_id]);
+                $pendingFlag = $stmt->fetchColumn();
+                $stmt->closeCursor();
+            } catch (Throwable $e) {
+                $m[] = new ServiceMessage('error', 'dyndns.api.exception', $ctx + ['lockError' => dyndnsIsLockError($e), 'message' => $e->getMessage()]);
+                return new ServiceResult(false, $m);
+            }
+            if ($pendingFlag === false || (int)$pendingFlag === 0) {
+                $m[] = new ServiceMessage('success', 'dyndns.api.done', $ctx + ['results' => $results, 'retry' => false]);
+                return new ServiceResult(true, $m);
+            }
+            $retry = true;
+            $m[] = new ServiceMessage('audit', 'dyndns.api.publish_retry', $ctx + ['zoneName' => $zone_name]);
+        }
+
+        try {
+            $published = $this->publisher->publishZone($zone_id);
+            $last = $published->messages[count($published->messages) - 1] ?? null;
+            $zr = ($last !== null && $last->code === 'publish.zone_result') ? $last->context : ['status' => 'exception', 'errors' => [], 'warnings' => [], 'exception' => 'Kein Publish-Ergebnis'];
+        } catch (Throwable $e) {
+            $published = null;
+            $zr = ['status' => 'exception', 'errors' => [], 'warnings' => [], 'exception' => $e->getMessage()];
+        }
+
+        if ($published !== null && $published->ok) {
+            $m[] = new ServiceMessage('success', 'dyndns.api.publish_success', $ctx + ['zoneName' => $zone_name, 'status' => $zr['status'],
+                'keptPending' => (bool)($zr['keptPending'] ?? false), 'retry' => $retry]);
+            $m[] = new ServiceMessage('success', 'dyndns.api.done', $ctx + ['results' => $results, 'retry' => $retry]);
+            return new ServiceResult(true, $m);
+        }
+
+        // Zurückgestellt, teilweise oder nicht verteilt: Änderung bleibt festgeschrieben, Zone bleibt ausstehend
+        $m[] = new ServiceMessage('error', 'dyndns.api.publish_pending', $ctx + [
+            'zoneName'  => $zone_name,
+            'status'    => (string)$zr['status'],
+            'errors'    => array_values((array)($zr['errors'] ?? [])),
+            'warnings'  => array_values((array)($zr['warnings'] ?? [])),
+            'exception' => $zr['exception'] ?? null,
+            'retry'     => $retry,
+        ]);
+        return new ServiceResult(false, $m);
     }
 
     private static function final(string $kind, string $code, array $context): ServiceResult
