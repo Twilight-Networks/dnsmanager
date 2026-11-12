@@ -19,7 +19,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/dyndns/DyndnsAccountService.php';
-require_once __DIR__ . '/../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 require_once __DIR__ . '/../inc/web/dyndns_messages.php';
 verify_csrf_token();
@@ -38,7 +38,7 @@ $input = new DyndnsAccountInput(
     (int)($_POST['zone_id'] ?? 0)
 );
 
-$service = new DyndnsAccountService($pdo, new LegacyZoneBuildBackend($pdo));
+$service = new DyndnsAccountService($pdo, new BindZoneBuildBackend($pdo));
 $result = $service->createAccount(actorFromSession(), $input);
 
 $redirect = rtrim(BASE_URL, '/') . '/pages/dyndns.php?add_new=1';

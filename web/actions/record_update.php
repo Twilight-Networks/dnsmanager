@@ -11,6 +11,7 @@ require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/records/RecordInput.php';
 require_once __DIR__ . '/../inc/app/records/RecordService.php';
+require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/app/records/RecordContentBuilder.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
@@ -60,7 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $recordService = new RecordService(
         $pdo,
         $zoneAccess,
-        static fn (int $zoneId): array => rebuild_zone_and_flag_if_valid($zoneId, $pdo)
+        [new BindZoneBuildBackend($pdo), 'validateAndFlag']
     );
     $serviceResult = $recordService->updateRecord($actor, $id, $zone_id, $input);
 

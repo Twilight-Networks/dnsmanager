@@ -16,11 +16,14 @@
  * Abweichung → "<operation>.access_denied" (reason role | db_role).
  *
  * Sperren:
- * - Ändern: Topologie-Lock (Try-Lock, nur wenn sich "active" ändert, wie bisher) → Transaktion → users (S)
- *   → servers (X, Zielzeile) → ggf. servers (X, bisher lokaler Server) → system_status (X, nur Reaktivierung)
- *   → Commit → NS/Glue-Neuaufbau der zugewiesenen Zonen (ZoneBuildBackend, bei Änderung von Name/DNS-IP)
- *   → Freigabe des Topologie-Locks. Die Master-Prüfung bei Deaktivierung läuft wie bisher nach dem
- *   Topologie-Lock; Serverzuweisungen ändern sich nur unter demselben Lock (ZoneService).
+ * - Ändern: Topologie-Lock (Try-Lock, wenn sich "active" oder – Paket 4a – Name/DNS-IP ändern) → Transaktion
+ *   → users (S) → servers (X, Zielzeile) → ggf. servers (X, bisher lokaler Server) → system_status (X, nur
+ *   Reaktivierung) → bei Änderung von Name/DNS-IP: zones (X, zugewiesene Zonen aufsteigend) → NS/Glue-
+ *   Neuaufbau je Zone (ZoneBuildBackend, in derselben Transaktion) → Commit → Freigabe des Topologie-Locks.
+ *   Serveränderung und NS/Glue-Records werden damit atomar sichtbar; Publish All (gleicher Lock) kann keinen
+ *   Zwischenstand veröffentlichen. Ein Fehler beim Neuaufbau rollt die gesamte Änderung zurück. Die
+ *   Master-Prüfung bei Deaktivierung läuft wie bisher nach dem Topologie-Lock; Serverzuweisungen ändern sich
+ *   nur unter demselben Lock (ZoneService).
  * - Anlegen: Transaktion → users (S) → servers (X, vorhandene lokale Server) → INSERT. Die Prüfung "nur ein
  *   lokaler Server" läuft für die bisherige Meldungsreihenfolge zusätzlich ungesperrt in der Validierung und
  *   wird mit SELECT … WHERE is_local = 1 FOR UPDATE wiederholt.
@@ -190,7 +193,11 @@ final class ServerService
         $activeChanged = (int)$existing['active'] !== (int)$update_data['active'];
         $reactivated   = $activeChanged && (int)$update_data['active'] === 1;
 
-        if ($activeChanged && !$this->acquireLock($m)) {
+        // Topologie-Lock bei Änderung von "active" (wie bisher) sowie – Paket 4a – bei Änderung von Name/DNS-IP:
+        // Der NS-/Glue-Neuaufbau der zugewiesenen Zonen läuft dann in derselben Transaktion wie die
+        // Serveränderung; der Lock schließt Publish All und Änderungen der Serverzuweisung (ZoneService) für
+        // diese Dauer aus.
+        if (($activeChanged || $server_data_changed) && !$this->acquireLock($m)) {
             $m[] = new ServiceMessage('warning', 'server.update.topology_locked', ['lock' => TopologyLock::NAME] + $ctx);
             return new ServiceResult(false, $m);
         }
@@ -255,22 +262,40 @@ final class ServerService
                 $this->pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
             }
 
-            $this->pdo->commit();
-
-            // NS/Glue-Neuaufbau für alle zugewiesenen Zonen bei Änderung von Name/DNS-IP (wie bisher nach Commit)
+            $rebuildWarnings = [];
+            // NS/Glue-Neuaufbau für alle zugewiesenen Zonen bei Änderung von Name/DNS-IP – Paket 4a: in derselben
+            // Transaktion (atomar mit der Serveränderung), Zonenzeilen aufsteigend gesperrt. Ein Fehler in einer
+            // Zone rollt die gesamte Änderung zurück.
             if ($server_data_changed) {
-                $stmt = $this->pdo->prepare("SELECT zone_id FROM zone_servers WHERE server_id = ?");
+                $stmt = $this->pdo->prepare("SELECT zone_id FROM zone_servers WHERE server_id = ? ORDER BY zone_id");
                 $stmt->execute([$serverId]);
-                $zone_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                $zone_ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+                $stmt->closeCursor();
+
+                $stmtLock = $this->pdo->prepare('SELECT id FROM zones WHERE id = ? FOR UPDATE');
+                foreach ($zone_ids as $zid) {
+                    $stmtLock->execute([$zid]);
+                    $stmtLock->closeCursor();
+                }
 
                 foreach ($zone_ids as $zid) {
-                    $result = $this->build->rebuildNsGlueAndFlag((int)$zid);
+                    $result = $this->build->rebuildNsGlueAndFlag($zid);
                     if ($result['status'] === 'error') {
+                        $this->rollbackIfActive();
                         $m[] = new ServiceMessage('error', 'server.update.zone_rebuild_error', ['zoneId' => $zid, 'output' => $result['output']] + $ctx);
-                    } elseif ($result['status'] === 'warning') {
-                        $m[] = new ServiceMessage('warning', 'server.update.zone_rebuild_warning', ['zoneId' => $zid, 'output' => $result['output']] + $ctx);
+                        $this->releaseLock($m);
+                        return new ServiceResult(false, $m);
+                    }
+                    if ($result['status'] === 'warning') {
+                        $rebuildWarnings[] = new ServiceMessage('warning', 'server.update.zone_rebuild_warning', ['zoneId' => $zid, 'output' => $result['output']] + $ctx);
                     }
                 }
+            }
+
+            $this->pdo->commit();
+
+            foreach ($rebuildWarnings as $w) {
+                $m[] = $w;
             }
 
             $m[] = new ServiceMessage('success', 'server.update.success', $ctx);

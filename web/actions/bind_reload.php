@@ -18,7 +18,7 @@ require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/TopologyLock.php';
 require_once __DIR__ . '/../inc/app/servers/ServerService.php';
-require_once __DIR__ . '/../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/deploy/LegacyAgentServerControlBackend.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 
@@ -34,7 +34,7 @@ requireRole(['admin']);
 
 $serverId = (int)($_POST['id'] ?? 0);
 
-$serverService = new ServerService($pdo, new LegacyZoneBuildBackend($pdo), new TopologyLock($pdo), new LegacyAgentServerControlBackend());
+$serverService = new ServerService($pdo, new BindZoneBuildBackend($pdo), new TopologyLock($pdo), new LegacyAgentServerControlBackend());
 $result = $serverService->reloadBind(actorFromSession(), $serverId);
 
 foreach ($result->messages as $message) {

@@ -26,7 +26,7 @@ define('ALLOW_UNAUTHENTICATED', true);
 require_once __DIR__ . '/../../../common.php';
 require_once __DIR__ . '/../../../inc/helpers.php';
 require_once __DIR__ . '/../../../inc/app/dyndns/DyndnsUpdateService.php';
-require_once __DIR__ . '/../../../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../../../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../../../inc/deploy/LegacyDyndnsPublishBackend.php';
 
 header('Content-Type: text/plain');
@@ -35,7 +35,7 @@ header('Content-Type: text/plain');
 $username = $_SERVER['PHP_AUTH_USER'] ?? '';
 $password = $_SERVER['PHP_AUTH_PW'] ?? '';
 
-$service = new DyndnsUpdateService($pdo, new LegacyZoneBuildBackend($pdo), new LegacyDyndnsPublishBackend($pdo));
+$service = new DyndnsUpdateService($pdo, new BindZoneBuildBackend($pdo), new LegacyDyndnsPublishBackend($pdo));
 $result = $service->update($username, $password, $_GET['myip'] ?? null, $_GET['myip6'] ?? null);
 
 // Protokollhilfe für abgelehnte bzw. fehlgeschlagene Updates (unverändertes Format)

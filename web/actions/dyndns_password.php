@@ -19,7 +19,7 @@
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/dyndns/DyndnsAccountService.php';
-require_once __DIR__ . '/../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 verify_csrf_token();
 
@@ -35,7 +35,7 @@ if ($_SESSION['role'] !== 'admin') {
 $account_id = (int)($_POST['id'] ?? 0);
 $password = trim($_POST['password'] ?? '');
 
-$service = new DyndnsAccountService($pdo, new LegacyZoneBuildBackend($pdo));
+$service = new DyndnsAccountService($pdo, new BindZoneBuildBackend($pdo));
 $result = $service->changePassword(actorFromSession(), $account_id, $password);
 
 foreach ($result->messages as $message) {

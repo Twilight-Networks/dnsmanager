@@ -21,7 +21,7 @@ requireRole(['admin']);
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/TopologyLock.php';
 require_once __DIR__ . '/../inc/app/servers/ServerService.php';
-require_once __DIR__ . '/../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 // Nur POST-Anfragen erlaubt
@@ -42,7 +42,7 @@ $input = new ServerInput(
     isset($_POST['active'])
 );
 
-$serverService = new ServerService($pdo, new LegacyZoneBuildBackend($pdo), new TopologyLock($pdo));
+$serverService = new ServerService($pdo, new BindZoneBuildBackend($pdo), new TopologyLock($pdo));
 $result = $serverService->createServer(actorFromSession(), $input);
 
 $redirect = "/pages/servers.php?add_new=1";
