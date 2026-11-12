@@ -15,8 +15,12 @@
  * Parameter, übersetzt die strukturierten ServiceMessages in die bisherigen Logzeilen und ist allein für das
  * DynDNS-Antwortprotokoll (good/nochg/badauth/dnserr) mit den bisherigen HTTP-Status/-Headern zuständig.
  *
- * Grenze: Die Verteilung an die Nameserver erfolgt vor dem Commit und kann durch ein späteres
- * Datenbank-Rollback nicht rückgängig gemacht werden (Architektur-Inventar S32).
+ * Paket 4b (S32): Die Änderung wird zuerst festgeschrieben, danach über PublishService::publishZone()
+ * veröffentlicht (gemeinsamer Lock und gemeinsame Zonenlogik mit Publish All). Antworten:
+ * - Änderung bzw. Wiederholung eines ausstehenden Publish vollständig veröffentlicht → "good <ip>"
+ * - Veröffentlichung zurückgestellt, teilweise oder nicht erfolgt → "dnserr" (Änderung bleibt festgeschrieben,
+ *   Zone bleibt ausstehend; das nächste Update mit denselben IPs wiederholt den Publish)
+ * - keine Änderung und nichts ausstehend → "nochg <ip>"; ohne IP-Parameter → "nochg" (ohne Wiederholung)
  */
 
 declare(strict_types=1);
@@ -27,7 +31,8 @@ require_once __DIR__ . '/../../../common.php';
 require_once __DIR__ . '/../../../inc/helpers.php';
 require_once __DIR__ . '/../../../inc/app/dyndns/DyndnsUpdateService.php';
 require_once __DIR__ . '/../../../inc/deploy/BindZoneBuildBackend.php';
-require_once __DIR__ . '/../../../inc/deploy/LegacyDyndnsPublishBackend.php';
+require_once __DIR__ . '/../../../inc/app/publish/PublishService.php';
+require_once __DIR__ . '/../../../inc/deploy/LegacyBindPublishBackend.php';
 
 header('Content-Type: text/plain');
 
@@ -35,7 +40,14 @@ header('Content-Type: text/plain');
 $username = $_SERVER['PHP_AUTH_USER'] ?? '';
 $password = $_SERVER['PHP_AUTH_PW'] ?? '';
 
-$service = new DyndnsUpdateService($pdo, new BindZoneBuildBackend($pdo), new LegacyDyndnsPublishBackend($pdo));
+$publisher = new PublishService(
+    $pdo,
+    new LegacyBindPublishBackend($pdo),
+    static function (string $level, string $message): void {
+        appLog($level, $message);
+    }
+);
+$service = new DyndnsUpdateService($pdo, new BindZoneBuildBackend($pdo), $publisher);
 $result = $service->update($username, $password, $_GET['myip'] ?? null, $_GET['myip6'] ?? null);
 
 // Protokollhilfe für abgelehnte bzw. fehlgeschlagene Updates (unverändertes Format)
@@ -81,14 +93,24 @@ foreach ($result->messages as $message) {
             echo "dnserr\n";
             exit;
 
-        case 'dyndns.api.publish_failed':
-            appLog('error', 'event=dyndns_publish_failure stage=publish zone=' . $ctx['zoneName'] . ' msg="' . addslashes($ctx['output']) . '"');
+        case 'dyndns.api.publish_retry':
+            appLog('info', sprintf('event=dyndns_publish_retry zone=%s user=%s ip=%s', $ctx['zoneName'], $ctx['username'], $_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+            break;
+
+        case 'dyndns.api.publish_pending':
+            // Änderung festgeschrieben, Veröffentlichung ausstehend (Lock belegt, Teil- oder Fehlverteilung)
+            $detail = implode('; ', array_merge($ctx['errors'], $ctx['warnings'], $ctx['exception'] !== null ? [$ctx['exception']] : []));
+            appLog('warning', sprintf(
+                'event=dyndns_publish_pending zone=%s status=%s user=%s ip=%s retry=%s%s',
+                $ctx['zoneName'],
+                $ctx['status'],
+                $ctx['username'],
+                $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+                $ctx['retry'] ? 'yes' : 'no',
+                $detail !== '' ? ' msg="' . addslashes($detail) . '"' : ''
+            ));
             echo "dnserr\n";
             exit;
-
-        case 'dyndns.api.publish_warning':
-            appLog('warning', 'event=dyndns_publish_warning zone=' . $ctx['zoneName'] . ' msg="' . addslashes($ctx['output']) . '"');
-            break;
 
         case 'dyndns.api.publish_success':
             appLog(
@@ -114,8 +136,9 @@ foreach ($result->messages as $message) {
             exit;
 
         case 'dyndns.api.done':
-            // Je Adressfamilie (Reihenfolge A, AAAA) "good <ip>" bei Änderung, sonst "nochg <ip>"; ohne Ergebnis "nochg"
-            $lines = array_map(fn(array $r) => ($r['changed'] ? 'good ' : 'nochg ') . $r['ip'], $ctx['results']);
+            // Je Adressfamilie (Reihenfolge A, AAAA) "good <ip>" bei Änderung bzw. erfolgreich wiederholtem Publish (F1),
+            // sonst "nochg <ip>"; ohne Ergebnis "nochg"
+            $lines = array_map(fn(array $r) => (($r['changed'] || $ctx['retry']) ? 'good ' : 'nochg ') . $r['ip'], $ctx['results']);
             echo empty($lines) ? "nochg\n" : implode("\n", $lines) . "\n";
             exit;
 

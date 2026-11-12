@@ -1,7 +1,9 @@
 <?php
 /**
  * Datei: inc/app/publish/PublishService.php
- * Zweck: Application Service "Publish All" (Veröffentlichung geänderter Zonen bzw. Full-Rebuild).
+ * Zweck: Application Service "Publish All" (Veröffentlichung geänderter Zonen bzw. Full-Rebuild) und – seit
+ *        Paket 4b – "Publish Zone" (Einzelzone, z. B. nach DynDNS-Update; S32). Beide Wege nutzen dieselbe
+ *        Zonenverarbeitung (processZone) und dieselben Abschlussregeln für changed unter demselben Lock.
  *
  * Der Service kennt keine Web-Schicht: keine Session, kein HTTP, keine Redirects, keine Toasts,
  * keine Sprachdateien, kein HTML, kein common.php und keine globale PDO-Verbindung. Alle
@@ -204,10 +206,8 @@ final class PublishService
         // Scheitert das, bleibt 2 als beim nächsten Lauf erneut verarbeiteter Zustand stehen.
         $restorePendingFlags = function () use (&$claimedZoneIds, &$bindDirtyClaimed, &$flags): void {
             try {
-                $stmtRestore = $this->pdo->prepare("UPDATE zones SET changed = 1 WHERE id = ? AND changed = 2");
                 foreach ($claimedZoneIds as $cid) {
-                    $stmtRestore->execute([$cid]);
-                    if ($stmtRestore->rowCount() > 0) {
+                    if ($this->restoreClaimedZone($cid)) {
                         $flags['restoredZoneIds'][] = $cid;
                     }
                 }
@@ -242,167 +242,14 @@ final class PublishService
                 $stmt->execute();
                 $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+                $run = [
+                    'messages' => &$messages, 'errors' => &$errors, 'warnings' => &$warnings,
+                    'claimedZoneIds' => &$claimedZoneIds, 'pendingClaimedIds' => &$pendingClaimedIds,
+                    'publishedZoneIds' => &$publishedZoneIds, 'partialZoneIds' => &$partialZoneIds,
+                    'zoneReports' => &$zoneReports, 'currentZoneReport' => &$currentZoneReport, 'flags' => &$flags,
+                ];
                 foreach ($zones as $zone) {
-                    $zoneId = (int)$zone['id'];
-                    $zoneName = (string)$zone['name'];
-                    $zoneReport = ['id' => $zoneId, 'name' => $zoneName, 'outcome' => null];
-                    $currentZoneReport = $zoneReport;
-
-                    // 4. changed vor der Generierung übernehmen: 1 oder 2 -> 2
-                    $claimedZoneIds[] = $zoneId;
-                    $flags['claimedZoneIds'] = $claimedZoneIds;
-                    try {
-                        $this->pdo->prepare("UPDATE zones SET changed = 2 WHERE id = ? AND changed <> 0")->execute([$zoneId]);
-                        $stmtChanged = $this->pdo->prepare("SELECT changed FROM zones WHERE id = ?");
-                        $stmtChanged->execute([$zoneId]);
-                        $zoneChanged = $stmtChanged->fetchColumn();
-                    } catch (Throwable $e) {
-                        $errors[] = "Zone $zoneName: Publish-Status konnte nicht übernommen werden: " . $e->getMessage();
-                        $this->log('error', "[publish] Zone $zoneName: Publish-Status konnte nicht übernommen werden: " . $e->getMessage());
-                        $messages[] = new ServiceMessage('error', 'publish.zone_claim_failed', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                            'detail'   => $e->getMessage(),
-                        ]);
-                        $zoneReport['outcome'] = 'claim_failed';
-                        $zoneReports[] = $zoneReport;
-                        $currentZoneReport = null;
-                        continue;
-                    }
-
-                    if ($zoneChanged !== false && (int)$zoneChanged === 2) {
-                        $pendingClaimedIds[] = $zoneId;
-                    }
-
-                    // Normaler changed-Lauf: Zone überspringen, wenn sie inzwischen veröffentlicht (0) oder gelöscht wurde
-                    if (!$bindDirtyClaimed && ($zoneChanged === false || (int)$zoneChanged === 0)) {
-                        $zoneReport['outcome'] = 'skipped';
-                        $zoneReports[] = $zoneReport;
-                        $currentZoneReport = null;
-                        continue;
-                    }
-
-                    // Zonendatei generieren und validieren (SOA-Serial in eigener Transaktion des Generators)
-                    $validation = $this->backend->generateZone($zoneId);
-
-                    if (($validation['status'] ?? null) === 'error') {
-                        $errors[] = "Zone $zoneName: " . ($validation['output'] ?? '');
-                        $messages[] = new ServiceMessage('error', 'publish.zone_generation_failed', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                            'output'   => (string)($validation['output'] ?? ''),
-                        ]);
-                        $zoneReport['outcome'] = 'generation_failed';
-                        $zoneReports[] = $zoneReport;
-                        $currentZoneReport = null;
-                        continue;
-                    }
-
-                    if (($validation['status'] ?? null) === 'warning') {
-                        $warnings[] = "Zone $zoneName: " . ($validation['output'] ?? '');
-                        $messages[] = new ServiceMessage('warning', 'publish.zone_generation_warning', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                            'output'   => (string)($validation['output'] ?? ''),
-                        ]);
-                    }
-
-                    $path = $validation['path'] ?? null;
-
-                    // Zonendatei verteilen
-                    $distResult = $this->backend->distributeZone($zoneId, $path);
-                    $distErrors = (array)($distResult['errors'] ?? []);
-                    $zoneFailed = false;
-                    if (($distResult['status'] ?? null) === 'error') {
-                        foreach ($distErrors as $e) {
-                            $errors[] = "Zone $zoneName: $e";
-                            $this->log('error', "[publish] $e");
-                        }
-                        $zoneFailed = true;
-                        $messages[] = new ServiceMessage('error', 'publish.zone_distribution_failed', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                            'errors'   => array_values($distErrors),
-                        ]);
-                    } elseif (($distResult['status'] ?? null) === 'warning') {
-                        foreach ($distErrors as $e) {
-                            $warnings[] = "Zone $zoneName: $e";
-                            $this->log('warning', "[publish] $e");
-                        }
-                        $messages[] = new ServiceMessage('warning', 'publish.zone_distribution_warning', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                            'errors'   => array_values($distErrors),
-                        ]);
-                    }
-                    if (!empty($distResult['output'])) {
-                        $this->log('info', "[publish] {$distResult['output']}");
-                    }
-
-                    // Konfigurationsdatei (.conf) erzeugen und verteilen
-                    $confResult = $this->backend->distributeZoneConf($zoneName);
-                    $confErrors = (array)($confResult['errors'] ?? []);
-                    $confStatus = $confResult['status'] ?? '';
-                    $confFailed = false;
-                    $confWarned = false;
-                    if (!empty($confErrors)) {
-                        foreach ($confErrors as $e) {
-                            $warnings[] = "Zone $zoneName (conf): $e";
-                            $this->log('warning', "[publish] $e");
-                        }
-                        $confWarned = true;
-                    }
-                    if (!empty($confResult['output'])) {
-                        if ($confStatus === 'warning') {
-                            $warnings[] = "Zone $zoneName (conf): " . $confResult['output'];
-                            $this->log('warning', "[publish] " . $confResult['output']);
-                            $confWarned = true;
-                        } elseif ($confStatus === 'error') {
-                            $errors[] = "Zone $zoneName (conf): " . $confResult['output'];
-                            $this->log('error', "[publish] " . $confResult['output']);
-                            $confFailed = true;
-                        } else {
-                            $this->log('info', "[publish] " . $confResult['output']);
-                        }
-                    }
-                    if ($confFailed) {
-                        $zoneFailed = true;
-                        $messages[] = new ServiceMessage('error', 'publish.zone_conf_failed', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                            'errors'   => array_values($confErrors),
-                            'output'   => (string)$confResult['output'],
-                        ]);
-                    } elseif ($confWarned) {
-                        $messages[] = new ServiceMessage('warning', 'publish.zone_conf_warning', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                            'errors'   => array_values($confErrors),
-                            'output'   => (string)($confResult['output'] ?? ''),
-                        ]);
-                    }
-
-                    // Zone nur als veröffentlicht werten, wenn Zone- und Conf-Verteilung vollständig erfolgreich waren
-                    $confOk = $confStatus === 'ok' && empty($confErrors);
-                    if (($distResult['status'] ?? '') === 'ok' && $confOk) {
-                        $publishedZoneIds[] = $zoneId;
-                        $zoneReport['outcome'] = 'published';
-                        $messages[] = new ServiceMessage('success', 'publish.zone_published', [
-                            'zoneId'   => $zoneId,
-                            'zoneName' => $zoneName,
-                        ]);
-                    } else {
-                        $partialZoneIds[] = $zoneId;
-                        $zoneReport['outcome'] = $zoneFailed ? 'failed' : 'partial';
-                        if (!$zoneFailed) {
-                            $messages[] = new ServiceMessage('warning', 'publish.zone_partial', [
-                                'zoneId'   => $zoneId,
-                                'zoneName' => $zoneName,
-                            ]);
-                        }
-                    }
-                    $zoneReports[] = $zoneReport;
-                    $currentZoneReport = null;
+                    $this->processZone((int)$zone['id'], (string)$zone['name'], $bindDirtyClaimed, $run);
                 }
 
                 if (empty($errors)) {
@@ -448,10 +295,8 @@ final class PublishService
                     if ($flags['bindDirtyRetryReason'] !== null) {
                         $flags['bindDirty'] = 'retry_requested';
                     }
-                    $stmtReset = $this->pdo->prepare("UPDATE zones SET changed = 0 WHERE id = ? AND changed = 2");
                     foreach ($publishedZoneIds as $pid) {
-                        $stmtReset->execute([$pid]);
-                        if ($stmtReset->rowCount() > 0) {
+                        if ($this->resetPublishedZone($pid)) {
                             $flags['resetZoneIds'][] = $pid;
                         } elseif (in_array($pid, $pendingClaimedIds, true)) {
                             // Während des Laufs erneut geändert (changed = 1): bleibt ausstehend
@@ -460,9 +305,8 @@ final class PublishService
                     }
 
                     // Teilweise verteilte Zonen für einen späteren Publish markiert lassen
-                    $stmtMark = $this->pdo->prepare("UPDATE zones SET changed = 1 WHERE id = ?");
                     foreach ($partialZoneIds as $pid) {
-                        $stmtMark->execute([$pid]);
+                        $this->markZonePending($pid);
                     }
 
                     $flags['outcome'] = 'committed';
@@ -545,6 +389,387 @@ final class PublishService
         ];
 
         return $this->finish($messages, $report);
+    }
+
+    /**
+     * Veröffentlicht eine einzelne Zone (Paket 4b, S32) – z. B. nach einer festgeschriebenen DynDNS-Änderung
+     * oder als Wiederholung eines ausstehenden Publish.
+     *
+     * Interne Systemoperation ohne Benutzerbezug: Die Berechtigung prüft der Aufrufer (DynDNS: authentifiziertes
+     * Konto der Zone). Der Aufruf darf nicht innerhalb einer offenen Transaktion erfolgen; zu veröffentlichende
+     * Änderungen müssen vorher festgeschrieben sein.
+     *
+     * Ablauf (gemeinsame Zonenlogik mit publishAll(), siehe processZone()):
+     * 1. Globaler Advisory-Lock wie Publish All, Wartezeit höchstens $lockWaitSeconds.
+     * 2. Zonenname unter dem Lock frisch lesen; changed 1|2 -> 2 übernehmen. War die vorhandene Zone bereits
+     *    veröffentlicht (changed = 0, z. B. durch einen Publish All zwischen Commit und Aufruf), wird nichts
+     *    erneut veröffentlicht: Status already_published. Eine inzwischen gelöschte Zone ergibt not_found
+     *    (kein Erfolg).
+     * 3. Generieren (Serial festgeschrieben vor der Verteilung), Zone und Conf an alle aktiven Server verteilen.
+     * 4. Abschluss wie Publish All: vollständig verteilt -> 2 -> 0 (ein zwischenzeitlich neu gesetztes 1 bleibt
+     *    ausstehend); teilweise/nicht verteilt -> 1; Generierungsfehler oder Exception -> 2 -> 1.
+     * bind_dirty und Orphan-Cleanup bleiben unberührt.
+     *
+     * Ergebnis: ServiceResult (ok nur bei published oder already_published) mit den Zonenmeldungen (publish.zone_*)
+     * und abschließend genau einer 'publish.zone_result' mit Rohdaten:
+     * status published | already_published | partial | failed | generation_failed | claim_failed | not_found |
+     * locked | lock_failed | invalid_state | exception, zoneId, zoneName, changedReset, keptPending, errors,
+     * warnings, exception, lock.
+     */
+    public function publishZone(int $zoneId, int $lockWaitSeconds = 5): ServiceResult
+    {
+        $messages = [];
+        $report = [
+            'status' => null, 'zoneId' => $zoneId, 'zoneName' => null, 'changedReset' => false, 'keptPending' => false,
+            'errors' => [], 'warnings' => [], 'exception' => null,
+            'lock' => ['name' => self::LOCK_NAME, 'acquired' => false, 'released' => null, 'releaseResult' => null, 'releaseException' => false, 'releaseError' => null],
+        ];
+        $done = function (string $status) use (&$messages, &$report): ServiceResult {
+            $report['status'] = $status;
+            $ok = in_array($status, ['published', 'already_published'], true);
+            $kind = match ($status) {
+                'published', 'already_published' => 'success',
+                'partial', 'locked'               => 'warning',
+                default                           => 'error',
+            };
+            $messages[] = new ServiceMessage($kind, 'publish.zone_result', $report);
+            return new ServiceResult($ok, $messages, null);
+        };
+
+        if ($this->pdo->inTransaction()) {
+            $report['errors'][] = 'Publish Zone darf nicht innerhalb einer offenen Transaktion ausgeführt werden.';
+            return $done('invalid_state');
+        }
+
+        try {
+            $stmt = $this->pdo->prepare("SELECT name FROM zones WHERE id = ?");
+            $stmt->execute([$zoneId]);
+            $zoneName = $stmt->fetchColumn();
+            $stmt->closeCursor();
+        } catch (Throwable $e) {
+            $report['exception'] = $e->getMessage();
+            return $done('exception');
+        }
+        if ($zoneName === false) {
+            return $done('not_found');
+        }
+        $zoneName = (string)$zoneName;
+        $report['zoneName'] = $zoneName;
+
+        // 1. Globaler Lock (wie Publish All), begrenzte Wartezeit
+        try {
+            $stmtLock = $this->pdo->prepare("SELECT GET_LOCK(?, ?)");
+            $stmtLock->execute([self::LOCK_NAME, max(0, $lockWaitSeconds)]);
+            $lockResult = $stmtLock->fetchColumn();
+            $report['lock']['acquired'] = $lockResult !== null && $lockResult !== false && (int)$lockResult === 1;
+        } catch (Throwable $e) {
+            $report['errors'][] = $e->getMessage();
+            return $done('lock_failed');
+        }
+        if (!$report['lock']['acquired']) {
+            return $done('locked');
+        }
+
+        $errors = []; $warnings = []; $claimedZoneIds = []; $pendingClaimedIds = []; $publishedZoneIds = [];
+        $partialZoneIds = []; $zoneReports = []; $currentZoneReport = null;
+        $flags = ['claimedZoneIds' => []];
+        $run = [
+            'messages' => &$messages, 'errors' => &$errors, 'warnings' => &$warnings,
+            'claimedZoneIds' => &$claimedZoneIds, 'pendingClaimedIds' => &$pendingClaimedIds,
+            'publishedZoneIds' => &$publishedZoneIds, 'partialZoneIds' => &$partialZoneIds,
+            'zoneReports' => &$zoneReports, 'currentZoneReport' => &$currentZoneReport, 'flags' => &$flags,
+        ];
+        $status = 'exception';
+
+        try {
+            try {
+                // Zonenname unter dem Lock frisch lesen (Umbenennung oder Löschung seit der Vorprüfung)
+                $stmt = $this->pdo->prepare("SELECT name FROM zones WHERE id = ?");
+                $stmt->execute([$zoneId]);
+                $freshName = $stmt->fetchColumn();
+                $stmt->closeCursor();
+
+                if ($freshName === false) {
+                    $outcome = 'zone_missing';
+                } else {
+                    $zoneName = (string)$freshName;
+                    $report['zoneName'] = $zoneName;
+                    $this->processZone($zoneId, $zoneName, false, $run);
+                    $outcome = $zoneReports[0]['outcome'] ?? null;
+                }
+
+                switch ($outcome) {
+                    case 'zone_missing':
+                        // Zone nach der Vorprüfung gelöscht: kein Publish-Ergebnis
+                        $status = 'not_found';
+                        break;
+                    case 'skipped':
+                        // processZone() überspringt bei changed = 0 und bei inzwischen gelöschter Zone:
+                        // nur eine vorhandene Zone gilt als bereits veröffentlicht
+                        $stmt = $this->pdo->prepare("SELECT 1 FROM zones WHERE id = ?");
+                        $stmt->execute([$zoneId]);
+                        $exists = $stmt->fetchColumn() !== false;
+                        $stmt->closeCursor();
+                        $status = $exists ? 'already_published' : 'not_found';
+                        break;
+                    case 'published':
+                        $report['changedReset'] = $this->resetPublishedZone($zoneId);
+                        // Während des Laufs erneut geändert (changed = 1): bleibt ausstehend
+                        $report['keptPending'] = !$report['changedReset'];
+                        $status = 'published';
+                        break;
+                    case 'partial':
+                    case 'failed':
+                        $this->markZonePending($zoneId);
+                        $status = $outcome;
+                        break;
+                    case 'generation_failed':
+                        $this->restoreClaimedZone($zoneId);
+                        $status = 'generation_failed';
+                        break;
+                    default: // claim_failed – wie Publish All: übernommenen Status (falls gesetzt) wiederherstellen
+                        $this->restoreClaimedZone($zoneId);
+                        $status = 'claim_failed';
+                        break;
+                }
+            } catch (Throwable $e) {
+                try {
+                    if ($this->pdo->inTransaction()) {
+                        $this->pdo->rollBack();
+                    }
+                } catch (Throwable $rollbackError) {
+                    // Rollback nicht möglich: Wiederherstellung wird dennoch versucht
+                }
+                try {
+                    foreach ($claimedZoneIds as $cid) {
+                        $this->restoreClaimedZone($cid);
+                    }
+                } catch (Throwable $restoreError) {
+                    $this->log('error', "[publish] Publish-Status konnte nicht wiederhergestellt werden (Status 2 bleibt erhalten): " . $restoreError->getMessage());
+                }
+                $report['exception'] = $e->getMessage();
+                $messages[] = new ServiceMessage('error', 'publish.exception', ['detail' => $e->getMessage()]);
+                $status = 'exception';
+            }
+        } finally {
+            try {
+                $stmtUnlock = $this->pdo->prepare("SELECT RELEASE_LOCK(?)");
+                $stmtUnlock->execute([self::LOCK_NAME]);
+                $releaseResult = $stmtUnlock->fetchColumn();
+                $report['lock']['releaseResult'] = ($releaseResult === null || $releaseResult === false) ? null : (int)$releaseResult;
+                $report['lock']['released'] = $report['lock']['releaseResult'] === 1;
+            } catch (Throwable $e) {
+                $report['lock']['released'] = false;
+                $report['lock']['releaseException'] = true;
+                $report['lock']['releaseError'] = $e->getMessage();
+            }
+        }
+
+        $report['errors'] = array_merge($report['errors'], $errors);
+        $report['warnings'] = $warnings;
+
+        return $done($status);
+    }
+
+    /**
+     * Verarbeitet eine Zone eines Publish-Laufs – gemeinsame Logik von publishAll() und publishZone():
+     * changed übernehmen (1|2 -> 2), Zonendatei generieren/validieren (SOA-Serial in eigener Transaktion des
+     * Generators, vor jeder Verteilung festgeschrieben), Zone und Conf verteilen und das Ergebnis einordnen.
+     * Der Abschluss der Flags (2 -> 0, Teilfehler -> 1, Fehler 2 -> 1) erfolgt beim Aufrufer.
+     *
+     * Ergebnis im Laufzustand $run (per Referenz): Meldungen, Fehler/Warnungen, Zonenbericht mit outcome
+     * claim_failed | skipped | generation_failed | published | partial | failed, sowie die ID in
+     * claimedZoneIds, pendingClaimedIds, publishedZoneIds bzw. partialZoneIds.
+     *
+     * @param bool  $fullRebuild true = übernommener Full-Rebuild (Zone auch ohne changed verarbeiten)
+     * @param array $run         Laufzustand (Schlüssel siehe publishAll())
+     */
+    private function processZone(int $zoneId, string $zoneName, bool $fullRebuild, array &$run): void
+    {
+        $zoneReport = ['id' => $zoneId, 'name' => $zoneName, 'outcome' => null];
+        $run['currentZoneReport'] = $zoneReport;
+
+        // 4. changed vor der Generierung übernehmen: 1 oder 2 -> 2
+        $run['claimedZoneIds'][] = $zoneId;
+        $run['flags']['claimedZoneIds'] = $run['claimedZoneIds'];
+        try {
+            $this->pdo->prepare("UPDATE zones SET changed = 2 WHERE id = ? AND changed <> 0")->execute([$zoneId]);
+            $stmtChanged = $this->pdo->prepare("SELECT changed FROM zones WHERE id = ?");
+            $stmtChanged->execute([$zoneId]);
+            $zoneChanged = $stmtChanged->fetchColumn();
+        } catch (Throwable $e) {
+            $run['errors'][] = "Zone $zoneName: Publish-Status konnte nicht übernommen werden: " . $e->getMessage();
+            $this->log('error', "[publish] Zone $zoneName: Publish-Status konnte nicht übernommen werden: " . $e->getMessage());
+            $run['messages'][] = new ServiceMessage('error', 'publish.zone_claim_failed', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+                'detail'   => $e->getMessage(),
+            ]);
+            $zoneReport['outcome'] = 'claim_failed';
+            $run['zoneReports'][] = $zoneReport;
+            $run['currentZoneReport'] = null;
+            return;
+        }
+
+        if ($zoneChanged !== false && (int)$zoneChanged === 2) {
+            $run['pendingClaimedIds'][] = $zoneId;
+        }
+
+        // Normaler changed-Lauf: Zone überspringen, wenn sie inzwischen veröffentlicht (0) oder gelöscht wurde
+        if (!$fullRebuild && ($zoneChanged === false || (int)$zoneChanged === 0)) {
+            $zoneReport['outcome'] = 'skipped';
+            $run['zoneReports'][] = $zoneReport;
+            $run['currentZoneReport'] = null;
+            return;
+        }
+
+        // Zonendatei generieren und validieren (SOA-Serial in eigener Transaktion des Generators)
+        $validation = $this->backend->generateZone($zoneId);
+
+        if (($validation['status'] ?? null) === 'error') {
+            $run['errors'][] = "Zone $zoneName: " . ($validation['output'] ?? '');
+            $run['messages'][] = new ServiceMessage('error', 'publish.zone_generation_failed', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+                'output'   => (string)($validation['output'] ?? ''),
+            ]);
+            $zoneReport['outcome'] = 'generation_failed';
+            $run['zoneReports'][] = $zoneReport;
+            $run['currentZoneReport'] = null;
+            return;
+        }
+
+        if (($validation['status'] ?? null) === 'warning') {
+            $run['warnings'][] = "Zone $zoneName: " . ($validation['output'] ?? '');
+            $run['messages'][] = new ServiceMessage('warning', 'publish.zone_generation_warning', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+                'output'   => (string)($validation['output'] ?? ''),
+            ]);
+        }
+
+        $path = $validation['path'] ?? null;
+
+        // Zonendatei verteilen
+        $distResult = $this->backend->distributeZone($zoneId, $path);
+        $distErrors = (array)($distResult['errors'] ?? []);
+        $zoneFailed = false;
+        if (($distResult['status'] ?? null) === 'error') {
+            foreach ($distErrors as $e) {
+                $run['errors'][] = "Zone $zoneName: $e";
+                $this->log('error', "[publish] $e");
+            }
+            $zoneFailed = true;
+            $run['messages'][] = new ServiceMessage('error', 'publish.zone_distribution_failed', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+                'errors'   => array_values($distErrors),
+            ]);
+        } elseif (($distResult['status'] ?? null) === 'warning') {
+            foreach ($distErrors as $e) {
+                $run['warnings'][] = "Zone $zoneName: $e";
+                $this->log('warning', "[publish] $e");
+            }
+            $run['messages'][] = new ServiceMessage('warning', 'publish.zone_distribution_warning', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+                'errors'   => array_values($distErrors),
+            ]);
+        }
+        if (!empty($distResult['output'])) {
+            $this->log('info', "[publish] {$distResult['output']}");
+        }
+
+        // Konfigurationsdatei (.conf) erzeugen und verteilen
+        $confResult = $this->backend->distributeZoneConf($zoneName);
+        $confErrors = (array)($confResult['errors'] ?? []);
+        $confStatus = $confResult['status'] ?? '';
+        $confFailed = false;
+        $confWarned = false;
+        if (!empty($confErrors)) {
+            foreach ($confErrors as $e) {
+                $run['warnings'][] = "Zone $zoneName (conf): $e";
+                $this->log('warning', "[publish] $e");
+            }
+            $confWarned = true;
+        }
+        if (!empty($confResult['output'])) {
+            if ($confStatus === 'warning') {
+                $run['warnings'][] = "Zone $zoneName (conf): " . $confResult['output'];
+                $this->log('warning', "[publish] " . $confResult['output']);
+                $confWarned = true;
+            } elseif ($confStatus === 'error') {
+                $run['errors'][] = "Zone $zoneName (conf): " . $confResult['output'];
+                $this->log('error', "[publish] " . $confResult['output']);
+                $confFailed = true;
+            } else {
+                $this->log('info', "[publish] " . $confResult['output']);
+            }
+        }
+        if ($confFailed) {
+            $zoneFailed = true;
+            $run['messages'][] = new ServiceMessage('error', 'publish.zone_conf_failed', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+                'errors'   => array_values($confErrors),
+                'output'   => (string)$confResult['output'],
+            ]);
+        } elseif ($confWarned) {
+            $run['messages'][] = new ServiceMessage('warning', 'publish.zone_conf_warning', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+                'errors'   => array_values($confErrors),
+                'output'   => (string)($confResult['output'] ?? ''),
+            ]);
+        }
+
+        // Zone nur als veröffentlicht werten, wenn Zone- und Conf-Verteilung vollständig erfolgreich waren
+        $confOk = $confStatus === 'ok' && empty($confErrors);
+        if (($distResult['status'] ?? '') === 'ok' && $confOk) {
+            $run['publishedZoneIds'][] = $zoneId;
+            $zoneReport['outcome'] = 'published';
+            $run['messages'][] = new ServiceMessage('success', 'publish.zone_published', [
+                'zoneId'   => $zoneId,
+                'zoneName' => $zoneName,
+            ]);
+        } else {
+            $run['partialZoneIds'][] = $zoneId;
+            $zoneReport['outcome'] = $zoneFailed ? 'failed' : 'partial';
+            if (!$zoneFailed) {
+                $run['messages'][] = new ServiceMessage('warning', 'publish.zone_partial', [
+                    'zoneId'   => $zoneId,
+                    'zoneName' => $zoneName,
+                ]);
+            }
+        }
+        $run['zoneReports'][] = $zoneReport;
+        $run['currentZoneReport'] = null;
+    }
+
+    /* ---------------------------------------------------------------------------------------------- */
+    /* Gemeinsame Abschlussregeln für changed (Publish All und Publish Zone)                           */
+    /* ---------------------------------------------------------------------------------------------- */
+
+    /** Vollständig verteilt: ausschließlich das eigene 2 -> 0; ein zwischenzeitlich gesetztes 1 bleibt stehen */
+    private function resetPublishedZone(int $zoneId): bool
+    {
+        $stmt = $this->pdo->prepare("UPDATE zones SET changed = 0 WHERE id = ? AND changed = 2");
+        $stmt->execute([$zoneId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    /** Teilweise bzw. nicht verteilt: Zone bleibt für einen späteren Publish ausstehend (changed = 1) */
+    private function markZonePending(int $zoneId): void
+    {
+        $this->pdo->prepare("UPDATE zones SET changed = 1 WHERE id = ?")->execute([$zoneId]);
+    }
+
+    /** Lauf gescheitert: übernommenes 2 -> 1 wiederherstellen */
+    private function restoreClaimedZone(int $zoneId): bool
+    {
+        $stmt = $this->pdo->prepare("UPDATE zones SET changed = 1 WHERE id = ? AND changed = 2");
+        $stmt->execute([$zoneId]);
+        return $stmt->rowCount() > 0;
     }
 
     /**

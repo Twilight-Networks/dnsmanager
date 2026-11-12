@@ -1,6 +1,6 @@
 # DNS Manager – Core-/UI-Trennung: Architektur-Inventar und Restarbeiten
 
-Stand: 12.11.2026, Basis `main` = `b41a34d` (nach Paket 3). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
+Stand: 12.11.2026, Basis `main` = `5f7bd6a` (nach Paket 4a). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
 „vollständige Trennung der Fachlogik von der Weboberfläche“. Es wird mit jedem Arbeitspaket aktualisiert.
 
 **Legende:**
@@ -42,7 +42,7 @@ Stand: 12.11.2026, Basis `main` = `b41a34d` (nach Paket 3). Dieses Dokument ist 
 | Publish (alle Zonen) | ✅ / 🔧 | `PublishService` (Advisory-Lock, Tri-State `bind_dirty`/`changed`), `PublishBackend` | Generator/Distributor hinter `LegacyBindPublishBackend` (siehe 3.4) |
 | **Server** | ✅ **mit Paket 1** | `ServerService` (anlegen, ändern inkl. Topologie-Lock, NS/Glue-Neuaufbau und `bind_dirty`, löschen, BIND-Reload), `ServerReadService` (Liste, Bearbeitungsdaten, Serverdiagnosen), `ServerControlBackend` + `LegacyAgentServerControlBackend` | – (NS/Glue-Neuaufbau seit 4a atomar über `BindZoneBuildBackend`) |
 | DynDNS-Konten | ✅ **mit Paket 2** | `DyndnsAccountService`, `DyndnsReadService` (auf Basis `dyndns_guard.php`) | – |
-| DynDNS-Update-API | ✅ **mit Paket 2** / 🔧 | `DyndnsUpdateService`, `DyndnsPublishBackend` + `LegacyDyndnsPublishBackend` | Einzel-Publish über `publish_single.php` (Web-Bootstrap, globale Verbindung; Paket 4) |
+| DynDNS-Update-API | ✅ **mit Paket 2/4b** | `DyndnsUpdateService` (Commit vor Publish, Retry ausstehender Publishes), Veröffentlichung über `PublishService::publishZone()` | – |
 | Monitoring/Diagnose | ❌ | – | siehe 3.5 |
 | Dashboard/Layout/System-Health | ❌ | – | siehe 3.5 |
 | Authentifizierung | ❌ | Revalidierung (S3) DB-gestützt, aber Login an Session gebunden | siehe 3.5 |
@@ -77,7 +77,7 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - **Kontenverwaltung:** `DyndnsAccountService` (`createAccount`, `updateAccount`, `changePassword`, `deleteAccount`) mit unveränderter Fachlogik aus den vier Actions: Regeln, Reihenfolge, Hash-Verfahren, Record-Behandlung, Rebuild in derselben Transaktion über `ZoneBuildBackend::validateAndFlag()`. Die Actions sind dünne Adapter; Toasts, Logtexte und Redirects sind unverändert (Hilfe `inc/web/dyndns_messages.php`).
 - **Lesen:** `DyndnsReadService` (`listAccounts` ohne `password_hash`, `listZonesForCreate`, `listZonesForEdit`); `pages/dyndns.php` und beide Formulare lesen darüber.
 - **Update-API:** `DyndnsUpdateService` (authentifizieren, sperren, planen, anwenden, validieren, publizieren). Der Endpunkt `api/v1/dyndns/update.php` liest nur noch HTTP-Basic-Daten und Parameter, schreibt die bisherigen Logzeilen und gibt das DynDNS-Antwortprotokoll mit den bisherigen HTTP-Status/-Headern aus.
-- **Einzel-Publish** über die neue Schnittstelle `DyndnsPublishBackend` und den Adapter `LegacyDyndnsPublishBackend` (unverändert `publish_single_zone()`, gleiche Verbindung erzwungen).
+- **Einzel-Publish:** seit Paket 4b über `PublishService::publishZone()` (siehe 3.4); `DyndnsPublishBackend`, `LegacyDyndnsPublishBackend` und `publish_single.php` sind entfernt.
 - **Berechtigung** nach DB-Stand (aktiver Admin): in der Transaktion unter `users … LOCK IN SHARE MODE` vor `dyndnsLockZones()`; lesend über `ActorAccess`.
 - **Kein Protokoll, keine Sprachschlüssel im Core:**
   - `DyndnsUpdateService` liefert strukturierte Ergebnisse (`rejected` mit `credentialsInvalid`, `done` mit `results` je Adressfamilie: `type`, `ip`, `changed`). Erst `api/v1/dyndns/update.php` übersetzt sie in `good`/`nochg`/`badauth`/`dnserr`.
@@ -86,11 +86,11 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 **Bewusst unverändert** (Befunde, keine Verhaltensänderung in Paket 2):
 - S30: keine Mindestlänge beim Anlegen/Ändern;
 - S31: Timing-Unterschied in der Authentifizierung;
-- S32: Publish vor dem Commit ohne Advisory-Lock;
+- S32: Publish vor dem Commit ohne Advisory-Lock (**mit Paket 4b behoben**, siehe 3.4);
 - Passwortänderung ohne Existenzprüfung des Accounts (F3);
 - Rollenprüfung in `pages/dyndns.php` erst nach dem Layout (S-Befund der Seite, siehe Inventar Abschnitt 6).
 
-**Offen** für Paket 4: `publish_single.php` lädt den Web-Bootstrap und nutzt die globale Verbindung. `DyndnsActionError`, `DyndnsApiReject` und `dyndnsLangKey()` in `dyndns_guard.php` werden nicht mehr verwendet und können mit Paket 4 entfallen.
+**Offen:** `DyndnsActionError`, `DyndnsApiReject` und `dyndnsLangKey()` in `dyndns_guard.php` werden nicht mehr verwendet (Bereinigung in Paket 6).
 
 ### 3.3 Records und Zonen-Reste (Paket 3 – erledigt, PR #57, `main` `b41a34d`)
 
@@ -112,12 +112,12 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - In `helpers.php` ist `validatePassword()` ungenutzt (Bereinigung in Paket 6); die `rebuild_*`-Funktionen sind mit 4a entfernt.
 - Die DKIM-Datei-Prüfung in `record_add.php` (Upload, Dateiendung, verbotene Zeichenfolgen) ist Transportlogik und bleibt im Adapter.
 
-### 3.4 BIND-/Publish-Infrastruktur und Legacy-Adapter (Paket 4 – 4a Draft-PR, 4b offen)
+### 3.4 BIND-/Publish-Infrastruktur und Legacy-Adapter (Paket 4 – 4a erledigt, PR #58, `main` `5f7bd6a`; 4b Draft-PR)
 
 **Erledigt mit 4a:**
 - **Keine globale Verbindung, kein Web-Bootstrap mehr:**
   - Generator (`generate_zone_file`, `generate_zone_conf_file`), Distributoren (`distribute_zone_file`, `distribute_zone_conf_file`, `distribute_zone_cleanup`) und `publish_single_zone()` erhalten Verbindung, Agent-Client und Arbeitsverzeichnis explizit.
-  - `publish_single.php` lädt kein `common.php` mehr.
+  - `publish_single.php` lädt kein `common.php` mehr (mit 4b vollständig entfernt).
   - `LegacyBindPublishBackend` und `LegacyDyndnsPublishBackend` verlangen kein `$GLOBALS['pdo']` mehr.
 - **Kein versteckter Publish-Pfad:** `distribute_zone_file()` erzeugt keine Zonendatei mehr selbst (bisher im Modus `publish` mit Serial-Erhöhung); ohne erzeugte Datei liefert es einen Fehler.
 - **Einheitlicher Agent-Zugriff:** `BindAgentClient` für `zone_sync`, `conf_sync`, `zone_cleanup` und `system/control` (bisheriger `apiPostJson()`). Zeitgrenzen und Antwortauswertung bleiben unverändert. `inc/api_client.php` ist entfernt.
@@ -133,8 +133,15 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
   - Die Records-Actions übergeben das Backend statt des `helpers.php`-Callbacks.
   - `ServerService` führt den Neuaufbau bei Änderung von Name/DNS-IP in derselben Transaktion durch: Topologie-Lock → users (S) → servers (X) → zones (X, aufsteigend) → Neuaufbau → Commit. Publish All (gleicher Lock) sieht damit nie einen Zwischenstand.
 
-**Offen (4b, S32):**
-- DynDNS-Einzelpublish: Verteilung vor dem Commit, ohne Advisory-Lock, `changed = 0` ohne Tri-State; Neuordnung über `PublishService::publishZone()`.
+**Erledigt mit 4b (S32):**
+- **Reihenfolge DynDNS:** Transaktion (Prüfung, Schreiben, Zonenprüfung, `changed = 1`) → **Commit** → `PublishService::publishZone()`. Ein Verteilungsfehler rollt die festgeschriebene Änderung nicht zurück.
+- **Gemeinsame Zonenlogik:** `processZone()` (Claim 1|2 → 2, Generierung mit Serial-Commit vor der Verteilung, Zone- und Conf-Verteilung, Einordnung) und die Abschlussregeln (`resetPublishedZone` nur 2 → 0, `markZonePending` → 1, `restoreClaimedZone` 2 → 1) nutzen Publish All und Publish Zone gemeinsam.
+- **Lock:** derselbe Advisory-Lock wie Publish All, Wartezeit beim Einzelpublish höchstens 5 s; belegt → Zone bleibt ausstehend.
+- **Statuswerte:** Eine während des Publish neu gesetzte Änderung (changed = 1) wird nie als veröffentlicht markiert. War die Zone zwischen Commit und Aufruf bereits veröffentlicht (changed = 0, z. B. durch Publish All), erfolgt keine erneute Veröffentlichung (`already_published`, Erfolg).
+- **Antworten:** vollständig veröffentlicht → `good <ip>`; zurückgestellt, teilweise oder nicht verteilt → `dnserr` (Änderung bleibt festgeschrieben). Ein Update mit unveränderten IPs wiederholt einen ausstehenden Publish der Zone (F1: bei Erfolg `good <ip>`; F2: die vollständige Zone einschließlich zwischenzeitlicher Admin-Änderungen). Ohne IP-Parameter `nochg` ohne Wiederholung (F3).
+- `bind_dirty` und Orphan-Cleanup bleiben beim Einzelpublish unberührt. Generator-Modus `dyndns`, `publish_single.php`, `LegacyDyndnsPublishBackend` und `DyndnsPublishBackend` sind entfernt.
+
+**Offen:**
 - Optional (Agent): Sperr- und Temporärdateien des Agenten in `/tmp` (S34, Agent-Teil); Serial-Prüfung im Agenten als spätere zusätzliche Absicherung.
 - Der Netzwerkzugriff im Monitoring bleibt in Paket 5.
 
@@ -193,7 +200,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | **1 Server** | `ServerService` (CRUD, BIND-Reload), `ServerReadService` (Liste, Bearbeitungsdaten, Serverdiagnosen), Actions und Seite als Adapter | **erledigt** (PR #55) |
 | **2 DynDNS** | `DyndnsAccountService` (anlegen, ändern, Passwort, löschen), `DyndnsReadService` (Liste ohne Hash, zulässige Zonen für beide Formulare), `DyndnsUpdateService` (API: authentifizieren, sperren, planen, anwenden, publizieren; Antwortprotokoll bleibt im Endpunkt). Die DynDNS-eigenen Record-Mutationen werden im Service gebündelt, mit den Sperrfunktionen aus `dyndns_guard`. Das Einzel-Publish wird über eine Schnittstelle mit **unverändertem** Verhalten angebunden. | **erledigt** (PR #56) |
 | **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **erledigt** (PR #57) |
-| **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **4a Draft-PR**; 4b (S32) offen |
+| **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **4a erledigt** (PR #58); **4b Draft-PR** |
 | **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | offen |
 | **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | offen |
 
@@ -211,7 +218,7 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | S29 | Das Bearbeitungsformular gibt den gespeicherten API-Token im HTML aus (`value` des Passwortfelds). Bei der Entkopplung bewusst beibehalten (`ServerReadService::getServerForEdit`). | `templates/server_edit_form.php` |
 | S30 | Keine serverseitige Mindestlänge für DynDNS-Passwörter beim Anlegen und Ändern | `DyndnsAccountService::createAccount`, `::updateAccount` (vorher `actions/dyndns_add.php`, `dyndns_update.php`) |
 | S31 | Benutzer-Enumeration über die Antwortzeit: kein Dummy-`password_verify` bei unbekanntem Benutzer | `inc/auth.php`, `api/v1/dyndns/update.php` |
-| S32 | DynDNS-Einzelpublish verteilt vor dem Commit unter Zeilensperre, ohne Publish-Advisory-Lock; `changed = 0` (nur bei vollständigem Erfolg) ohne Rücksicht auf `changed = 2`; gemeinsame `/tmp/dnsmanager_conf_{ip}`-Pfade mit Publish All. **Bewertung (12.11.2026): mittel/niedrig, nicht unmittelbar kritisch** – keine Rechteausweitung, keine Offenlegung, keine Injektion; Auslösung nur mit gültigen DynDNS-Zugangsdaten. Auswirkungen: (1) bei Fehler nach erfolgreicher Verteilung (Rollback) Abweichung DB ↔ BIND inkl. zurückgesetzter SOA-Serial, bis zum nächsten Publish; (2) Zonenzeile bis zu ~30 s je Server gesperrt (Verfügbarkeit); (3) gleichzeitiger Lauf mit Publish All kann `/tmp/dnsmanager_conf_{ip}` gegenseitig leeren → Fehler bzw. erneuter Publish nötig, kein falscher Inhalt (Dateiname je Zone). Behebung in Paket 4. | `inc/deploy/publish_single.php`, `bind_file_distributor.php` |
+| S32 | DynDNS-Einzelpublish verteilt vor dem Commit unter Zeilensperre, ohne Publish-Advisory-Lock; `changed = 0` (nur bei vollständigem Erfolg) ohne Rücksicht auf `changed = 2`; gemeinsame `/tmp/dnsmanager_conf_{ip}`-Pfade mit Publish All. **Bewertung (12.11.2026): mittel/niedrig, nicht unmittelbar kritisch** – keine Rechteausweitung, keine Offenlegung, keine Injektion; Auslösung nur mit gültigen DynDNS-Zugangsdaten. Auswirkungen: (1) bei Fehler nach erfolgreicher Verteilung (Rollback) Abweichung DB ↔ BIND inkl. zurückgesetzter SOA-Serial, bis zum nächsten Publish; (2) Zonenzeile bis zu ~30 s je Server gesperrt (Verfügbarkeit); (3) gleichzeitiger Lauf mit Publish All kann `/tmp/dnsmanager_conf_{ip}` gegenseitig leeren → Fehler bzw. erneuter Publish nötig, kein falscher Inhalt (Dateiname je Zone). Behebung in Paket 4. **Behoben mit 4b** (Commit vor Publish, `publishZone()` unter Advisory-Lock, Tri-State). | `inc/deploy/publish_single.php`, `bind_file_distributor.php` |
 | S33 | Zonenname geht ohne zusätzliche Prüfung in die BIND-`.conf` und in den Dateinamen (keine Abwehr wie S17) | `bind_file_generator.php` (`writeZoneConfFile`) – **behoben mit 4a** (`zone_name_is_safe`) |
 | S34 | Feste bzw. vorhersagbare `/tmp`-Pfade (`named-checkzone-error.log`, `dnsmanager_conf_{ip}`, Agent-Lock) | Generator, Distributor, Agent – **Generator/Distributor behoben mit 4a** (`BindWorkDir`); Agent-Teil offen |
 | S35 | Logout per GET ohne CSRF; Login überspringt die CSRF-Prüfung bei fehlendem Token | `logout.php`, `login.php` |
@@ -232,4 +239,5 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | 12.11.2026 | 2 | DynDNS-Kontenverwaltung, Lesezugriffe und Update-API entkoppelt (PR #56, gemergt als `426fd30`); S32 bewertet |
 | 12.11.2026 | 2 | Review-Korrektur PR #56: DynDNS-Protokoll und Sprachschlüssel aus dem Core entfernt; `/tmp`-Zonendateien (Paket 4) und Fundort S30 ergänzt |
 | 12.11.2026 | 3 | Records-Seite, Bearbeitungsformular, `record_update.php` und Content-Builder entkoppelt (PR #57, gemergt als `b41a34d`); `helpers.php` abgegrenzt; Abweichung D1 akzeptiert |
-| 12.11.2026 | 4a | BIND-/Publish-Infrastruktur entkoppelt (Draft-PR): explizite Abhängigkeiten, `BindAgentClient`, `BindWorkDir` (S34), `zone_name_is_safe` (S33), `BindZoneBuildBackend`, ServerService-NS/Glue atomar |
+| 12.11.2026 | 4a | BIND-/Publish-Infrastruktur entkoppelt (PR #58, gemergt als `5f7bd6a`; D4–D7 akzeptiert): explizite Abhängigkeiten, `BindAgentClient`, `BindWorkDir` (S34), `zone_name_is_safe` (S33), `BindZoneBuildBackend`, ServerService-NS/Glue atomar |
+| 12.11.2026 | 4b | S32: DynDNS-Einzelpublish nach dem Commit über `PublishService::publishZone()` mit gemeinsamer Zonenlogik, Lock und Tri-State; Retry ausstehender Publishes (Draft-PR) |
