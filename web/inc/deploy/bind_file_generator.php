@@ -311,7 +311,9 @@ ZONE;
             $pdo->rollBack();
         }
         // Ungültige Datei nicht liegen lassen (bisher blieb sie in den Modi publish/dyndns bestehen)
-        @unlink($zone_file_path);
+        if (is_file($zone_file_path)) {
+            unlink($zone_file_path);
+        }
         return [
             'status' => 'error',
             'output' => "named-checkzone fehlgeschlagen für $zone_name:\n" . trim($check_output),
@@ -329,7 +331,9 @@ ZONE;
             if ($tx_started && $pdo->inTransaction()) {
                 $pdo->rollBack();
             }
-            @unlink($zone_file_path);
+            if (is_file($zone_file_path)) {
+                unlink($zone_file_path);
+            }
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Speichern der Serialnummer: " . $e->getMessage(),
@@ -343,7 +347,9 @@ ZONE;
             $stmt = $pdo->prepare("UPDATE zones SET soa_serial = ? WHERE id = ?");
             $stmt->execute([$serial, $zone_id]);
         } catch (Throwable $e) {
-            @unlink($zone_file_path);
+            if (is_file($zone_file_path)) {
+                unlink($zone_file_path);
+            }
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Speichern der Serialnummer: " . $e->getMessage(),
