@@ -16,53 +16,28 @@
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../config/version.php';
 
-// Systemstatus laden, wenn eingeloggt
-if (isset($_SESSION['user_id'])) {
-    $stmt = $pdo->prepare("
-        SELECT
-            (SELECT bind_dirty FROM system_status WHERE id = :id) AS bind_dirty,
-            (SELECT COUNT(*) FROM zones WHERE changed <> :clean) AS changed_zones
-    ");
-    // changed/bind_dirty: 0 = sauber, 1 = wartet auf Publish, 2 = von Publish übernommen bzw.
-    // nicht sicher abgeschlossen (siehe publish_all.php). 1 und 2 gelten als dirty.
-    $stmt->execute([
-        'id' => 1,
-        'clean' => 0
-    ]);
-    $status = $stmt->fetch(PDO::FETCH_ASSOC);
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/status/SystemStatusReadService.php';
+require_once __DIR__ . '/../inc/app/status/DiagnosticReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
-    $dirty = $status['bind_dirty'] || $status['changed_zones'] > 0;
+// Systemstatus laden, wenn eingeloggt (SystemStatusReadService; 1 und 2 gelten als ausstehend)
+if (isset($_SESSION['user_id'])) {
+    $publishStatus = (new SystemStatusReadService($pdo))->getPublishStatus(actorFromSession());
+
+    $dirty = $publishStatus !== null && $publishStatus['pending'];
     $btn_class = $dirty ? 'btn-warning' : 'btn-secondary';
     $btn_text = $LANG['publish'];
 }
 
-// Prüfen, ob Fehler im Systemstatus vorliegen
+// Prüfen, ob Fehler im Systemstatus vorliegen (DiagnosticReadService, nur Admin)
 $system_has_errors = false;
 
 if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
-    $diag = getDiagnosticResults($pdo);
-
-    // Server-Prüfungen
-    foreach ($diag['server'] as $entry) {
-        if (
-            ($entry['zone_conf_status']['status'] ?? null) === 'error' ||
-            ($entry['server_status']['status'] ?? null) === 'error'
-        ) {
-            $system_has_errors = true;
-            break;
-        }
-    }
-
-    // Zonen-Prüfungen
-    if (!$system_has_errors) {
-        foreach ($diag['zone'] as $entry) {
-            $status = $entry['zone_status']['status'] ?? null;
-            if (in_array($status, ['error', 'not_found'], true)) {
-                $system_has_errors = true;
-                break;
-            }
-        }
-    }
+    $diagOverview = (new DiagnosticReadService($pdo, new ZoneAccess($pdo)))->getOverview(actorFromSession());
+    $system_has_errors = $diagOverview !== null
+        && ($diagOverview['summary']['confError'] || $diagOverview['summary']['serverError'] || $diagOverview['summary']['zoneError']);
 }
 
 ?>

@@ -13,6 +13,11 @@
 
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/diagnostics.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/status/DiagnosticReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
+require_once __DIR__ . '/../inc/web/diagnostics_view.php';
 
 // Zugriffsbeschränkung: Nur Administratoren dürfen diese Seite aufrufen (vor jeder Layout-Ausgabe)
 requireRole(['admin']);
@@ -64,8 +69,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['force_update'])) {
     }
 }
 
-// Diagnosedaten aus der Datenbank laden
-$diagnostics = getDiagnosticResults($pdo);
+// Diagnosedaten über den DiagnosticReadService (nur aktiver Admin), dargestellt in der bisherigen Struktur
+$diagnostics = diagnosticsLegacyView((new DiagnosticReadService($pdo, new ZoneAccess($pdo)))->getOverview(actorFromSession()));
 
 $conf_results = $diagnostics['server'];
 $zone_results = $diagnostics['zone'];
