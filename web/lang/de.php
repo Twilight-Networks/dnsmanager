@@ -418,6 +418,20 @@ return [
     'user_error_load_failed' => 'Benutzer konnte nicht geladen werden.',
     'user_updated' => 'Benutzer <strong>%s</strong> erfolgreich aktualisiert.',
     'user_error_update_failed' => 'Fehler beim Aktualisieren des Benutzers.',
+    // Kontostatus (S27, PR B)
+    'user_status' => 'Status',
+    'user_status_active' => 'aktiv',
+    'user_status_inactive' => 'deaktiviert',
+    'user_disable' => 'Deaktivieren',
+    'user_enable' => 'Reaktivieren',
+    'user_disable_confirm_title' => 'Konto deaktivieren',
+    'user_disable_confirm_text' => 'Konto „%s“ deaktivieren? Bestehende Sitzungen werden beendet; Daten und Zonenzuweisungen bleiben erhalten.',
+    'user_disabled' => 'Konto deaktiviert. Bestehende Sitzungen wurden beendet.',
+    'user_enabled' => 'Konto reaktiviert.',
+    'user_status_unchanged' => 'Der Kontostatus war bereits gesetzt.',
+    'user_error_disable_self' => 'Das eigene Konto kann nicht deaktiviert werden.',
+    'user_error_last_admin_disable' => 'Der letzte aktive Admin darf nicht deaktiviert werden.',
+    'user_error_status' => 'Der Kontostatus konnte nicht geändert werden.',
 
     // === zones.php ===
     'dns_zones' => 'DNS-Zonen',

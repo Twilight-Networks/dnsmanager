@@ -418,6 +418,20 @@ return [
     'user_error_load_failed' => 'Error al cargar el usuario.',
     'user_updated' => 'Usuario <strong>%s</strong> actualizado correctamente.',
     'user_error_update_failed' => 'Error al actualizar el usuario.',
+    // Estado de la cuenta (S27, PR B)
+    'user_status' => 'Estado',
+    'user_status_active' => 'activa',
+    'user_status_inactive' => 'desactivada',
+    'user_disable' => 'Desactivar',
+    'user_enable' => 'Reactivar',
+    'user_disable_confirm_title' => 'Desactivar cuenta',
+    'user_disable_confirm_text' => '¿Desactivar la cuenta «%s»? Las sesiones existentes se cerrarán; los datos y las asignaciones de zonas se conservan.',
+    'user_disabled' => 'Cuenta desactivada. Las sesiones existentes se han cerrado.',
+    'user_enabled' => 'Cuenta reactivada.',
+    'user_status_unchanged' => 'El estado de la cuenta ya estaba establecido.',
+    'user_error_disable_self' => 'No puede desactivar su propia cuenta.',
+    'user_error_last_admin_disable' => 'No se puede desactivar el último administrador activo.',
+    'user_error_status' => 'No se pudo cambiar el estado de la cuenta.',
 
     // === zones.php ===
     'dns_zones' => 'Zonas DNS',

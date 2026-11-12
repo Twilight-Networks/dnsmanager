@@ -418,6 +418,20 @@ return [
     'user_error_load_failed' => 'Failed to load user.',
     'user_updated' => 'User <strong>%s</strong> updated successfully.',
     'user_error_update_failed' => 'Error updating the user.',
+    // Account status (S27, PR B)
+    'user_status' => 'Status',
+    'user_status_active' => 'active',
+    'user_status_inactive' => 'disabled',
+    'user_disable' => 'Disable',
+    'user_enable' => 'Re-enable',
+    'user_disable_confirm_title' => 'Disable account',
+    'user_disable_confirm_text' => 'Disable account “%s”? Existing sessions will be ended; data and zone assignments are kept.',
+    'user_disabled' => 'Account disabled. Existing sessions have been ended.',
+    'user_enabled' => 'Account re-enabled.',
+    'user_status_unchanged' => 'The account status was already set.',
+    'user_error_disable_self' => 'You cannot disable your own account.',
+    'user_error_last_admin_disable' => 'The last active admin cannot be disabled.',
+    'user_error_status' => 'The account status could not be changed.',
 
     // === zones.php ===
     'dns_zones' => 'DNS Zones',
