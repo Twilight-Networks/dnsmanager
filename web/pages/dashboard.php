@@ -14,7 +14,15 @@
 
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/diagnostics.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/ZoneAccess.php';
+require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
+require_once __DIR__ . '/../inc/app/status/SystemStatusReadService.php';
+require_once __DIR__ . '/../inc/app/status/DiagnosticReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 include __DIR__ . '/../templates/layout.php';
+
+$dashboardActor = actorFromSession();
 ?>
 
 <br>
@@ -23,18 +31,12 @@ include __DIR__ . '/../templates/layout.php';
 
 <?php if ($_SESSION['role'] === 'admin'): ?>
     <?php
-    // Benutzer, Zonen, Records zählen
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM users");
-    $stmt->execute();
-    $users = $stmt->fetchColumn();
-
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM zones");
-    $stmt->execute();
-    $zones = $stmt->fetchColumn();
-
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM records");
-    $stmt->execute();
-    $records = $stmt->fetchColumn();
+    // Benutzer, Zonen, Records zählen (SystemStatusReadService, nur aktiver Admin)
+    $counts = (new SystemStatusReadService($pdo))->getDashboardCounts($dashboardActor)
+        ?? ['users' => 0, 'zones' => 0, 'records' => 0];
+    $users = $counts['users'];
+    $zones = $counts['zones'];
+    $records = $counts['records'];
 
     // Systemstatus prüfen (detailliert)
     $php_version_supported = version_compare(get_php_version(), '8.1', '>=');
@@ -42,41 +44,13 @@ include __DIR__ . '/../templates/layout.php';
     $file_issues = check_all_file_permissions(dirname(__DIR__));
     $config_issues = check_config_validity();
 
-    $diag = getDiagnosticResults($pdo);
-    $conf_results = $diag['server'];
-    $zone_results = $diag['zone'];
-
-    $has_conf_errors = false;
-    $has_conf_warnings = false;
-    foreach ($conf_results as $entry) {
-        if (!isset($entry['zone_conf_status'])) {
-            continue;
-        }
-
-        $status = $entry['zone_conf_status']['status'];
-        if ($status === 'error') {
-            $has_conf_errors = true;
-            break;
-        } elseif ($status === 'warning') {
-            $has_conf_warnings = true;
-        }
-    }
-
-    $has_errors = false;
-    $has_warnings = false;
-    foreach ($zone_results as $entry) {
-        if (!isset($entry['zone_status'])) {
-            continue;
-        }
-
-        $status = $entry['zone_status']['status'];
-        if (in_array($status, ['error', 'not_found'], true)) {
-            $has_errors = true;
-            break;
-        } elseif ($status === 'warning') {
-            $has_warnings = true;
-        }
-    }
+    // Monitoring-Diagnosen: fachliche Auswertung im DiagnosticReadService
+    $diagSummary = (new DiagnosticReadService($pdo, new ZoneAccess($pdo)))->getOverview($dashboardActor)['summary']
+        ?? ['confError' => false, 'confWarning' => false, 'serverError' => false, 'zoneError' => false, 'zoneWarning' => false];
+    $has_conf_errors = $diagSummary['confError'];
+    $has_conf_warnings = $diagSummary['confWarning'];
+    $has_errors = $diagSummary['zoneError'];
+    $has_warnings = $diagSummary['zoneWarning'];
 
     $system_has_errors =
         !$php_version_supported ||
@@ -125,10 +99,17 @@ include __DIR__ . '/../templates/layout.php';
 
 <?php if ($_SESSION['role'] === 'zoneadmin'): ?>
     <?php
-    // Eigene Zonen abrufen
-    $stmt = $pdo->prepare("SELECT z.id, z.name FROM zones z JOIN user_zones uz ON uz.zone_id = z.id WHERE uz.user_id = ?");
-    $stmt->execute([$_SESSION['user_id']]);
-    $zones = $stmt->fetchAll();
+    // Eigene Zonen abrufen (ZoneReadService: aktuelle Zuweisung, vollständige Liste, nach Name sortiert)
+    $zoneReadService = new ZoneReadService($pdo, new ZoneAccess($pdo));
+    $zones = [];
+    $offset = 0;
+    do {
+        $page = $zoneReadService->listZones($dashboardActor, ZoneReadService::MAX_LIMIT, $offset);
+        foreach ($page['zones'] as $z) {
+            $zones[] = ['id' => $z['id'], 'name' => $z['name']];
+        }
+        $offset += ZoneReadService::MAX_LIMIT;
+    } while ($page['hasMore']);
     ?>
     <h4><?= $LANG['my_zones'] ?></h4>
     <ul>
