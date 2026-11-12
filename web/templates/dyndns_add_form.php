@@ -26,9 +26,8 @@ if (!defined('IN_APP')) {
     exit;
 }
 
-// Zonen laden, die DynDNS erlauben
-$stmt = $pdo->query("SELECT id, name FROM zones WHERE allow_dyndns = 1 ORDER BY name");
-$zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// Zonen laden, die DynDNS erlauben (DyndnsReadService und Akteur aus pages/dyndns.php)
+$zones = $dyndnsReadService->listZonesForCreate($actor);
 ?>
 
 <hr class="my-4">
