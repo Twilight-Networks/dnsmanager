@@ -23,7 +23,12 @@
  *   Topologie-Lock; Serverzuweisungen ändern sich nur unter demselben Lock (ZoneService).
  * - Anlegen: Transaktion → users (S) → servers (X, vorhandene lokale Server) → INSERT. Die Prüfung "nur ein
  *   lokaler Server" läuft für die bisherige Meldungsreihenfolge zusätzlich ungesperrt in der Validierung und
- *   wird auf dem gesperrten Stand wiederholt.
+ *   wird mit SELECT … WHERE is_local = 1 FOR UPDATE wiederholt.
+ *   Einschränkung (nicht nachgewiesen race-sicher): Es gibt weder einen UNIQUE-Schutz noch einen Index auf
+ *   is_local. Unter READ COMMITTED sperrt die Abfrage nur vorhandene passende Zeilen (keine Gap-Locks); zwei
+ *   gleichzeitige Anlagen eines lokalen Servers ohne bereits vorhandenen lokalen Server können dann beide
+ *   gelingen. Unter REPEATABLE READ verhindern die Next-Key-Locks des Tabellenscans das voraussichtlich, ein
+ *   Nachweis dafür liegt nicht vor. Die Wiederholung verkleinert das Fenster, schließt es nicht garantiert.
  * - Löschen: Transaktion → users (S) → servers (X, Zielzeile) → zone_servers (S) → Löschen von Diagnosen,
  *   Diagnoseprotokoll und Server. Die Zuweisungsprüfung erfolgt damit auf dem gesperrten Stand (eine
  *   parallele Zuweisung wartet auf die Serverzeile, zone_servers.server_id hat ON DELETE CASCADE).

@@ -41,15 +41,26 @@ if ($_SESSION['role'] !== 'admin') {
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
 $add_new = isset($_GET['add_new']) && $_GET['add_new'] === '1';
 
-// DynDNS-Accounts laden
-$stmt = $pdo->prepare("
-    SELECT d.*, z.name AS zone_name
-    FROM dyndns_accounts d
-    JOIN zones z ON d.zone_id = z.id
-    ORDER BY d.hostname
-");
-$stmt->execute();
-$accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// DynDNS-Accounts laden (DyndnsReadService: nur aktive Admins laut Datenbank, explizite Spalten, kein
+// password_hash). Übersetzung in die bisherige Struktur für die unveränderte Darstellung und die Formulare.
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/dyndns/DyndnsReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
+$actor = actorFromSession();
+$dyndnsReadService = new DyndnsReadService($pdo);
+$accounts = [];
+foreach ($dyndnsReadService->listAccounts($actor) as $a) {
+    $accounts[] = [
+        'id'           => $a['id'],
+        'username'     => $a['username'],
+        'hostname'     => $a['hostname'],
+        'zone_id'      => $a['zoneId'],
+        'zone_name'    => $a['zoneName'],
+        'current_ipv4' => $a['currentIpv4'],
+        'current_ipv6' => $a['currentIpv6'],
+        'last_update'  => $a['lastUpdate'],
+    ];
+}
 ?>
 
 <br><br>

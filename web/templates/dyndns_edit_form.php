@@ -33,20 +33,14 @@ if (!isset($edit_account)) {
 // Auswählbare Zonen: freigegebene Forward-Zonen sowie IMMER die aktuelle Zone des Accounts.
 // Fehlt die aktuelle Zone in der Liste (z. B. DynDNS dort inzwischen deaktiviert), würde der Browser
 // stillschweigend die erste Option wählen und beim Speichern die Zone wechseln.
+// (DyndnsReadService und Akteur aus pages/dyndns.php)
 $currentZoneId = (int)$edit_account['zone_id'];
-$stmt = $pdo->prepare("
-    SELECT id, name, type, allow_dyndns
-    FROM zones
-    WHERE (allow_dyndns = 1 AND type = 'forward') OR id = ?
-    ORDER BY name
-");
-$stmt->execute([$currentZoneId]);
-$zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$zones = $dyndnsReadService->listZonesForEdit($actor, $currentZoneId);
 
 $currentZoneEligible = false;
 foreach ($zones as $z) {
-    if ((int)$z['id'] === $currentZoneId) {
-        $currentZoneEligible = (int)$z['allow_dyndns'] === 1 && $z['type'] === 'forward';
+    if ($z['id'] === $currentZoneId) {
+        $currentZoneEligible = $z['eligible'];
     }
 }
 ?>
