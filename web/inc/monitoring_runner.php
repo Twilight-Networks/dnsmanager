@@ -6,7 +6,8 @@
  *
  * Baut den MonitoringService mit den Infrastruktur-Adaptern (AgentMonitoringBackend, PhpMailerNotifier) auf,
  * führt ihn aus und schreibt die bisherigen Logzeilen. Rückgabe wie bisher der Exit-Code des CLI-Skripts:
- * 0 = erfolgreich, 1 = Fehler (E-Mail-Versand fehlerhaft, Laufsperre nicht verfügbar).
+ * 0 = erfolgreich, 1 = Fehler (E-Mail-Versand fehlerhaft, Laufsperre nicht verfügbar, unerwarteter Fehler –
+ * Status 'exception', protokolliert; keine Exception nach außen).
  * Ein bereits laufender Lauf (Laufsperre belegt) ergibt 'locked' (Cron: übersprungen).
  *
  * Voraussetzung: Konfiguration (ui_config.php) und logging.php sind geladen.
@@ -28,13 +29,21 @@ function runMonitoringWithLog(PDO $pdo, int $lockWaitSeconds): array
 
     appLog('info', 'Monitoring-Run gestartet');
 
-    $service = new MonitoringService(
-        $pdo,
-        new AgentMonitoringBackend(),
-        new PhpMailerNotifier($logger),
-        defined('MAILER_ENABLED') && MAILER_ENABLED === true
-    );
-    $result = $service->run($lockWaitSeconds);
+    // Unerwartete Fehler aus Aufbau und Ausführung (z. B. Datenbankfehler außerhalb der Prüfung je Server/Zone)
+    // werden wie bisher ein fehlgeschlagener CLI-Prozess behandelt: protokolliert, Exit-Code 1 (Web: Fehler-Toast).
+    // Die Laufsperre gibt MonitoringService::run() im finally frei, spätestens das Verbindungsende.
+    try {
+        $service = new MonitoringService(
+            $pdo,
+            new AgentMonitoringBackend(),
+            new PhpMailerNotifier($logger),
+            defined('MAILER_ENABLED') && MAILER_ENABLED === true
+        );
+        $result = $service->run($lockWaitSeconds);
+    } catch (Throwable $e) {
+        appLog('error', 'Monitoring-Run abgebrochen (unerwarteter Fehler): ' . get_class($e) . ': ' . $e->getMessage());
+        return ['exitCode' => 1, 'status' => 'exception'];
+    }
 
     $status = 'error';
     foreach ($result->messages as $message) {
