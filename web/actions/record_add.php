@@ -9,7 +9,7 @@
  * - Rollenbasierte Zugriffskontrolle: Admins können systemweit schreiben,
  *   Zone-Admins nur innerhalb der ihnen zugewiesenen Zonen.
  * - Unterstützt verschiedenste Record-Typen (A, AAAA, MX, DKIM, SRV etc.)
- *   und verarbeitet diese über `record_content_builder.php`.
+ *   und setzt sie über `RecordContentBuilder` (inc/app/records) zusammen.
  * - Eingabedaten werden validiert und in die Datenbank übernommen.
  *
  * Zugriff:
@@ -20,7 +20,8 @@
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
-require_once __DIR__ . '/../inc/record_content_builder.php';
+require_once __DIR__ . '/../inc/app/records/RecordContentBuilder.php';
+require_once __DIR__ . '/../inc/web/record_messages.php';
 require_once __DIR__ . '/../inc/dkim_helpers.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
@@ -50,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $is_dkim = !empty($_POST['is_dkim']); // z. B. aus hidden input
 
     // Sonderfall: Wenn DKIM als TXT gespeichert wird, aber speziell validiert werden muss
-    // (Validator-Typ wird vor buildRecordContent() aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
+    // (Validator-Typ wird vor dem Zusammensetzen aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
     $validator_type = ($raw_type === 'TXT' && $is_dkim) ? 'DKIM' : $raw_type;
 
     // Überprüfen, ob eine DKIM-Datei hochgeladen wurde
@@ -118,12 +119,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // Content zusammensetzen (inkl. spezieller Typ-Logik)
-    $result = buildRecordContent($raw_type, $_POST);
+    $result = RecordContentBuilder::build($raw_type, $_POST);
 
-    if (isset($result['error'])) {
+    if (isset($result['errorCode'])) {
         toastError(
             $LANG['record_error_build_failed'],
-            "Fehler beim Verarbeiten des Record-Typs '{$raw_type}': {$result['error']}"
+            "Fehler beim Verarbeiten des Record-Typs '{$raw_type}': " . recordBuildErrorText($result['errorCode'])
         );
         header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
         exit;

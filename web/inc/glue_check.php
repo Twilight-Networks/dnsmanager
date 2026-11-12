@@ -80,6 +80,27 @@ function isNsRecordReferencedByGlue(array $ns_record, array $all_records, string
  */
 function isProtectedNsRecord(array $ns_record, array $all_records, string $zone_name, PDO $pdo, int $zone_id): bool
 {
+    // Ist per Glue referenziert? (ohne Datenbankzugriff, wie bisher vor der Serverabfrage)
+    if (isNsRecordReferencedByGlue($ns_record, $all_records, $zone_name)) {
+        return true;
+    }
+
+    // Alle autoritativen Servernamen laden
+    $stmt = $pdo->prepare("SELECT name FROM servers s JOIN zone_servers zs ON zs.server_id = s.id WHERE zs.zone_id = ?");
+    $stmt->execute([$zone_id]);
+    $server_names = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'name');
+
+    return isProtectedNsRecordForServers($ns_record, $all_records, $zone_name, $server_names);
+}
+
+/**
+ * Wie isProtectedNsRecord(), aber ohne Datenbankzugriff: Die Namen der der Zone zugewiesenen Server werden
+ * übergeben (z. B. vom RecordReadService in derselben berechtigten Abfrage gelesen).
+ *
+ * @param array<int, string> $server_names Namen der Server aus zone_servers dieser Zone
+ */
+function isProtectedNsRecordForServers(array $ns_record, array $all_records, string $zone_name, array $server_names): bool
+{
     // Ist per Glue referenziert?
     if (isNsRecordReferencedByGlue($ns_record, $all_records, $zone_name)) {
         return true;
@@ -88,13 +109,8 @@ function isProtectedNsRecord(array $ns_record, array $all_records, string $zone_
     // Hostname extrahieren (ohne Punkt)
     $target = rtrim($ns_record['content'], '.');
 
-    // Alle autoritativen Servernamen laden
-    $stmt = $pdo->prepare("SELECT name FROM servers s JOIN zone_servers zs ON zs.server_id = s.id WHERE zs.zone_id = ?");
-    $stmt->execute([$zone_id]);
-    $server_names = array_map(fn($s) => rtrim($s['name'], '.'), $stmt->fetchAll(PDO::FETCH_ASSOC));
-
     // Gehört der NS-Name zu einem autoritativen Server?
-    return in_array($target, $server_names, true);
+    return in_array($target, array_map(fn($s) => rtrim((string)$s, '.'), $server_names), true);
 }
 
 /**
