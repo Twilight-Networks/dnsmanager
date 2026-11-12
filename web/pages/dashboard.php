@@ -13,7 +13,8 @@
  */
 
 require_once __DIR__ . '/../common.php';
-require_once __DIR__ . '/../inc/diagnostics.php';
+require_once __DIR__ . '/../inc/app/status/SystemCheckService.php';
+require_once __DIR__ . '/../inc/web/system_check_messages.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
@@ -39,10 +40,11 @@ $dashboardActor = actorFromSession();
     $records = $counts['records'];
 
     // Systemstatus prüfen (detailliert)
-    $php_version_supported = version_compare(get_php_version(), '8.1', '>=');
-    $php_modules = check_required_php_modules();
-    $file_issues = check_all_file_permissions(dirname(__DIR__));
-    $config_issues = check_config_validity();
+    $systemChecks = new SystemCheckService();
+    $php_version_supported = $systemChecks->phpVersionSupported();
+    $php_modules = $systemChecks->requiredModules();
+    $file_issues = $systemChecks->filePermissionIssues(dirname(__DIR__));
+    $config_issues = systemConfigIssueTexts($LANG, $systemChecks->configIssues());
 
     // Monitoring-Diagnosen: fachliche Auswertung im DiagnosticReadService
     $diagSummary = (new DiagnosticReadService($pdo, new ZoneAccess($pdo)))->getOverview($dashboardActor)['summary']

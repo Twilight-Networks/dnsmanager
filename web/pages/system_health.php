@@ -12,7 +12,9 @@
  */
 
 require_once __DIR__ . '/../common.php';
-require_once __DIR__ . '/../inc/diagnostics.php';
+require_once __DIR__ . '/../inc/app/status/SystemCheckService.php';
+require_once __DIR__ . '/../inc/web/system_check_messages.php';
+require_once __DIR__ . '/../inc/monitoring_runner.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/status/DiagnosticReadService.php';
@@ -27,46 +29,36 @@ verify_csrf_token();
 
 include __DIR__ . '/../templates/layout.php';
 
-// Systemstatus
-$php_version = get_php_version();
-$php_modules = check_required_php_modules();
-$file_issues = check_all_file_permissions(dirname(__DIR__));
-$config_issues = check_config_validity();
-$php_version_supported = version_compare($php_version, '8.1', '>=');
+// Systemstatus (SystemCheckService; Texte der Konfigurationsprüfung im Web)
+$systemChecks = new SystemCheckService();
+$php_version = $systemChecks->phpVersion();
+$php_modules = $systemChecks->requiredModules();
+$file_issues = $systemChecks->filePermissionIssues(dirname(__DIR__));
+$config_issues = systemConfigIssueTexts($LANG, $systemChecks->configIssues());
+$php_version_supported = $systemChecks->phpVersionSupported();
 
-// Wenn "Status jetzt aktualisieren" gedrückt wurde, Monitoring-Skript direkt ausführen
+// Wenn "Status jetzt aktualisieren" gedrückt wurde, Monitoring direkt ausführen (S37, Paket 5b): derselbe
+// MonitoringService wie der Cron-Lauf, im Webprozess statt per exec; weiterhin synchron, damit die Datenbank
+// danach aktuell ist. Läuft gerade der Cron-Lauf, wird bis zu 60 s auf dessen Ende gewartet.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['force_update'])) {
-    $script = __DIR__ . '/../scripts/monitoring_run-cli.php';
+    $exitCode = runMonitoringWithLog($pdo, 60)['exitCode'];
 
-    if (is_file($script) && is_readable($script)) {
-        // Monitoring synchron aufrufen – so ist die Datenbank danach garantiert aktuell
-        $cmd = "php " . escapeshellarg($script);
-        exec($cmd, $outputLines, $exitCode);
-
-        // Fehlerlog + Toast anzeigen
-        if ($exitCode !== 0) {
-            toastError(
-                $LANG['toast_monitoring_failed'],
-                "Fehler beim Monitoring-Aufruf: Exit-Code $exitCode"
-            );
-        } else {
-            toastSuccess(
-                $LANG['toast_monitoring_success'],
-                "Alle Prüfungen wurden ausgeführt. Die Ergebnisse sind jetzt aktuell."
-            );
-        }
-
-        // Sofortige Umleitung, damit Toast auch greift
-        header("Location: " . $_SERVER['REQUEST_URI']);
-        exit;
-    } else {
+    // Fehlerlog + Toast anzeigen
+    if ($exitCode !== 0) {
         toastError(
-            $LANG['toast_monitoring_missing'],
-            "Pfad: <code>{$script}</code>"
+            $LANG['toast_monitoring_failed'],
+            "Fehler beim Monitoring-Aufruf: Exit-Code $exitCode"
         );
-        header("Location: " . $_SERVER['REQUEST_URI']);
-        exit;
+    } else {
+        toastSuccess(
+            $LANG['toast_monitoring_success'],
+            "Alle Prüfungen wurden ausgeführt. Die Ergebnisse sind jetzt aktuell."
+        );
     }
+
+    // Sofortige Umleitung, damit Toast auch greift
+    header("Location: " . $_SERVER['REQUEST_URI']);
+    exit;
 }
 
 // Diagnosedaten über den DiagnosticReadService (nur aktiver Admin), dargestellt in der bisherigen Struktur

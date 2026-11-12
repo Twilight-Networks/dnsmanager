@@ -1,10 +1,12 @@
 <?php
 /**
  * Datei: inc/deploy/BindAgentClient.php
- * Zweck: Einheitlicher HTTP-Zugriff auf die DNS-Manager-Agenten (HTTPS-POST mit JSON und Bearer-Token).
+ * Zweck: Einheitlicher HTTP-Zugriff auf die DNS-Manager-Agenten (HTTPS-POST mit JSON bzw. GET, jeweils mit
+ *        Bearer-Token).
  *
- * Ersetzt die kopierten curl-Aufrufe in bind_file_distributor.php (zone_sync, conf_sync, zone_cleanup) und
- * apiPostJson() (system/control). Die Auswertung der Antworten (Fehlertexte, Statuslogik) bleibt beim
+ * Ersetzt die kopierten curl-Aufrufe in bind_file_distributor.php (zone_sync, conf_sync, zone_cleanup),
+ * apiPostJson() (system/control) und – seit Paket 5b – die Monitoring-Prüfungen aus inc/monitoring.php
+ * (system/status, zones/conf_check per GET, zones/zone_check per POST). Die Auswertung der Antworten (Fehlertexte, Statuslogik) bleibt beim
  * jeweiligen Aufrufer; Zeitgrenzen werden je Aufruf übergeben (bisherige Werte unverändert).
  *
  * Konfiguration wird explizit übergeben (fromConfig() liest die bestehenden Konstanten REMOTE_API_BASE,
@@ -58,19 +60,40 @@ final class BindAgentClient
      */
     public function postJson(?string $apiIp, string $endpoint, string $token, array $payload, ?int $connectTimeout, int $timeout): array
     {
+        return $this->request($apiIp, $endpoint, $token, $payload, $connectTimeout, $timeout);
+    }
+
+    /**
+     * GET-Anfrage (z. B. Monitoring: system/status, zones/conf_check) mit denselben Headern wie bisher.
+     *
+     * @return array{body: string|false, httpCode: int, curlError: string}
+     */
+    public function get(?string $apiIp, string $endpoint, string $token, ?int $connectTimeout, int $timeout): array
+    {
+        return $this->request($apiIp, $endpoint, $token, null, $connectTimeout, $timeout);
+    }
+
+    /**
+     * @param array<string, mixed>|null $payload null = GET, sonst POST mit JSON
+     * @return array{body: string|false, httpCode: int, curlError: string}
+     */
+    private function request(?string $apiIp, string $endpoint, string $token, ?array $payload, ?int $connectTimeout, int $timeout): array
+    {
         $ch = curl_init($this->url($apiIp, $endpoint));
         $options = [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
             CURLOPT_HTTPHEADER => [
                 'Authorization: Bearer ' . $token,
                 'Content-Type: application/json'
             ],
-            CURLOPT_POSTFIELDS => json_encode($payload),
             CURLOPT_SSL_VERIFYPEER => $this->verifyPeer,
             CURLOPT_SSL_VERIFYHOST => $this->verifyHost,
             CURLOPT_TIMEOUT => $timeout,
         ];
+        if ($payload !== null) {
+            $options[CURLOPT_POST] = true;
+            $options[CURLOPT_POSTFIELDS] = json_encode($payload);
+        }
         if ($connectTimeout !== null) {
             $options[CURLOPT_CONNECTTIMEOUT] = $connectTimeout;
         }
