@@ -40,9 +40,6 @@ do {
     $offset += ZoneReadService::MAX_LIMIT;
 } while ($page['hasMore']);
 
-// Anzahl der Admins (Bestandsvariable); die Liste ist für Admins vollständig
-$admin_count = count(array_filter($users, static fn (array $u): bool => $u['role'] === 'admin'));
-
 // Anzahl der aktiven Admins (S27, PR B): steuert die Anzeige von „Löschen“ und „Deaktivieren“ wie die
 // Prüfung im UserService (last_admin) – deaktivierte Admins zählen nicht und bleiben löschbar.
 // Maßgeblich bleibt in allen Fällen der Service.

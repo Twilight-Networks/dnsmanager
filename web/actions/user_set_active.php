@@ -5,7 +5,8 @@
  *
  * Details:
  * - Nur Admins (Session-Rolle; die Datenbankrolle und der Kontostatus des Akteurs prüft der Service).
- * - Eingaben: id (Benutzer-ID), active ('0' = deaktivieren, '1' = reaktivieren; andere Werte werden abgelehnt).
+ * - Eingaben: id (Benutzer-ID, nur positiver Dezimal-Integer ohne Zusätze), active ('0' = deaktivieren, '1' = reaktivieren);
+ *   andere Werte werden vor jedem Service-Aufruf abgelehnt.
  * - Das eigene Konto und der letzte aktive Admin können nicht deaktiviert werden (Prüfung im Service unter Sperre).
  * - Name, Rolle und Zonenzuweisungen bleiben erhalten; bestehende Sitzungen des Kontos enden über die
  *   Sitzungsgeneration (session_epoch) beim nächsten Aufruf.
@@ -21,7 +22,22 @@ require_once __DIR__ . '/../inc/app/users/UserService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id'])) {
-    $id = (int)$_POST['id'];
+    // Benutzer-ID streng prüfen, BEVOR konvertiert wird: nur eine Zeichenkette aus Dezimalziffern ohne Vorzeichen,
+    // Leerraum oder führende Null, als positiver Integer innerhalb des PHP-Integerbereichs. Abgelehnt werden u. a.
+    // Anhänge ("46abc"), Dezimalzahlen, Exponentialnotation, Arrays (id[]=46) und übergroße Werte – ohne Service-Aufruf.
+    $idRaw = $_POST['id'];
+    $idValid = is_string($idRaw)
+        && preg_match('/^[1-9][0-9]*$/D', $idRaw) === 1
+        && filter_var($idRaw, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) !== false;
+    if (!$idValid) {
+        toastError(
+            $LANG['user_error_invalid_id'],
+            'Statusänderung abgelehnt: ungültige Benutzer-ID-Eingabe (' . (is_string($idRaw) ? 'Zeichenkette, Länge ' . strlen($idRaw) : gettype($idRaw)) . ').'
+        );
+        header("Location: " . rtrim(BASE_URL, '/') . "/pages/users.php");
+        exit;
+    }
+    $id = (int)$idRaw;
     $activeRaw = $_POST['active'] ?? null;
 
     // Nur die beiden zulässigen Werte annehmen; alles andere ausdrücklich zurückweisen (kein Service-Aufruf)
