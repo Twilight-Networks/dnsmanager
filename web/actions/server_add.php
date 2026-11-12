@@ -5,19 +5,24 @@
  *
  * Funktionen:
  * - Erwartet POST-Anfrage mit Serverdaten.
- * - Führt Validierung der Eingaben durch (Name, IP-Adressen, Token).
- * - Erzwingt, dass nur ein Server als "lokal" markiert sein darf.
- * - Fügt neuen Datensatz in die Tabelle `servers` ein.
+ * - Validierung (Name, IP-Adressen, Token), "nur ein lokaler Server" und Anlage im ServerService.
  * - Setzt Feedback-Nachricht und leitet zurück zur Serverübersicht.
  *
  * Zugriff:
  * - Nur eingeloggte Benutzer (admin) dürfen diesen Endpunkt aufrufen.
+ *
+ * Web-Adapter: Eingaben lesen, ServerService::createServer() aufrufen, ServiceMessages in die bisherigen
+ * Toasts/Logs/Redirects übersetzen.
  */
 
 require_once __DIR__ . '/../common.php';
 verify_csrf_token();
 requireRole(['admin']);
-require_once __DIR__ . '/../inc/validators.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/TopologyLock.php';
+require_once __DIR__ . '/../inc/app/servers/ServerService.php';
+require_once __DIR__ . '/../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 // Nur POST-Anfragen erlaubt
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -26,101 +31,70 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 // Felder einlesen und bereinigen
-$name       = trim($_POST['name'] ?? '');
-$dns_ip4     = trim($_POST['dns_ip4'] ?? '');
-$dns_ip6    = trim($_POST['dns_ip6'] ?? '');
-$api_ip     = trim($_POST['api_ip'] ?? '');
-$api_token  = trim($_POST['api_token'] ?? '');
-$is_local   = isset($_POST['is_local']) ? 1 : 0;
-$active     = isset($_POST['active']) ? 1 : 0;
+$name = trim($_POST['name'] ?? '');
+$input = new ServerInput(
+    $name,
+    trim($_POST['dns_ip4'] ?? ''),
+    trim($_POST['dns_ip6'] ?? ''),
+    trim($_POST['api_ip'] ?? ''),
+    trim($_POST['api_token'] ?? ''),
+    isset($_POST['is_local']),
+    isset($_POST['active'])
+);
 
-// Eingabevalidierung
-$errors = [];
+$serverService = new ServerService($pdo, new LegacyZoneBuildBackend($pdo), new TopologyLock($pdo));
+$result = $serverService->createServer(actorFromSession(), $input);
 
-if ($name === '' || strlen($name) > 100 || !isValidFqdn($name) || substr_count(rtrim($name, '.'), '.') < 1) {
-    $errors[] = $LANG['server_error_invalid_name'];
-}
+$redirect = "/pages/servers.php?add_new=1";
 
-$valid_dns_ip4 = filter_var($dns_ip4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
-$valid_dns_ip6 = filter_var($dns_ip6, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+// ServiceMessages in bestehende Toasts/Logs übersetzen
+foreach ($result->messages as $message) {
+    $ctx = $message->context;
 
-if (!$valid_dns_ip4 && !$valid_dns_ip6) {
-    $errors[] = $LANG['server_error_invalid_dns_ip'];
-}
+    switch ($message->code) {
+        case 'server.create.access_denied':
+            logAccessDenied('server_add', "Benutzer-ID {$ctx['actorId']} ist laut Datenbank kein aktiver Administrator.");
+            http_response_code(403);
+            exit('Zugriff verweigert: Unzureichende Berechtigungen.');
 
-if ($dns_ip4 !== '' && !$valid_dns_ip4) {
-    $errors[] = $LANG['server_error_invalid_ipv4'];
-}
+        case 'server.create.invalid_input':
+            foreach ($ctx['errors'] as $code) {
+                $err = $LANG['server_error_' . $code] ?? $code;
+                toastError(
+                    $LANG['server_error_invalid_input'] . ': ' . htmlspecialchars($err),
+                    "Validierungsfehler beim Hinzufügen von Server: {$err}"
+                );
+            }
+            break;
 
-if ($dns_ip6 !== '' && !$valid_dns_ip6) {
-    $errors[] = $LANG['server_error_invalid_ipv6'];
-}
+        case 'server.create.failed':
+            toastError(
+                $LANG['server_error_db_save_failed'],
+                "Datenbankfehler beim Hinzufügen von Server '{$name}': " . $ctx['detail']
+            );
+            break;
 
-if ($api_ip !== '' && !filter_var($api_ip, FILTER_VALIDATE_IP)) {
-    $errors[] = $LANG['server_error_invalid_api_ip'];
-}
+        case 'server.create.success':
+            toastSuccess(
+                sprintf($LANG['server_created_success'], htmlspecialchars($name)),
+                "Neuer Server hinzugefügt: {$name} ({$ctx['dnsIp4']}) ({$ctx['dnsIp6']}), lokal={$ctx['isLocal']}, aktiv={$ctx['active']}"
+            );
+            $redirect = "/pages/servers.php";
+            break;
 
-if (!$is_local && $api_ip === '') {
-    $errors[] = $LANG['server_error_api_ip_required'];
-}
-
-if (!$is_local && ($api_token === '' || strlen($api_token) < 32)) {
-    $errors[] = $LANG['server_error_api_token_required'];
-}
-
-// Nur ein lokaler Server erlaubt
-if ($is_local) {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM servers WHERE is_local = 1");
-    $stmt->execute();
-    if ($stmt->fetchColumn() > 0) {
-        $errors[] = $LANG['server_error_local_exists'];
+        default:
+            // Unbekannte ServiceMessages nie still verwerfen
+            if ($message->kind === 'success') {
+                appLog('warning', "Unbehandelte ServiceMessage '{$message->code}' (server_add)");
+            } else {
+                toastError(
+                    $LANG['server_error_db_save_failed'],
+                    "Unbehandelte ServiceMessage '{$message->code}' (server_add)"
+                );
+            }
+            break;
     }
 }
 
-if (!empty($errors)) {
-    foreach ($errors as $err) {
-        toastError(
-            $LANG['server_error_invalid_input'] . ': ' . htmlspecialchars($err),
-            "Validierungsfehler beim Hinzufügen von Server: {$err}"
-        );
-    }
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php?add_new=1");
-    exit;
-}
-
-// Server in Datenbank einfügen
-try {
-    $pdo->beginTransaction();
-
-    $stmt = $pdo->prepare("
-        INSERT INTO servers (name, dns_ip4, dns_ip6, api_ip, api_token, is_local, active)
-        VALUES (:name, :dns_ip4, :dns_ip6, :api_ip, :api_token, :is_local, :active)
-    ");
-    $stmt->execute([
-        ':name'      => $name,
-        ':dns_ip4'    => $valid_dns_ip4 ? $dns_ip4 : null,
-        ':dns_ip6'   => $valid_dns_ip6 ? $dns_ip6 : null,
-        ':api_ip'    => $api_ip !== '' ? $api_ip : null,
-        ':api_token' => $api_token,
-        ':is_local'  => $is_local,
-        ':active'    => $active,
-    ]);
-
-    $pdo->commit();
-
-    toastSuccess(
-        sprintf($LANG['server_created_success'], htmlspecialchars($name)),
-        "Neuer Server hinzugefügt: {$name} ({$dns_ip4}) ({$dns_ip6}), lokal={$is_local}, aktiv={$active}"
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
-    exit;
-
-} catch (PDOException $e) {
-    $pdo->rollBack();
-    toastError(
-        $LANG['server_error_db_save_failed'],
-        "Datenbankfehler beim Hinzufügen von Server '{$name}': " . $e->getMessage()
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php?add_new=1");
-    exit;
-}
+header("Location: " . rtrim(BASE_URL, '/') . $redirect);
+exit;

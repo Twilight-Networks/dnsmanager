@@ -20,6 +20,9 @@
 
 define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
+require_once __DIR__ . '/../inc/app/Actor.php';
+require_once __DIR__ . '/../inc/app/servers/ServerReadService.php';
+require_once __DIR__ . '/../inc/web/web_adapter.php';
 include __DIR__ . '/../templates/layout.php';
 
 // Zugriffsbeschränkung: Nur Administratoren dürfen diese Seite aufrufen
@@ -32,13 +35,31 @@ if ($_SESSION['role'] !== 'admin') {
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
 $add_new = isset($_GET['add_new']) && $_GET['add_new'] == '1';
 
-// Server laden (nur Admins sehen alle Server)
-$stmt = $pdo->prepare("SELECT * FROM servers ORDER BY name");
-$stmt->execute();
-$servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// Server und Serverdiagnosen laden (ServerReadService: nur aktive Admins laut Datenbank, explizite Spalten).
+// Übersetzung in die bisherige Struktur für die unveränderte Darstellung und die Formular-Templates.
+$actor = actorFromSession();
+$serverReadService = new ServerReadService($pdo);
+$servers = [];
+foreach ($serverReadService->listServers($actor) as $s) {
+    $servers[] = [
+        'id'       => $s['id'],
+        'name'     => $s['name'],
+        'dns_ip4'  => $s['dnsIp4'],
+        'dns_ip6'  => $s['dnsIp6'],
+        'api_ip'   => $s['apiIp'],
+        'is_local' => $s['isLocal'] ? 1 : 0,
+        'active'   => $s['active'] ? 1 : 0,
+    ];
+}
 
-$diagnostics = getDiagnosticResults($pdo);
-$server_diag = $diagnostics['server'];
+$server_diag = [];
+foreach ($serverReadService->listServerDiagnostics($actor) as $d) {
+    $server_diag[$d['serverId']][$d['checkType']] = [
+        'status'  => $d['status'],
+        'message' => $d['message'],
+        'server'  => $d['serverName'],
+    ];
+}
 
 $server_status = [];
 foreach ($server_diag as $serverId => $checks) {
@@ -147,7 +168,12 @@ if ($has_server_errors) {
                     </tr>
 
                     <!-- Bearbeitungsformular darunter -->
-                    <?php $edit_server = $server; include __DIR__ . '/../templates/server_edit_form.php'; ?>
+                    <?php
+                    // Bearbeitungsdaten einschließlich gespeichertem API-Token (Formular-Vorbelegung wie bisher)
+                    $edit_data = $serverReadService->getServerForEdit($actor, (int)$server['id']);
+                    $edit_server = $server + ['api_token' => $edit_data['apiToken'] ?? ''];
+                    include __DIR__ . '/../templates/server_edit_form.php';
+                    ?>
                 <?php else: ?>
                     <tr>
                         <td>
