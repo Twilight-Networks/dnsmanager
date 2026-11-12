@@ -34,7 +34,7 @@
  * - publish_pending (zoneName, status, errors, warnings, exception, retry)
  *                                         Änderung festgeschrieben bzw. unverändert, Veröffentlichung aber
  *                                         zurückgestellt (Lock belegt), teilweise oder nicht erfolgt; Zone bleibt
- *                                         ausstehend
+ *                                         ausstehend. status not_found: Zone inzwischen gelöscht (kein Erfolg)
  * - done (results, retry)                 abgeschlossen; results = Liste je Adressfamilie in Reihenfolge A, AAAA:
  *                                         ['type' => 'A'|'AAAA', 'ip' => string, 'changed' => bool]; retry = true,
  *                                         wenn ein ausstehender Publish ohne Änderung erfolgreich wiederholt wurde
@@ -300,7 +300,14 @@ final class DyndnsUpdateService
                 $m[] = new ServiceMessage('error', 'dyndns.api.exception', $ctx + ['lockError' => dyndnsIsLockError($e), 'message' => $e->getMessage()]);
                 return new ServiceResult(false, $m);
             }
-            if ($pendingFlag === false || (int)$pendingFlag === 0) {
+            if ($pendingFlag === false) {
+                // Zone nach dem Commit gelöscht: kein erfolgreiches Ergebnis
+                $m[] = new ServiceMessage('error', 'dyndns.api.publish_pending', $ctx + [
+                    'zoneName' => $zone_name, 'status' => 'not_found', 'errors' => [], 'warnings' => [], 'exception' => null, 'retry' => false,
+                ]);
+                return new ServiceResult(false, $m);
+            }
+            if ((int)$pendingFlag === 0) {
                 $m[] = new ServiceMessage('success', 'dyndns.api.done', $ctx + ['results' => $results, 'retry' => false]);
                 return new ServiceResult(true, $m);
             }

@@ -401,8 +401,10 @@ final class PublishService
      *
      * Ablauf (gemeinsame Zonenlogik mit publishAll(), siehe processZone()):
      * 1. Globaler Advisory-Lock wie Publish All, Wartezeit höchstens $lockWaitSeconds.
-     * 2. changed 1|2 -> 2 übernehmen. War die Zone bereits veröffentlicht (changed = 0, z. B. durch einen
-     *    Publish All zwischen Commit und Aufruf), wird nichts erneut veröffentlicht: Status already_published.
+     * 2. Zonenname unter dem Lock frisch lesen; changed 1|2 -> 2 übernehmen. War die vorhandene Zone bereits
+     *    veröffentlicht (changed = 0, z. B. durch einen Publish All zwischen Commit und Aufruf), wird nichts
+     *    erneut veröffentlicht: Status already_published. Eine inzwischen gelöschte Zone ergibt not_found
+     *    (kein Erfolg).
      * 3. Generieren (Serial festgeschrieben vor der Verteilung), Zone und Conf an alle aktiven Server verteilen.
      * 4. Abschluss wie Publish All: vollständig verteilt -> 2 -> 0 (ein zwischenzeitlich neu gesetztes 1 bleibt
      *    ausstehend); teilweise/nicht verteilt -> 1; Generierungsfehler oder Exception -> 2 -> 1.
@@ -481,13 +483,34 @@ final class PublishService
 
         try {
             try {
-                $this->processZone($zoneId, $zoneName, false, $run);
-                $outcome = $zoneReports[0]['outcome'] ?? null;
+                // Zonenname unter dem Lock frisch lesen (Umbenennung oder Löschung seit der Vorprüfung)
+                $stmt = $this->pdo->prepare("SELECT name FROM zones WHERE id = ?");
+                $stmt->execute([$zoneId]);
+                $freshName = $stmt->fetchColumn();
+                $stmt->closeCursor();
+
+                if ($freshName === false) {
+                    $outcome = 'zone_missing';
+                } else {
+                    $zoneName = (string)$freshName;
+                    $report['zoneName'] = $zoneName;
+                    $this->processZone($zoneId, $zoneName, false, $run);
+                    $outcome = $zoneReports[0]['outcome'] ?? null;
+                }
 
                 switch ($outcome) {
+                    case 'zone_missing':
+                        // Zone nach der Vorprüfung gelöscht: kein Publish-Ergebnis
+                        $status = 'not_found';
+                        break;
                     case 'skipped':
-                        // Bereits veröffentlicht (z. B. durch Publish All) bzw. inzwischen gelöscht
-                        $status = 'already_published';
+                        // processZone() überspringt bei changed = 0 und bei inzwischen gelöschter Zone:
+                        // nur eine vorhandene Zone gilt als bereits veröffentlicht
+                        $stmt = $this->pdo->prepare("SELECT 1 FROM zones WHERE id = ?");
+                        $stmt->execute([$zoneId]);
+                        $exists = $stmt->fetchColumn() !== false;
+                        $stmt->closeCursor();
+                        $status = $exists ? 'already_published' : 'not_found';
                         break;
                     case 'published':
                         $report['changedReset'] = $this->resetPublishedZone($zoneId);
