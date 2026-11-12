@@ -9,9 +9,13 @@
  * HTTP, keine Toasts, kein Logging, keine Sprachschlüsseltexte.
  *
  * Ergebnis: ServiceResult mit ServiceMessages ("dyndns.<operation>.<ergebnis>"):
- * - rejected (key, param, detail): fachliche Ablehnung; key = Sprachschlüssel der bisherigen Meldung,
- *   param = Rohwert für den Platzhalter (oder null), detail = technische Detailmeldung (bisheriger Logtext).
- * - warning (key, params, detail): Hinweis nach erfolgreichem Speichern (Platzhalter-Rohwerte in params).
+ * - rejected (reason, param, detail): fachliche Ablehnung; reason = fachlicher Fehlercode (Codes aus
+ *   inc/dyndns_guard.php wie DYNDNS_ZONE_NOT_ALLOWED, DYNDNS_HOST_*, DYNDNS_CONFLICT_* sowie
+ *   DYNDNS_ZONE_NOT_FOUND, DYNDNS_ACCOUNT_NOT_FOUND, DYNDNS_CONCURRENT_CHANGE, ZONE_REBUILD_FAILED),
+ *   param = betroffener Rohwert (Hostname, Zone-ID oder null), detail = technische Detailmeldung.
+ * - warning (reason, params, detail): Hinweis nach erfolgreichem Speichern; reason = DYNDNS_SHARED_HOSTNAME_KEPT,
+ *   DYNDNS_RECORDS_KEPT_AMBIGUOUS, DYNDNS_NO_IP oder ZONE_REBUILD_WARNING, params = Rohwerte.
+ *   Die Zuordnung zu Meldungstexten erfolgt ausschließlich im Web-Adapter (inc/web/dyndns_messages.php).
  * - duplicate_username, locked, failed: Datenbankfehler wie bisher unterschieden (detail = Ausnahmetext).
  * - access_denied (actorId, reason role|db_role), success, unchanged sowie operationsspezifische Codes.
  *
@@ -41,11 +45,11 @@ require_once __DIR__ . '/DyndnsAccountInput.php';
 final class DyndnsServiceReject extends RuntimeException
 {
     public function __construct(
-        public readonly string $key,
+        public readonly string $reason,
         public readonly string|int|null $param,
         public readonly ?string $detail
     ) {
-        parent::__construct($detail ?? $key);
+        parent::__construct($detail ?? $reason);
     }
 }
 
@@ -96,19 +100,19 @@ final class DyndnsAccountService
             $zone  = $zones[$zone_id] ?? null;
 
             if ($zone === null) {
-                throw new DyndnsServiceReject('dyndns_error_zone_not_allowed', null, "DynDNS-Anlage: Zone-ID {$zone_id} nicht gefunden.");
+                throw new DyndnsServiceReject('DYNDNS_ZONE_NOT_FOUND', null, "DynDNS-Anlage: Zone-ID {$zone_id} nicht gefunden.");
             }
 
             $zoneError = dyndnsZoneAssignmentError($zone);
             if ($zoneError !== null) {
-                throw new DyndnsServiceReject(dyndnsLangKey($zoneError), null, "DynDNS-Anlage abgelehnt: {$zoneError} (Zone-ID {$zone_id}).");
+                throw new DyndnsServiceReject($zoneError, null, "DynDNS-Anlage abgelehnt: {$zoneError} (Zone-ID {$zone_id}).");
             }
 
             // 2. Hostname validieren und normalisieren
             $hostErrors = validateDyndnsHostname($hostname, (string)$zone['name']);
             if (!empty($hostErrors)) {
                 throw new DyndnsServiceReject(
-                    dyndnsLangKey($hostErrors[0]),
+                    $hostErrors[0],
                     $hostname,
                     "DynDNS-Anlage abgelehnt: {$hostErrors[0]} (Hostname " . json_encode($hostname, JSON_INVALID_UTF8_SUBSTITUTE) . ", Zone-ID {$zone_id})."
                 );
@@ -120,7 +124,7 @@ final class DyndnsAccountService
             if (!empty($conflicts)) {
                 $first = $conflicts[0];
                 throw new DyndnsServiceReject(
-                    dyndnsLangKey($first['code']),
+                    $first['code'],
                     $hostname,
                     "DynDNS-Anlage abgelehnt: Konflikte für '{$hostname}' in Zone-ID {$zone_id}: "
                         . implode('; ', array_map(fn($c) => $c['code'] . ' (' . $c['detail'] . ')', $conflicts))
@@ -218,7 +222,7 @@ final class DyndnsAccountService
             $stmt->closeCursor();
 
             if (!$account) {
-                throw new DyndnsServiceReject('dyndns_error_not_found', null, "DynDNS-Update: Account-ID {$id} nicht (mehr) vorhanden.");
+                throw new DyndnsServiceReject('DYNDNS_ACCOUNT_NOT_FOUND', null, "DynDNS-Update: Account-ID {$id} nicht (mehr) vorhanden.");
             }
 
             if (
@@ -226,7 +230,7 @@ final class DyndnsAccountService
                 || (string)$account['hostname'] !== (string)$existing['hostname']
                 || !isset($zones[$oldZoneId])
             ) {
-                throw new DyndnsServiceReject('dyndns_error_concurrent_change', null, "DynDNS-Update: Account-ID {$id} wurde zwischenzeitlich verändert.");
+                throw new DyndnsServiceReject('DYNDNS_CONCURRENT_CHANGE', null, "DynDNS-Update: Account-ID {$id} wurde zwischenzeitlich verändert.");
             }
 
             $oldHostname  = (string)$account['hostname'];
@@ -243,18 +247,18 @@ final class DyndnsAccountService
                 $targetZone = $zones[$zone_id] ?? null;
 
                 if ($targetZone === null) {
-                    throw new DyndnsServiceReject('dyndns_error_zone_not_allowed', null, "DynDNS-Update: Ziel-Zone-ID {$zone_id} nicht gefunden.");
+                    throw new DyndnsServiceReject('DYNDNS_ZONE_NOT_FOUND', null, "DynDNS-Update: Ziel-Zone-ID {$zone_id} nicht gefunden.");
                 }
 
                 $zoneError = dyndnsZoneAssignmentError($targetZone);
                 if ($zoneError !== null) {
-                    throw new DyndnsServiceReject(dyndnsLangKey($zoneError), null, "DynDNS-Update abgelehnt: {$zoneError} (Account-ID {$id}, Ziel-Zone-ID {$zone_id}).");
+                    throw new DyndnsServiceReject($zoneError, null, "DynDNS-Update abgelehnt: {$zoneError} (Account-ID {$id}, Ziel-Zone-ID {$zone_id}).");
                 }
 
                 $hostErrors = validateDyndnsHostname($hostname, (string)$targetZone['name']);
                 if (!empty($hostErrors)) {
                     throw new DyndnsServiceReject(
-                        dyndnsLangKey($hostErrors[0]),
+                        $hostErrors[0],
                         $hostname,
                         "DynDNS-Update abgelehnt: {$hostErrors[0]} (Hostname " . json_encode($hostname, JSON_INVALID_UTF8_SUBSTITUTE) . ", Account-ID {$id})."
                     );
@@ -271,7 +275,7 @@ final class DyndnsAccountService
                     if (!empty($conflicts)) {
                         $first = $conflicts[0];
                         throw new DyndnsServiceReject(
-                            dyndnsLangKey($first['code']),
+                            $first['code'],
                             $newHostname,
                             "DynDNS-Update abgelehnt: Konflikte für '{$newHostname}' in Zone-ID {$newZoneId} (Account-ID {$id}): "
                                 . implode('; ', array_map(fn($c) => $c['code'] . ' (' . $c['detail'] . ')', $conflicts))
@@ -304,7 +308,7 @@ final class DyndnsAccountService
                 $sharedWith = dyndnsFindAccountsSharingHostname($this->pdo, $oldZoneId, $oldZoneName, $oldHostname, $id);
 
                 if (!empty($sharedWith)) {
-                    $warnings[] = ['dyndns_shared_hostname_kept', [$oldHostname, implode(', ', $sharedWith)],
+                    $warnings[] = ['DYNDNS_SHARED_HOSTNAME_KEPT', [$oldHostname, implode(', ', $sharedWith)],
                         "DynDNS-Update: alter Hostname '{$oldHostname}' (Zone-ID {$oldZoneId}) wird auch von "
                             . implode(', ', $sharedWith) . " verwendet – A/AAAA-Records bleiben erhalten."];
                 } else {
@@ -312,7 +316,7 @@ final class DyndnsAccountService
                     $deletedOldRecords = dyndnsDeleteRecords($this->pdo, $plan['delete']);
 
                     if ($plan['kept'] > 0) {
-                        $warnings[] = ['dyndns_records_kept_ambiguous', [$plan['kept'], $oldHostname],
+                        $warnings[] = ['DYNDNS_RECORDS_KEPT_AMBIGUOUS', [$plan['kept'], $oldHostname],
                             "DynDNS-Update: {$plan['kept']} A/AAAA-Record(s) unter '{$oldHostname}' (Zone-ID {$oldZoneId}) nicht eindeutig zuordenbar – erhalten."];
                     }
 
@@ -344,7 +348,7 @@ final class DyndnsAccountService
                 }
 
                 if (!$hasInsertedAny) {
-                    $warnings[] = ['dyndns_no_ip_warning', [], 'Es wurden keine A-/AAAA-Records gesetzt, da keine aktuelle IP vorliegt.'];
+                    $warnings[] = ['DYNDNS_NO_IP', [], 'Es wurden keine A-/AAAA-Records gesetzt, da keine aktuelle IP vorliegt.'];
                 }
 
                 // Neue Zone nur markieren, wenn dort tatsächlich Records angelegt wurden
@@ -358,9 +362,9 @@ final class DyndnsAccountService
             foreach ($zonesToRebuild as $zid) {
                 $result = $this->build->validateAndFlag((int)$zid);
                 if ($result['status'] === 'error') {
-                    throw new DyndnsServiceReject('zone_rebuild_failed', $zid, $result['output']);
+                    throw new DyndnsServiceReject('ZONE_REBUILD_FAILED', $zid, $result['output']);
                 } elseif ($result['status'] === 'warning') {
-                    $warnings[] = ['zone_rebuild_warning', [$zid], $result['output']];
+                    $warnings[] = ['ZONE_REBUILD_WARNING', [$zid], $result['output']];
                 }
             }
 
@@ -371,8 +375,8 @@ final class DyndnsAccountService
         }
 
         $m = [];
-        foreach ($warnings as [$key, $params, $detail]) {
-            $m[] = new ServiceMessage('warning', 'dyndns.update.warning', ['key' => $key, 'params' => $params, 'detail' => $detail]);
+        foreach ($warnings as [$reason, $params, $detail]) {
+            $m[] = new ServiceMessage('warning', 'dyndns.update.warning', ['reason' => $reason, 'params' => $params, 'detail' => $detail]);
         }
         $m[] = new ServiceMessage('success', 'dyndns.update.success', ['rebuilt' => !empty($zonesToRebuild), 'accountId' => $id]);
 
@@ -482,12 +486,12 @@ final class DyndnsAccountService
             $stmt->closeCursor();
 
             if (!$account) {
-                throw new DyndnsServiceReject('dyndns_error_not_found', null, "DynDNS-Löschung: Account-ID {$id} nicht (mehr) vorhanden.");
+                throw new DyndnsServiceReject('DYNDNS_ACCOUNT_NOT_FOUND', null, "DynDNS-Löschung: Account-ID {$id} nicht (mehr) vorhanden.");
             }
 
             if ((int)$account['zone_id'] !== $preZoneId || !isset($zones[$preZoneId])) {
                 throw new DyndnsServiceReject(
-                    'dyndns_error_concurrent_change',
+                    'DYNDNS_CONCURRENT_CHANGE',
                     null,
                     "DynDNS-Löschung: Account-ID {$id} wurde zwischenzeitlich verändert (Zone {$preZoneId} → {$account['zone_id']})."
                 );
@@ -502,7 +506,7 @@ final class DyndnsAccountService
             $deletedRecords = 0;
 
             if (!empty($sharedWith)) {
-                $warnings[] = ['dyndns_shared_hostname_kept', [$hostname, implode(', ', $sharedWith)],
+                $warnings[] = ['DYNDNS_SHARED_HOSTNAME_KEPT', [$hostname, implode(', ', $sharedWith)],
                     "DynDNS-Löschung: Hostname '{$hostname}' (Zone-ID {$zid}) wird auch von " . implode(', ', $sharedWith)
                         . " verwendet – A/AAAA-Records bleiben erhalten."];
             } else {
@@ -518,7 +522,7 @@ final class DyndnsAccountService
                 $keptRecords    = $plan['kept'];
 
                 if ($keptRecords > 0) {
-                    $warnings[] = ['dyndns_records_kept_ambiguous', [$keptRecords, $hostname],
+                    $warnings[] = ['DYNDNS_RECORDS_KEPT_AMBIGUOUS', [$keptRecords, $hostname],
                         "DynDNS-Löschung: {$keptRecords} A/AAAA-Record(s) unter '{$hostname}' (Zone-ID {$zid}) nicht eindeutig zuordenbar – erhalten."];
                 }
             }
@@ -531,9 +535,9 @@ final class DyndnsAccountService
             if ($deletedRecords > 0) {
                 $result = $this->build->validateAndFlag($zid);
                 if ($result['status'] === 'error') {
-                    throw new DyndnsServiceReject('zone_rebuild_failed', $zid, $result['output']);
+                    throw new DyndnsServiceReject('ZONE_REBUILD_FAILED', $zid, $result['output']);
                 } elseif ($result['status'] === 'warning') {
-                    $warnings[] = ['zone_rebuild_warning', [$zid], $result['output']];
+                    $warnings[] = ['ZONE_REBUILD_WARNING', [$zid], $result['output']];
                 }
             }
 
@@ -544,8 +548,8 @@ final class DyndnsAccountService
         }
 
         $m = [];
-        foreach ($warnings as [$key, $params, $detail]) {
-            $m[] = new ServiceMessage('warning', 'dyndns.delete.warning', ['key' => $key, 'params' => $params, 'detail' => $detail]);
+        foreach ($warnings as [$reason, $params, $detail]) {
+            $m[] = new ServiceMessage('warning', 'dyndns.delete.warning', ['reason' => $reason, 'params' => $params, 'detail' => $detail]);
         }
         $m[] = new ServiceMessage('success', 'dyndns.delete.success', ['accountOnly' => !(empty($sharedWith) && $keptRecords === 0), 'accountId' => $id]);
 
@@ -565,7 +569,7 @@ final class DyndnsAccountService
     private static function errorMessage(string $op, Throwable $e, ?string $username): array
     {
         if ($e instanceof DyndnsServiceReject) {
-            return ['error', "dyndns.$op.rejected", ['key' => $e->key, 'param' => $e->param, 'detail' => $e->detail]];
+            return ['error', "dyndns.$op.rejected", ['reason' => $e->reason, 'param' => $e->param, 'detail' => $e->detail]];
         }
         if ($op !== 'delete' && dyndnsIsDuplicateKeyError($e)) {
             return ['error', "dyndns.$op.duplicate_username", ['username' => (string)$username, 'detail' => $e->getMessage()]];

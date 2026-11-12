@@ -12,8 +12,8 @@
  *
  * Transport-Adapter: Fachlogik (Authentifizierung, Sperren, Planung, Anwendung, Validierung, Publish) liegt im
  * DyndnsUpdateService (Schutzmechanismen PR #37 unverändert). Dieser Endpunkt liest HTTP-Basic-Daten und
- * Parameter, übersetzt die ServiceMessages in die bisherigen Logzeilen und gibt das DynDNS-Antwortprotokoll
- * mit den bisherigen HTTP-Status/-Headern aus.
+ * Parameter, übersetzt die strukturierten ServiceMessages in die bisherigen Logzeilen und ist allein für das
+ * DynDNS-Antwortprotokoll (good/nochg/badauth/dnserr) mit den bisherigen HTTP-Status/-Headern zuständig.
  *
  * Grenze: Die Verteilung an die Nameserver erfolgt vor dem Commit und kann durch ein späteres
  * Datenbank-Rollback nicht rückgängig gemacht werden (Architektur-Inventar S32).
@@ -68,7 +68,8 @@ foreach ($result->messages as $message) {
 
         case 'dyndns.api.rejected':
             $logReject('warning', $ctx['reason'], $ctx['detail'], $ctx);
-            echo $ctx['response'] . "\n";
+            // Ungültig gewordene Zugangsdaten → badauth, jede andere Ablehnung → dnserr (wie bisher)
+            echo ($ctx['credentialsInvalid'] ? 'badauth' : 'dnserr') . "\n";
             exit;
 
         case 'dyndns.api.no_ip':
@@ -113,7 +114,9 @@ foreach ($result->messages as $message) {
             exit;
 
         case 'dyndns.api.done':
-            echo empty($ctx['results']) ? "nochg\n" : implode("\n", $ctx['results']) . "\n";
+            // Je Adressfamilie (Reihenfolge A, AAAA) "good <ip>" bei Änderung, sonst "nochg <ip>"; ohne Ergebnis "nochg"
+            $lines = array_map(fn(array $r) => ($r['changed'] ? 'good ' : 'nochg ') . $r['ip'], $ctx['results']);
+            echo empty($lines) ? "nochg\n" : implode("\n", $lines) . "\n";
             exit;
 
         default:

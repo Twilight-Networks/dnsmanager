@@ -9,16 +9,23 @@
  * laden und abgleichen, Records der Zone sperren, Kollisions- und Zuordnungsprüfung, bedingte Updates,
  * Rebuild und Einzel-Publish nur bei Änderung, Publish vor dem Commit).
  *
- * Keine Session, kein HTTP, kein Logging, keine Protokollausgabe. Das Antwortprotokoll (good/nochg/badauth/
- * dnserr), HTTP-Status/-Header und die Logzeilen bleiben im Endpunkt. Ergebnis: ServiceResult mit
- * ServiceMessages "dyndns.api.<ergebnis>" in der bisherigen Reihenfolge der Logzeilen; die letzte Message
- * bestimmt die Antwort:
- * - empty_credentials, auth_failed (username)                 → badauth
- * - rejected (response, reason, detail)                       → response (badauth|dnserr)
- * - no_ip                                                     → nochg
- * - validate_failed / publish_failed (zoneName, output)       → dnserr
- * - exception (lockError, message)                            → dnserr
- * - done (results: string[])                                  → Ergebniszeilen bzw. nochg
+ * Keine Session, kein HTTP, kein Logging und kein DynDNS-Antwortprotokoll: Der Service liefert strukturierte
+ * fachliche Ergebnisse; die Übersetzung in Protokollantworten, HTTP-Status/-Header und Logzeilen erfolgt
+ * ausschließlich im Endpunkt api/v1/dyndns/update.php. Ergebnis: ServiceResult mit ServiceMessages
+ * "dyndns.api.<ergebnis>" in der bisherigen Reihenfolge der Logzeilen; die letzte Message ist das Endergebnis:
+ * - empty_credentials                     Zugangsdaten fehlen
+ * - auth_failed (username)                Anmeldung fehlgeschlagen
+ * - rejected (credentialsInvalid, reason, detail)
+ *                                         Anfrage abgelehnt; credentialsInvalid = true, wenn die Zugangsdaten
+ *                                         unter Sperre nicht mehr gültig sind (Account gelöscht bzw.
+ *                                         Benutzername/Passwort geändert), sonst false
+ * - no_ip                                 keine IP-Adresse übergeben, keine Änderung
+ * - validate_failed / publish_failed (zoneName, output)
+ *                                         Validierung bzw. Verteilung fehlgeschlagen, Rollback
+ * - exception (lockError, message)        unerwarteter Fehler, Rollback
+ * - done (results)                        abgeschlossen; results = Liste je Adressfamilie in Reihenfolge A, AAAA:
+ *                                         ['type' => 'A'|'AAAA', 'ip' => string, 'changed' => bool]
+ *                                         (leer, wenn keine Familie betroffen war)
  * Zwischenmeldungen: publish_warning, publish_success (zoneName), rollback_failed (message).
  * Kontext ab erfolgreicher Authentifizierung zusätzlich: username, fqdn.
  *
@@ -33,6 +40,21 @@ require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../zones/ZoneBuildBackend.php';
 require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/DyndnsPublishBackend.php';
+
+/**
+ * Interne fachliche Ablehnung des Updates (nur innerhalb des Service verwendet). Die Ausnahmenachricht lautet
+ * wie bisher "<reason>[: <detail>]".
+ */
+final class DyndnsUpdateReject extends RuntimeException
+{
+    public function __construct(
+        public readonly bool $credentialsInvalid,
+        public readonly string $reason,
+        string $detail = ''
+    ) {
+        parent::__construct($reason . ($detail !== '' ? ': ' . $detail : ''));
+    }
+}
 
 final class DyndnsUpdateService
 {
@@ -85,13 +107,13 @@ final class DyndnsUpdateService
         $ip6 = dyndnsParseApiIp($rawIp6, 'AAAA');
 
         if ($ip4['status'] === 'invalid' || $ip6['status'] === 'invalid') {
-            return self::final('error', 'dyndns.api.rejected', $ctx + ['response' => 'dnserr', 'reason' => 'invalid_ip',
+            return self::final('error', 'dyndns.api.rejected', $ctx + ['credentialsInvalid' => false, 'reason' => 'invalid_ip',
                 'detail' => 'myip_status=' . $ip4['status'] . ' myip6_status=' . $ip6['status']]);
         }
 
         $requested = ['A' => $ip4['ip'], 'AAAA' => $ip6['ip']];
 
-        // Keine IP angegeben → wie bisher nochg, ohne Datenbankänderung
+        // Keine IP angegeben → Ergebnis no_ip, ohne Datenbankänderung
         if ($requested['A'] === null && $requested['AAAA'] === null) {
             return self::final('success', 'dyndns.api.no_ip', $ctx);
         }
@@ -106,7 +128,7 @@ final class DyndnsUpdateService
             $zones = dyndnsLockZones($this->pdo, [$zone_id]);
             $zone  = $zones[$zone_id] ?? null;
             if ($zone === null) {
-                throw new DyndnsApiReject('dnserr', 'zone_not_found', "zone_id={$zone_id}");
+                throw new DyndnsUpdateReject(false, 'zone_not_found', "zone_id={$zone_id}");
             }
 
             // 2. Account unter Sperre neu laden und mit den authentifizierten Daten abgleichen
@@ -121,17 +143,17 @@ final class DyndnsUpdateService
             $stmt->closeCursor();
 
             if (!$locked) {
-                throw new DyndnsApiReject('badauth', 'account_deleted');
+                throw new DyndnsUpdateReject(true, 'account_deleted');
             }
             if ((string)$locked['username'] !== (string)$account['username']
                 || (string)$locked['password_hash'] !== (string)$account['password_hash']) {
-                throw new DyndnsApiReject('badauth', 'credentials_changed');
+                throw new DyndnsUpdateReject(true, 'credentials_changed');
             }
             if ((int)$locked['zone_id'] !== $zone_id || (string)$locked['hostname'] !== $hostname) {
-                throw new DyndnsApiReject('dnserr', 'account_changed');
+                throw new DyndnsUpdateReject(false, 'account_changed');
             }
             if ((string)$zone['name'] !== $zone_name) {
-                throw new DyndnsApiReject('dnserr', 'zone_changed', 'vorher=' . $zone_name . ' jetzt=' . (string)$zone['name']);
+                throw new DyndnsUpdateReject(false, 'zone_changed', 'vorher=' . $zone_name . ' jetzt=' . (string)$zone['name']);
             }
 
             // 3. Records der Zone sperren, bevor einfache SELECTs den Lese-Snapshot festlegen
@@ -140,12 +162,12 @@ final class DyndnsUpdateService
             // 4. Zone und gespeicherten Hostnamen prüfen
             $zoneError = dyndnsZoneAssignmentError($zone);
             if ($zoneError !== null) {
-                throw new DyndnsApiReject('dnserr', strtolower($zoneError));
+                throw new DyndnsUpdateReject(false, strtolower($zoneError));
             }
 
             $hostErrors = validateDyndnsHostname($hostname, (string)$zone['name']);
             if (!empty($hostErrors)) {
-                throw new DyndnsApiReject('dnserr', 'invalid_stored_hostname', $hostErrors[0]);
+                throw new DyndnsUpdateReject(false, 'invalid_stored_hostname', $hostErrors[0]);
             }
 
             // 5. Kollisionen (A/AAAA-Records selbst bewertet die Record-Zuordnung)
@@ -154,8 +176,8 @@ final class DyndnsUpdateService
                 fn($c) => $c['code'] !== 'DYNDNS_CONFLICT_ADDRESS_RECORD'
             ));
             if (!empty($conflicts)) {
-                throw new DyndnsApiReject(
-                    'dnserr',
+                throw new DyndnsUpdateReject(
+                    false,
                     strtolower($conflicts[0]['code']),
                     implode('; ', array_map(fn($c) => $c['code'] . ' (' . $c['detail'] . ')', $conflicts))
                 );
@@ -173,7 +195,7 @@ final class DyndnsUpdateService
                 $requested
             );
             if ($plan['reject'] !== null) {
-                throw new DyndnsApiReject('dnserr', $plan['reject'], $plan['detail']);
+                throw new DyndnsUpdateReject(false, $plan['reject'], $plan['detail']);
             }
 
             // 7. Ausschließlich geprüfte Änderungen schreiben
@@ -187,7 +209,7 @@ final class DyndnsUpdateService
                     continue;
                 }
                 if ($step['action'] === 'nochg') {
-                    $results[] = "nochg {$step['ip']}";
+                    $results[] = ['type' => $type, 'ip' => $step['ip'], 'changed' => false];
                     continue;
                 }
 
@@ -210,7 +232,7 @@ final class DyndnsUpdateService
                 ");
                 $stmt->execute([$step['ip'], $account_id]);
 
-                $results[] = "good {$step['ip']}";
+                $results[] = ['type' => $type, 'ip' => $step['ip'], 'changed' => true];
                 $changed = true;
             }
 
@@ -251,9 +273,9 @@ final class DyndnsUpdateService
                 $m[] = new ServiceMessage('error', 'dyndns.api.rollback_failed', $ctx + ['message' => $rollbackError->getMessage()]);
             }
 
-            if ($e instanceof DyndnsApiReject) {
+            if ($e instanceof DyndnsUpdateReject) {
                 // detail wie bisher: vollständige Ausnahmenachricht ("<reason>[: <detail>]")
-                $m[] = new ServiceMessage('error', 'dyndns.api.rejected', $ctx + ['response' => $e->response, 'reason' => $e->reason,
+                $m[] = new ServiceMessage('error', 'dyndns.api.rejected', $ctx + ['credentialsInvalid' => $e->credentialsInvalid, 'reason' => $e->reason,
                     'detail' => $e->getMessage()]);
             } else {
                 $m[] = new ServiceMessage('error', 'dyndns.api.exception', $ctx + ['lockError' => dyndnsIsLockError($e), 'message' => $e->getMessage()]);

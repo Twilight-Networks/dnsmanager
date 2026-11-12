@@ -79,6 +79,9 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - **Update-API:** `DyndnsUpdateService` (authentifizieren, sperren, planen, anwenden, validieren, publizieren). Der Endpunkt `api/v1/dyndns/update.php` liest nur noch HTTP-Basic-Daten und Parameter, schreibt die bisherigen Logzeilen und gibt das DynDNS-Antwortprotokoll mit den bisherigen HTTP-Status/-Headern aus.
 - **Einzel-Publish** über die neue Schnittstelle `DyndnsPublishBackend` und den Adapter `LegacyDyndnsPublishBackend` (unverändert `publish_single_zone()`, gleiche Verbindung erzwungen).
 - **Berechtigung** nach DB-Stand (aktiver Admin): in der Transaktion unter `users … LOCK IN SHARE MODE` vor `dyndnsLockZones()`; lesend über `ActorAccess`.
+- **Kein Protokoll, keine Sprachschlüssel im Core:**
+  - `DyndnsUpdateService` liefert strukturierte Ergebnisse (`rejected` mit `credentialsInvalid`, `done` mit `results` je Adressfamilie: `type`, `ip`, `changed`). Erst `api/v1/dyndns/update.php` übersetzt sie in `good`/`nochg`/`badauth`/`dnserr`.
+  - `DyndnsAccountService` meldet fachliche Codes (`reason`): die `DYNDNS_*`-Codes aus `dyndns_guard.php` sowie `DYNDNS_ZONE_NOT_FOUND`, `DYNDNS_ACCOUNT_NOT_FOUND`, `DYNDNS_CONCURRENT_CHANGE`, `ZONE_REBUILD_FAILED`/`_WARNING`, `DYNDNS_SHARED_HOSTNAME_KEPT`, `DYNDNS_RECORDS_KEPT_AMBIGUOUS`, `DYNDNS_NO_IP`. Die Zuordnung zu `$LANG` erfolgt ausschließlich in `inc/web/dyndns_messages.php`.
 
 **Bewusst unverändert** (Befunde, keine Verhaltensänderung in Paket 2):
 - S30: keine Mindestlänge beim Anlegen/Ändern;
@@ -87,7 +90,7 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - Passwortänderung ohne Existenzprüfung des Accounts (F3);
 - Rollenprüfung in `pages/dyndns.php` erst nach dem Layout (S-Befund der Seite, siehe Inventar Abschnitt 6).
 
-**Offen** für Paket 4: `publish_single.php` lädt den Web-Bootstrap und nutzt die globale Verbindung. `DyndnsActionError` in `dyndns_guard.php` wird nicht mehr verwendet und kann mit Paket 4 entfallen.
+**Offen** für Paket 4: `publish_single.php` lädt den Web-Bootstrap und nutzt die globale Verbindung. `DyndnsActionError`, `DyndnsApiReject` und `dyndnsLangKey()` in `dyndns_guard.php` werden nicht mehr verwendet und können mit Paket 4 entfallen.
 
 ### 3.3 Records und Zonen-Reste (Paket 3)
 
@@ -111,6 +114,7 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
   - eigene Transaktion mit `zones FOR UPDATE` und Serial-Fortschreibung;
   - `shell_exec('named-checkzone …')` bei gesperrter Zeile;
   - feste `/tmp`-Pfade;
+  - temporäre Zonendateien `/tmp/db.<zone>.<zufall>` bleiben nach bestimmten Generatorläufen liegen, z. B. beim DynDNS-Einzelpublish (Bestandsverhalten, auf ns1 beobachtet);
   - `generate_zone_conf_file()` mit `global $pdo`.
 - `inc/deploy/bind_file_distributor.php`:
   - `global $pdo`, eigene Server- und Token-Abfragen, eigenes curl-Setup;
@@ -193,7 +197,7 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | Nr. | Befund | Ort |
 |---|---|---|
 | S29 | Das Bearbeitungsformular gibt den gespeicherten API-Token im HTML aus (`value` des Passwortfelds). Bei der Entkopplung bewusst beibehalten (`ServerReadService::getServerForEdit`). | `templates/server_edit_form.php` |
-| S30 | Keine serverseitige Mindestlänge für DynDNS-Passwörter beim Anlegen und Ändern | `actions/dyndns_add.php`, `dyndns_update.php` |
+| S30 | Keine serverseitige Mindestlänge für DynDNS-Passwörter beim Anlegen und Ändern | `DyndnsAccountService::createAccount`, `::updateAccount` (vorher `actions/dyndns_add.php`, `dyndns_update.php`) |
 | S31 | Benutzer-Enumeration über die Antwortzeit: kein Dummy-`password_verify` bei unbekanntem Benutzer | `inc/auth.php`, `api/v1/dyndns/update.php` |
 | S32 | DynDNS-Einzelpublish verteilt vor dem Commit unter Zeilensperre, ohne Publish-Advisory-Lock; `changed = 0` (nur bei vollständigem Erfolg) ohne Rücksicht auf `changed = 2`; gemeinsame `/tmp/dnsmanager_conf_{ip}`-Pfade mit Publish All. **Bewertung (12.11.2026): mittel/niedrig, nicht unmittelbar kritisch** – keine Rechteausweitung, keine Offenlegung, keine Injektion; Auslösung nur mit gültigen DynDNS-Zugangsdaten. Auswirkungen: (1) bei Fehler nach erfolgreicher Verteilung (Rollback) Abweichung DB ↔ BIND inkl. zurückgesetzter SOA-Serial, bis zum nächsten Publish; (2) Zonenzeile bis zu ~30 s je Server gesperrt (Verfügbarkeit); (3) gleichzeitiger Lauf mit Publish All kann `/tmp/dnsmanager_conf_{ip}` gegenseitig leeren → Fehler bzw. erneuter Publish nötig, kein falscher Inhalt (Dateiname je Zone). Behebung in Paket 4. | `inc/deploy/publish_single.php`, `bind_file_distributor.php` |
 | S33 | Zonenname geht ohne zusätzliche Prüfung in die BIND-`.conf` und in den Dateinamen (keine Abwehr wie S17) | `bind_file_generator.php` (`writeZoneConfFile`) |
@@ -214,3 +218,4 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | 12.11.2026 | 1 | Serververwaltung entkoppelt (PR #55, gemergt als `4860f05`) |
 | 12.11.2026 | 1 | Einschränkung „nur ein lokaler Server“ (nicht nachgewiesen race-sicher) dokumentiert |
 | 12.11.2026 | 2 | DynDNS-Kontenverwaltung, Lesezugriffe und Update-API entkoppelt (Draft-PR); S32 bewertet |
+| 12.11.2026 | 2 | Review-Korrektur PR #56: DynDNS-Protokoll und Sprachschlüssel aus dem Core entfernt; `/tmp`-Zonendateien (Paket 4) und Fundort S30 ergänzt |
