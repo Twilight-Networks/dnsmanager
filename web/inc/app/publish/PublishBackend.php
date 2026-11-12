@@ -17,7 +17,7 @@ interface PublishBackend
 {
     /**
      * Erzeugt die Zonendatei einer Zone für die Veröffentlichung und validiert sie
-     * (Legacy: generate_zone_file($zoneId, '/tmp', 'publish', $pdo)).
+     * (Legacy: generate_zone_file($zoneId, <Arbeitsverzeichnis>, 'publish', $pdo)).
      *
      * Erhöht im Erfolgsfall den SOA-Serial in einer eigenen, vollständig abgeschlossenen
      * Transaktion auf derselben PDO-Verbindung wie der PublishService.
@@ -29,7 +29,7 @@ interface PublishBackend
 
     /**
      * Verteilt eine erzeugte Zonendatei an alle aktiven, zugewiesenen Server
-     * (Legacy: distribute_zone_file($zoneId, $zonePath)).
+     * (Legacy: distribute_zone_file($pdo, $agent, $zoneId, $zonePath)).
      *
      * @return array{status: string, errors: array, output: string}
      *               status: 'ok' | 'warning' (Agent-/HTTP-/Netzwerkfehler) | 'error' (interne Fehler)
@@ -38,7 +38,7 @@ interface PublishBackend
 
     /**
      * Erzeugt und verteilt die zonenspezifische BIND-Konfiguration
-     * (Legacy: distribute_zone_conf_file($zoneName)).
+     * (Legacy: distribute_zone_conf_file($pdo, $agent, $work, $zoneName)).
      *
      * @return array{status: string, errors: array, output: string}
      *               status: 'ok' | 'error'
@@ -47,7 +47,7 @@ interface PublishBackend
 
     /**
      * Entfernt verwaiste Zonen auf allen aktiven Servern
-     * (Legacy: distribute_zone_cleanup()).
+     * (Legacy: distribute_zone_cleanup($pdo, $agent)).
      *
      * @return array{status: string, errors: array, output: string}
      *               status: 'ok' | 'warning'

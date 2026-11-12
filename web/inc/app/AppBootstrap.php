@@ -16,10 +16,9 @@
  *   $zoneAccess = new ZoneAccess($pdo);
  *   $zones = new ZoneReadService($pdo, $zoneAccess);
  *
- * Hinweis LegacyBindPublishBackend: Die Legacy-Distributoren verwenden die globale Verbindung.
- * Wer den PublishService mit diesem Backend nutzt, setzt im Einstiegspunkt ausdrücklich
- * $GLOBALS['pdo'] = $pdo (dieselbe Instanz); der Bootstrap tut das bewusst nicht.
- * Die Weboberfläche erhält ihre Verbindung unverändert über inc/db.php.
+ * Die BIND-/Publish-Infrastruktur (inc/deploy) erhält die Verbindung seit Paket 4a ausschließlich explizit;
+ * eine globale Verbindung ist dafür nicht mehr nötig. Die Weboberfläche erhält ihre Verbindung unverändert
+ * über inc/db.php.
  */
 
 final class AppBootstrap

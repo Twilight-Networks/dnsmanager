@@ -13,16 +13,16 @@
  * - Eine zentrale `zones.conf` oder lokaler Cleanup wird nicht mehr durchgeführt.
  * - Die SOA-Serialnummer wird nur im Modus `publish` erhöht.
  *
- * Abhängigkeiten:
- * - Diese Datei lädt keinen Web-Bootstrap (common.php) mehr selbst.
- * - `generate_zone_file()` benötigt eine explizit übergebene PDO-Verbindung (Parameter `$db`)
- *   oder den bestehenden Legacy-Fallback `$GLOBALS['pdo']` (gesetzt durch inc/db.php).
- * - `generate_zone_conf_file()` setzt weiterhin geladene Konfiguration (z. B. BIND_BASE_DIR)
- *   und die globale Verbindung `$pdo` voraus; Aufrufer laden dazu common.php.
+ * Abhängigkeiten (Paket 4a):
+ * - Kein Web-Bootstrap, keine globale Datenbankverbindung: Alle Funktionen erhalten die PDO-Verbindung
+ *   explizit. `generate_zone_conf_file()` liest zusätzlich die Konfigurationskonstante BIND_BASE_DIR.
+ * - Zielverzeichnisse übergibt der Aufrufer (eigenes Arbeitsverzeichnis, BindWorkDir; S34).
  *
  * Sicherheit:
  * - Keine Verarbeitung externer Benutzereingaben.
  * - Alle Dateipfade sind kontrolliert und auf übergebene Zielverzeichnisse beschränkt.
+ * - Zonennamen werden vor jeder Verwendung in Dateinamen oder BIND-Konfiguration geprüft
+ *   (zone_name_is_safe, S33).
  * - Zugriff auf die Datenbank erfolgt ausschließlich über vorbereitete Statements.
  *
  * Verwendete Funktionen:
@@ -76,6 +76,19 @@ function zone_file_value_has_control_chars(string $value): bool
 }
 
 /**
+ * Defensive Prüfung eines Zonennamens vor der Verwendung in Dateinamen und in der BIND-Konfiguration
+ * (Sicherheitsbefund S33).
+ *
+ * Zulässig ist genau der Zeichenvorrat der Zonen-Eingabeprüfung (validateZoneInput): Buchstaben, Ziffern,
+ * '.', '-', '_' – höchstens 253 Zeichen, nicht mit '.' beginnend. Ausgeschlossen sind damit insbesondere
+ * '/', Anführungszeichen, Leerraum, Steuerzeichen und Verweise wie '.' oder '..'.
+ */
+function zone_name_is_safe(string $name): bool
+{
+    return strlen($name) <= 253 && preg_match('/^[A-Za-z0-9_\-][A-Za-z0-9._\-]*\z/', $name) === 1;
+}
+
+/**
  * Erzeugt eine Zonendatei (db.<zone>) im angegebenen Zielverzeichnis und validiert sie mit named-checkzone.
  *
  * Verhalten:
@@ -90,17 +103,17 @@ function zone_file_value_has_control_chars(string $value): bool
  *   Werte führen zu status 'error' ohne Zonendatei.
  * - Record-Felder (name, type, content) werden vor dem Schreiben auf Steuerzeichen geprüft
  *   (zone_file_value_has_control_chars); unsichere Werte führen zu status 'error' ohne Zonendatei.
- * - Pfade werden auf sichere Zielverzeichnisse begrenzt.
+ * - Pfade werden auf sichere Zielverzeichnisse begrenzt; der Zonenname wird geprüft (zone_name_is_safe, S33).
+ * - Bei fehlgeschlagener Prüfung wird die Datei in jedem Modus gelöscht; die Ausgabe von named-checkzone
+ *   steht im Ergebnis (keine feste Fehlerprotokoll-Datei in /tmp mehr, S34).
  *
  * @param int $zone_id ID der zu verarbeitenden Zone
- * @param string $output_dir Zielverzeichnis für die erzeugte Datei (z. B. /tmp)
- * @param string $mode 'validate' (nur prüfen) oder 'publish' (für Verteilung)
- * @param ?PDO $db Optional: zu verwendende Datenbankverbindung (z. B. die des aufrufenden Service).
- *                 Ohne Angabe wird wie bisher die globale Verbindung ($GLOBALS['pdo']) verwendet.
+ * @param string $output_dir Zielverzeichnis für die erzeugte Datei (eigenes Arbeitsverzeichnis, BindWorkDir)
+ * @param string $mode 'validate' (nur prüfen), 'publish' (für Verteilung) oder 'dyndns'
+ * @param PDO $pdo Datenbankverbindung des Aufrufers (explizit, keine globale Verbindung)
  * @return array Assoziatives Ergebnis mit 'status', 'path', 'output' und optional 'errors'
  */
-function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $mode = 'validate', ?PDO $db = null): array {
-    $pdo = $db ?? $GLOBALS['pdo']; // Legacy-Fallback: globale Verbindung
+function generate_zone_file(int $zone_id, string $output_dir, string $mode, PDO $pdo): array {
 
     $tx_started = false; // true nur, wenn diese Funktion die Transaktion selbst gestartet hat
 
@@ -148,6 +161,18 @@ function generate_zone_file(int $zone_id, string $output_dir = '/tmp', string $m
         $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $zone_name = $zone['name'];
+
+        // S33: Zonenname wird für Dateinamen und named-checkzone verwendet
+        if (!zone_name_is_safe((string)$zone_name)) {
+            if ($tx_started && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            return [
+                'status' => 'error',
+                'output' => "Ungültiger Zonenname (Zone-ID $zone_id): unzulässige Zeichen – Zonendatei wird nicht erzeugt.",
+                'errors' => ['Zonenname: unzulässige Zeichen'],
+            ];
+        }
 
         // S17: SOA-Felder werden unverändert in die Zonendatei geschrieben. Unsichere Werte (auch
         // bereits gespeicherte) führen in jedem Modus zum Abbruch, bevor eine Datei entsteht.
@@ -281,11 +306,14 @@ ZONE;
         @unlink($zone_file_path);
     }
 
-    if (strpos($check_output, 'loaded serial') === false) {
+    if (strpos((string)$check_output, 'loaded serial') === false) {
         if ($tx_started && $pdo->inTransaction()) {
             $pdo->rollBack();
         }
-        file_put_contents("/tmp/named-checkzone-error.log", $check_output);
+        // Ungültige Datei nicht liegen lassen (bisher blieb sie in den Modi publish/dyndns bestehen)
+        if (is_file($zone_file_path)) {
+            unlink($zone_file_path);
+        }
         return [
             'status' => 'error',
             'output' => "named-checkzone fehlgeschlagen für $zone_name:\n" . trim($check_output),
@@ -303,6 +331,9 @@ ZONE;
             if ($tx_started && $pdo->inTransaction()) {
                 $pdo->rollBack();
             }
+            if (is_file($zone_file_path)) {
+                unlink($zone_file_path);
+            }
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Speichern der Serialnummer: " . $e->getMessage(),
@@ -316,6 +347,9 @@ ZONE;
             $stmt = $pdo->prepare("UPDATE zones SET soa_serial = ? WHERE id = ?");
             $stmt->execute([$serial, $zone_id]);
         } catch (Throwable $e) {
+            if (is_file($zone_file_path)) {
+                unlink($zone_file_path);
+            }
             return [
                 'status' => 'error',
                 'output' => "Fehler beim Speichern der Serialnummer: " . $e->getMessage(),
@@ -346,20 +380,19 @@ ZONE;
  * - Unterstützt Master-/Slave-Generierung anhand von Rollen in der Datenbank.
  * - Die Konfiguration wird immer im angegebenen `$zone_base_dir/conf/` gespeichert.
  *
- * @param string $zone_base_dir Zielverzeichnis für die Konfiguration (z. B. /tmp/xyz)
+ * @param PDO $pdo Datenbankverbindung (explizit)
+ * @param string $zone_base_dir Zielverzeichnis für die Konfiguration (eigenes Arbeitsverzeichnis, BindWorkDir)
  * @param ?string $only_zone Optional: Nur eine bestimmte Zone verarbeiten
  * @param ?int $only_server_id Optional: Nur für einen bestimmten Server (nach IP-Zuordnung) erzeugen
  * @return array Assoziatives Ergebnis mit 'status', 'zones_written', 'conf_files', 'errors', 'output'
  */
-function generate_zone_conf_file(string $zone_base_dir, ?string $only_zone = null, ?int $only_server_id = null): array
+function generate_zone_conf_file(PDO $pdo, string $zone_base_dir, ?string $only_zone = null, ?int $only_server_id = null): array
 {
-    global $pdo;
-
     $zones_dir = rtrim($zone_base_dir, '/');
     $conf_dir = $zones_dir . "/conf";
 
     if (!is_dir($conf_dir)) {
-        mkdir($conf_dir, 0755, true);
+        mkdir($conf_dir, 0700, true);
     }
 
     $zones_written = [];
@@ -558,6 +591,16 @@ function writeZoneConfFile(
     bool $is_slave = false,
     bool $enable_slave_mode = false
 ): array {
+    // S33: Zonenname geht in Dateinamen und in zone "…" der BIND-Konfiguration
+    if (!zone_name_is_safe($zone_name)) {
+        return [
+            'zone' => $zone_name,
+            'file' => '',
+            'status' => 'error',
+            'output' => 'Ungültiger Zonenname: unzulässige Zeichen – Konfigurationsdatei wird nicht erzeugt.'
+        ];
+    }
+
     $conf_file_path = "$conf_dir/$zone_name.conf";
     $type = 'master';
     $masters_block = '';

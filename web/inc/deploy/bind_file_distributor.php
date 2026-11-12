@@ -4,7 +4,7 @@
  *
  * Zweck:
  * - Verteilt BIND-Zonendateien (`db.<zone>`) und Konfigurationsdateien (`<zone>.conf`) an alle zugewiesenen Nameserver über eine API.
- * - Alle Server – einschließlich des lokalen Webinterface-Hosts – werden über ihre API-Adresse angesprochen (z. B. 127.0.0.1).
+ * - Alle Server – einschließlich des lokalen Webinterface-Hosts – werden über ihre API-Adresse angesprochen (z. B. 127.0.0.1).
  *
  * Architektur:
  * - Zonendateien und Konfigurationsdateien werden temporär erzeugt und base64-kodiert per HTTPS-POST an die jeweiligen Server übertragen.
@@ -12,10 +12,12 @@
  * - Normale Sync-Requests übertragen ausschließlich die konkrete Zone. Verwaiste Zonen werden einmal pro
  *   Publish-Lauf über distribute_zone_cleanup() / zone_cleanup.php auf allen aktiven Servern entfernt.
  *
- * Merkmale:
- * - Es wird keine zentrale zones.conf mehr erzeugt.
- * - Die Funktionalität ist vollständig API-zentriert (API-only).
- * - Temporäre Dateien werden nach erfolgreicher Verarbeitung automatisch entfernt.
+ * Abhängigkeiten (Paket 4a):
+ * - Datenbankverbindung, Agent-Client (BindAgentClient) und Arbeitsverzeichnis (BindWorkDir) werden explizit
+ *   übergeben; keine globale Verbindung, kein Web-Bootstrap.
+ * - distribute_zone_file() verteilt ausschließlich eine bereits erzeugte Zonendatei (kein versteckter
+ *   Generierungs-/Publish-Pfad mehr). Die Datei gehört dem Aufrufer (Arbeitsverzeichnis), der sie entfernt.
+ * - Konfigurationsdateien entstehen im übergebenen Arbeitsverzeichnis (keine festen /tmp-Pfade, S34).
  *
  * Sicherheit:
  * - Die Übertragung erfolgt per HTTPS mit Token-basierter Authentifizierung.
@@ -23,33 +25,32 @@
  * - Es gibt keine direkte Bearbeitung von Benutzereingaben – alle Daten stammen aus der vertrauenswürdigen Datenbank.
  *
  * Abhängigkeiten:
- * - generate_zone_file() und generate_zone_conf_file() aus bind_file_generator.php
+ * - generate_zone_conf_file() und zone_name_is_safe() aus bind_file_generator.php
  */
+
+require_once __DIR__ . '/bind_file_generator.php';
+require_once __DIR__ . '/BindAgentClient.php';
+require_once __DIR__ . '/BindWorkDir.php';
 
 /**
  * Verteilt eine Zonendatei (db.<zone>) an alle aktiven, zugewiesenen Server (lokal und remote) über die API (zone_sync.php).
  *
- * Zweck:
- * - Für die angegebene Zone wird eine aktuelle Zonendatei erzeugt (sofern nicht vorab übergeben) und temporär gespeichert.
- * - Die Datei wird base64-kodiert über HTTPS an jeden aktiven Server übertragen, der dieser Zone in der Datenbank zugewiesen ist.
- * - Auch der lokale Server wird über 127.0.0.1 via API angesprochen.
- * - Es wird nur die konkrete Zone übertragen (kein Cleanup anderer Zonen auf Empfängerseite).
- *
  * Verhalten:
- * - Wenn $zone_path nicht angegeben ist, wird die Datei automatisch generiert.
- * - Alle Übertragungsfehler (Curl, HTTP) werden protokolliert und gesammelt zurückgegeben.
- * - Temporäre Dateien im /tmp-Verzeichnis werden nach erfolgreichem Versand gelöscht.
+ * - Die Zonendatei muss bereits erzeugt sein (generate_zone_file); fehlt sie, wird ein Fehler gemeldet.
+ * - Die Datei wird base64-kodiert über HTTPS an jeden aktiven Server übertragen, der dieser Zone zugewiesen ist.
+ * - Alle Übertragungsfehler (Curl, HTTP) werden gesammelt zurückgegeben.
  *
+ * @param PDO $pdo Datenbankverbindung
+ * @param BindAgentClient $agent Agent-Client
  * @param int $zone_id ID der zu verteilenden Zone (muss in `zones` existieren)
- * @param string|null $zone_path Optional: bereits erzeugter Dateipfad (z. B. aus Vorvalidierung). Wird sonst intern erzeugt.
+ * @param string|null $zone_path Pfad der erzeugten Zonendatei
  * @return array Assoziatives Array mit 'status', 'errors', 'output'
  */
-function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
-    global $pdo;
+function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?string $zone_path): array {
     $errors = [];
     $outputs = [];
 
-    // Zonennamen anhand der ID abfragen (zur Anzeige und für named-checkzone)
+    // Zonennamen anhand der ID abfragen (zur Anzeige)
     $zone_stmt = $pdo->prepare("SELECT name FROM zones WHERE id = ?");
     $zone_stmt->execute([$zone_id]);
     $zone_name = $zone_stmt->fetchColumn();
@@ -83,29 +84,8 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         ];
     }
 
-    // Falls kein Pfad übergeben wurde, Zonendatei jetzt generieren
-    if (!$zone_path) {
-        $zone_path_result = generate_zone_file(
-            $zone_id,
-            '/tmp',
-            'publish'
-        );
-
-        // Falls Generierung oder Übergabe ungültig ist: abbrechen
-        if (!is_array($zone_path_result) || $zone_path_result['status'] === 'error') {
-            $msg = "Zonendatei konnte nicht generiert werden für $zone_name: " . ($zone_path_result['output'] ?? 'Unbekannter Fehler');
-            error_log("[distribute_zone_file] $msg");
-            return [
-                'status' => 'error',
-                'errors' => [$msg],
-                'output' => $msg
-            ];
-        }
-
-        $zone_path = $zone_path_result['path'];
-    }
-
-    if (!is_string($zone_path) || !file_exists($zone_path)) {
+    // Keine Generierung an dieser Stelle (früherer versteckter Publish-Pfad entfernt)
+    if (!is_string($zone_path) || $zone_path === '' || !file_exists($zone_path)) {
         return [
             'status' => 'error',
             'errors' => ["Zonendatei fehlt oder ungültiger Pfad."],
@@ -116,56 +96,27 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
     // Dateiinhalt base64-kodieren für Versand über HTTP
     $zone_data = base64_encode(file_get_contents($zone_path));
 
-    // Alle zugewiesenen Server durchlaufen (nur Remote-Server erhalten die Datei)
     foreach ($servers as $srv) {
-        // API-Endpunkt für Zonensynchronisation auf dem Remote-Server
-        $url = "https://{$srv['api_ip']}" . rtrim(REMOTE_API_BASE, '/') . '/zones/zone_sync.php';
-
-        // JSON-Payload für POST-Request vorbereiten (nur die konkrete Zone)
-        $payload = json_encode([
+        // Nur die konkrete Zone
+        $r = $agent->postJson($srv['api_ip'], '/zones/zone_sync.php', (string)$srv['api_token'], [
             'zone_id'     => $zone_id,
             'zone_name'   => $zone_name,
             'zone_data'   => $zone_data
-        ]);
-
-        // CURL-Request an den Remote-Agenten senden
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $srv['api_token'],
-                'Content-Type: application/json'
-            ],
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_SSL_VERIFYPEER => CURL_SSL_VERIFYPEER,
-            CURLOPT_SSL_VERIFYHOST => CURL_SSL_VERIFYHOST,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 30,
-        ]);
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curl_error = curl_error($ch);
+        ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
 
         // Fehlerauswertung für diesen Server
-        if (!empty($curl_error)) {
-            $errors[] = "CURL-Fehler bei {$srv['name']} ({$srv['api_ip']}): $curl_error";
-        } elseif ($http_code !== 200) {
-            $json = json_decode($response, true);
+        if (!empty($r['curlError'])) {
+            $errors[] = "CURL-Fehler bei {$srv['name']} ({$srv['api_ip']}): {$r['curlError']}";
+        } elseif ($r['httpCode'] !== 200) {
+            $json = json_decode((string)$r['body'], true);
             $msg = $json['message'] ?? 'Unbekannter Fehler';
             $details = trim($json['check_output'] ?? '');
-            $combined = "HTTP-$http_code bei {$srv['name']} ({$srv['api_ip']}): $msg" . ($details ? " – $details" : '');
+            $combined = "HTTP-{$r['httpCode']} bei {$srv['name']} ({$srv['api_ip']}): $msg" . ($details ? " – $details" : '');
             $errors[] = $combined;
         }
     }
 
-    // Zusammenfassung und Logging
     $output = implode("\n", $outputs);
-
-    // Wenn temporäre Datei verwendet wurde: löschen
-    if (str_starts_with($zone_path, '/tmp/') && file_exists($zone_path)) {
-        @unlink($zone_path);
-    }
 
     // Status: Agent-/HTTP-/Netzwerkfehler werden als 'warning' gemeldet (nicht 'error'),
     // damit Publish-Ablauf, DynDNS-Rollback und changed/bind_dirty unverändert bleiben.
@@ -181,22 +132,28 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
 /**
  * Verteilt eine zonenspezifische BIND-Konfigurationsdatei (.conf) an alle aktiven, zugewiesenen Server (lokal und remote) via API.
  *
- * Zweck:
- * - Die Konfiguration wird für jeden Server individuell erzeugt und über die API (conf_sync.php) übermittelt.
- * - Auch der lokale Server wird wie ein Remote-Server behandelt (API-Aufruf mit 127.0.0.1).
- * - Die Konfiguration wird temporär mit `generate_zone_conf_file()` erzeugt und anschließend als base64-encoded JSON-Payload übertragen.
- * - Es wird nur die konkrete Zone übertragen (kein Cleanup anderer `.conf`-Dateien auf Empfängerseite).
- *
- * Verhalten:
+ * - Die Konfiguration wird je Server im übergebenen Arbeitsverzeichnis erzeugt (generate_zone_conf_file)
+ *   und als base64-encoded JSON-Payload übertragen; die erzeugten Dateien werden je Server wieder entfernt.
  * - Wenn ein Server nicht erreichbar ist oder einen Fehler zurückliefert, wird dies gesammelt und als Fehlerstatus gemeldet.
- * - Erfolgreiche Übertragungen werden in der Rückgabe geloggt.
  *
+ * @param PDO $pdo Datenbankverbindung
+ * @param BindAgentClient $agent Agent-Client
+ * @param BindWorkDir $work Arbeitsverzeichnis des Aufrufers
  * @param string $zone_name Name der Zone, für die die Konfiguration erzeugt und verteilt werden soll.
  * @return array Assoziatives Array mit 'status', 'errors', 'output'
- */function distribute_zone_conf_file(string $zone_name): array {
-    global $pdo;
+ */
+function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir $work, string $zone_name): array {
     $errors = [];
     $outputs = [];
+
+    // S33: Zonenname geht in Pfade und in die BIND-Konfiguration
+    if (!zone_name_is_safe($zone_name)) {
+        return [
+            'status' => 'error',
+            'errors' => ['Ungültiger Zonenname: unzulässige Zeichen'],
+            'output' => '[conf-distribute] Ungültiger Zonenname – keine Konfiguration erzeugt.'
+        ];
+    }
 
     // Server ermitteln
     $stmt = $pdo->prepare("
@@ -220,9 +177,9 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
     }
 
     foreach ($servers as $srv) {
-        // Konfigurationsdatei erzeugen im temporären Verzeichnis
-        $tmp_dir = "/tmp/dnsmanager_conf_{$srv['api_ip']}";
-        $gen_result = generate_zone_conf_file($tmp_dir, $zone_name, $srv['id']);
+        // Konfigurationsdatei im eigenen Arbeitsverzeichnis erzeugen (je Server getrennt)
+        $tmp_dir = $work->path() . '/conf_' . (int)$srv['id'];
+        $gen_result = generate_zone_conf_file($pdo, $tmp_dir, $zone_name, (int)$srv['id']);
         $outputs[] = "[{$srv['name']}]: {$gen_result['output']}";
 
         $conf_path = $tmp_dir . "/conf/{$zone_name}.conf";
@@ -232,51 +189,30 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
         }
 
         $conf_data = base64_encode(file_get_contents($conf_path));
-        $url = "https://{$srv['api_ip']}" . rtrim(REMOTE_API_BASE, '/') . '/zones/conf_sync.php';
 
         // API-Payload senden (nur die konkrete Zone)
-        $payload = json_encode([
+        $r = $agent->postJson($srv['api_ip'], '/zones/conf_sync.php', (string)$srv['api_token'], [
             'zone_name' => $zone_name,
             'conf_data' => $conf_data
-        ]);
+        ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $srv['api_token'],
-                'Content-Type: application/json'
-            ],
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_SSL_VERIFYPEER => CURL_SSL_VERIFYPEER,
-            CURLOPT_SSL_VERIFYHOST => CURL_SSL_VERIFYHOST,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 30,
-        ]);
-
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curl_error = curl_error($ch);
-
-        if (!empty($curl_error)) {
-            $errors[] = "CURL-Fehler bei {$srv['name']}: $curl_error";
-        } elseif ($http_code !== 200) {
-            $json = json_decode($response, true);
+        if (!empty($r['curlError'])) {
+            $errors[] = "CURL-Fehler bei {$srv['name']}: {$r['curlError']}";
+        } elseif ($r['httpCode'] !== 200) {
+            $json = json_decode((string)$r['body'], true);
             $msg = $json['message'] ?? 'Unbekannter Fehler';
             $details = $json['check_output'] ?? '';
-            $errors[] = "HTTP-$http_code von {$srv['name']}: $msg" . ($details ? " – $details" : '');
+            $errors[] = "HTTP-{$r['httpCode']} von {$srv['name']}: $msg" . ($details ? " – $details" : '');
         }
 
-        // Temporärdateien löschen
-        foreach (glob("$tmp_dir/conf/*.conf") as $f) {
+        // Temporärdateien dieses Servers löschen
+        foreach (glob("$tmp_dir/conf/*.conf") ?: [] as $f) {
             @unlink($f);
         }
         @rmdir($tmp_dir . '/conf');
         @rmdir($tmp_dir);
     }
 
-    // Zusammenfassendes Logging
     $status = empty($errors) ? 'ok' : 'error';
 
     $output = implode("\n", $outputs);
@@ -300,10 +236,11 @@ function distribute_zone_file(int $zone_id, ?string $zone_path = null): array {
  * - Curl-, HTTP- und Agent-Fehler werden pro Server gesammelt.
  * - status 'ok', wenn alle Cleanup-Requests erfolgreich waren, sonst 'warning'.
  *
+ * @param PDO $pdo Datenbankverbindung
+ * @param BindAgentClient $agent Agent-Client
  * @return array Assoziatives Array mit 'status', 'errors', 'output'
  */
-function distribute_zone_cleanup(): array {
-    global $pdo;
+function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent): array {
     $errors = [];
     $outputs = [];
 
@@ -335,38 +272,18 @@ function distribute_zone_cleanup(): array {
         }
 
         // Leere Liste nur mit ausdrücklichem allow_empty = true (Server ohne zugewiesene Zone)
-        $payload = json_encode([
+        $r = $agent->postJson($srv['api_ip'], '/zones/zone_cleanup.php', (string)$srv['api_token'], [
             'valid_zones' => array_values($valid_zones),
             'allow_empty' => empty($valid_zones)
-        ]);
+        ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
 
-        $url = "https://{$srv['api_ip']}" . rtrim(REMOTE_API_BASE, '/') . '/zones/zone_cleanup.php';
-
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $srv['api_token'],
-                'Content-Type: application/json'
-            ],
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_SSL_VERIFYPEER => CURL_SSL_VERIFYPEER,
-            CURLOPT_SSL_VERIFYHOST => CURL_SSL_VERIFYHOST,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 30,
-        ]);
-
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curl_error = curl_error($ch);
-
-        if (!empty($curl_error)) {
-            $errors[] = "CURL-Fehler bei Cleanup auf {$srv['name']} ({$srv['api_ip']}): $curl_error";
+        if (!empty($r['curlError'])) {
+            $errors[] = "CURL-Fehler bei Cleanup auf {$srv['name']} ({$srv['api_ip']}): {$r['curlError']}";
             continue;
         }
 
-        $json = json_decode((string)$response, true);
+        $http_code = $r['httpCode'];
+        $json = json_decode((string)$r['body'], true);
         if ($http_code !== 200 || !is_array($json) || ($json['status'] ?? '') !== 'success') {
             $msg = is_array($json) ? ($json['message'] ?? 'Unbekannter Fehler') : 'Ungültige Antwort';
             $details = (is_array($json) && !empty($json['errors']) && is_array($json['errors']))

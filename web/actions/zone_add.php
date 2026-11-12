@@ -22,7 +22,7 @@ verify_csrf_token();
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/TopologyLock.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneService.php';
-require_once __DIR__ . '/../inc/deploy/LegacyZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 requireRole(['admin']);
@@ -50,7 +50,7 @@ $input = new ZoneInput(
     $_POST['master_server_id'] ?? null
 );
 
-$zoneService = new ZoneService($pdo, new LegacyZoneBuildBackend($pdo), new TopologyLock($pdo));
+$zoneService = new ZoneService($pdo, new BindZoneBuildBackend($pdo), new TopologyLock($pdo));
 $result = $zoneService->createZone(actorFromSession(), $input);
 
 $lock = TopologyLock::NAME;

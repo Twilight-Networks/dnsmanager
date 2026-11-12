@@ -1,14 +1,15 @@
 <?php
 /**
  * Datei: inc/app/zones/ZoneBuildBackend.php
- * Zweck: Schnittstelle des ZoneService zur Zonendatei-Erzeugung und -Prüfung.
+ * Zweck: Schnittstelle der Services (Zone, Record, Server, DynDNS) zur Zonendatei-Prüfung und zum
+ *        NS-/Glue-Neuaufbau.
  *
- * Beide Operationen laufen innerhalb der offenen Transaktion des Aufrufers und dürfen keine eigene
- * Transaktion beginnen oder beenden. Ergebnisstruktur: ['status' => 'ok'|'warning'|'error',
- * 'output' => string].
+ * Beide Operationen laufen ausschließlich innerhalb der offenen Transaktion des Aufrufers und dürfen keine
+ * eigene Transaktion beginnen oder beenden. Ohne offene Transaktion bricht die Implementierung mit
+ * LogicException ab. Commit und Rollback (auch bei status 'error') verantwortet der Aufrufer; er hält die
+ * Zonenzeile gesperrt. Ergebnisstruktur: ['status' => 'ok'|'warning'|'error', 'output' => string].
  *
- * Einzige Implementierung derzeit: LegacyZoneBuildBackend (inc/deploy), Übergangslösung bis zur
- * Verlagerung von NS/Glue-Aufbau und Prüfung in die Application-Schicht.
+ * Implementierung: BindZoneBuildBackend (inc/deploy).
  */
 
 interface ZoneBuildBackend
