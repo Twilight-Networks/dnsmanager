@@ -13,7 +13,6 @@
  * Fachlogik der Records liegt in inc/app/records (RecordService, RecordReadService, RecordContentBuilder,
  * RecordContentParser).
  */
-require_once __DIR__ . '/diagnostics.php';
 
 /**
  * Prüft, ob der aktuell eingeloggte Benutzer eine der erlaubten Rollen besitzt.

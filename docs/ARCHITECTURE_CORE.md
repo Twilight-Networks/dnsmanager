@@ -43,8 +43,8 @@ Stand: 12.11.2026, Basis `main` = `afb6c0c` (nach Paket 5a). Dieses Dokument ist
 | **Server** | ✅ **mit Paket 1** | `ServerService` (anlegen, ändern inkl. Topologie-Lock, NS/Glue-Neuaufbau und `bind_dirty`, löschen, BIND-Reload), `ServerReadService` (Liste, Bearbeitungsdaten, Serverdiagnosen), `ServerControlBackend` + `LegacyAgentServerControlBackend` | – (NS/Glue-Neuaufbau seit 4a atomar über `BindZoneBuildBackend`) |
 | DynDNS-Konten | ✅ **mit Paket 2** | `DyndnsAccountService`, `DyndnsReadService` (auf Basis `dyndns_guard.php`) | – |
 | DynDNS-Update-API | ✅ **mit Paket 2/4b** | `DyndnsUpdateService` (Commit vor Publish, Retry ausstehender Publishes), Veröffentlichung über `PublishService::publishZone()` | – |
-| Monitoring/Diagnose | ❌ | – | siehe 3.5 |
-| Dashboard/Layout/System-Health | 🟡 **5a** | `SystemStatusReadService` (Publish-Status, Dashboard-Kennzahlen), `DiagnosticReadService` (Übersicht + Auswertung) | Systemprüfungen (`check_*`, `$LANG`) und `exec` des Monitorings auf der Systemstatus-Seite (5b) |
+| Monitoring/Diagnose | ✅ **mit 5b** | `MonitoringService` (Lauf mit Laufsperre, Speichern, Orphan-Bereinigung, Benachrichtigung, Log-Retention), `MonitoringBackend` + `AgentMonitoringBackend`, `MonitoringNotifier` + `PhpMailerNotifier` | CLI-Skripte und Systemstatus-Seite als Adapter (`inc/monitoring_runner.php`) |
+| Dashboard/Layout/System-Health | ✅ **mit 5a/5b** | `SystemStatusReadService`, `DiagnosticReadService`, `SystemCheckService` (Systemprüfungen ohne Sprachtexte) | – |
 | Authentifizierung | ❌ | Revalidierung (S3) DB-gestützt, aber Login an Session gebunden | siehe 3.5 |
 
 ## 3. Verbleibende Kopplungen (Inventar)
@@ -145,7 +145,7 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - Optional (Agent): Sperr- und Temporärdateien des Agenten in `/tmp` (S34, Agent-Teil); Serial-Prüfung im Agenten als spätere zusätzliche Absicherung.
 - Der Netzwerkzugriff im Monitoring bleibt in Paket 5.
 
-### 3.5 Monitoring, Dashboard, Authentifizierung und übrige Kopplungen (Paket 5 – 5a erledigt, PR #60, `main` `afb6c0c`; 5b–5d offen)
+### 3.5 Monitoring, Dashboard, Authentifizierung und übrige Kopplungen (Paket 5 – 5a erledigt, PR #60, `main` `afb6c0c`; 5b Draft-PR; 5c–5d offen)
 
 **Gliederung Paket 5 (Reihenfolge):** 5a Status- und Diagnose-Lesezugriffe → 5b Monitoring und Systemprüfungen → 5c Authentifizierung → 5d übrige Kopplungen (Logging-Helfer, `pages/update.php`), danach Paket 6.
 
@@ -155,21 +155,23 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - `pages/system_health.php`: Diagnosen über `DiagnosticReadService` (Darstellungsstruktur über `inc/web/diagnostics_view.php`).
 - `getDiagnosticResults()` ist entfernt (S38): Diagnosen werden nur noch berechtigt gelesen (Server/Zonen-Read-Services, Bedingung in derselben Abfrage).
 
-**Offen (5b–5d):**
+**Erledigt mit 5b:**
+- **`MonitoringService`** (`inc/app/monitoring`) ersetzt die Fachlogik aus `monitoring_run-cli.php`, `inc/monitoring.php` und `inc/monitoring_mailer.php`:
+  - Laufsperre `dnsmanager_monitoring` (Cron überspringt einen laufenden Lauf, die manuelle Aktualisierung wartet bis zu 60 s);
+  - Netzwerkprüfungen vor der Transaktion, Speichern je Server/Zone in einer kurzen Transaktion;
+  - `saveDiagnostic` unter `FOR UPDATE`, gleichzeitige Neuanlage (Unique-Schlüssel) wird zur Aktualisierung;
+  - Orphan-Bereinigung mit einer `DELETE … NOT EXISTS`-Anweisung statt N+1;
+  - Benachrichtigung über die Schnittstelle `MonitoringNotifier` (Auswahl, Texte, Reihenfolge, `notified = 1` erst nach Versand und Retry im nächsten Lauf **unverändert**);
+  - Log-Retention (`purgeLog`, `parseRetention`).
+- **Agent-Prüfungen** über `AgentMonitoringBackend` (gemeinsamer `BindAgentClient`, neu mit GET); Prüf- und Auswertungslogik unverändert. **Mailversand** über `PhpMailerNotifier`.
+- **CLI-Skripte** sind Adapter: `cliGuard()` vor Konfiguration und Datenbank, keine Fachlogik; die Logzeilen schreibt `inc/monitoring_runner.php`, gemeinsam für Cron und Systemstatus-Seite.
+- **S37:** Die Systemstatus-Seite ruft den Monitoring-Lauf über denselben Service im Webprozess auf statt per `exec`; weiterhin synchron, mit gleichen Toasts.
+- **Systemprüfungen** im `SystemCheckService` (Konfigurationscodes statt `$LANG`, PHP-Version/Module, Dateirechte); die Texte liefert `inc/web/system_check_messages.php`.
+- Entfernt: `inc/monitoring.php`, `inc/monitoring_mailer.php`, `inc/diagnostics.php` (inkl. Include in `helpers.php`).
 
-**Monitoring:**
-- `inc/monitoring.php`: Agent-Checks per curl; `saveDiagnostic()` (Select, dann Insert/Update ohne Sperre); Orphan-Cleanup mit N+1-Abfragen.
-- `scripts/monitoring_run-cli.php`: `SELECT *` auf `servers`, Transaktion um curl-Aufrufe, Bootstrap vor `cliGuard()`, kein Lauf-Lock.
-- `inc/monitoring_mailer.php`: Mailversand und `notified = 1` gemischt.
-- `scripts/monitoring_log_cleanup-cli.php`: Retention-Löschung (🔧/CLI).
-
-**Diagnose-Lesezugriffe:**
-- `inc/diagnostics.php`: `check_config_validity` nutzt `$LANG`; Dateirechte-Scan; PHP-Version/Module (Systemprüfungen, 5b).
+**Offen (5c–5d):**
 
 **Seiten und Layout:**
-- `pages/dashboard.php`: ruft die Systemprüfungen (`check_*`) direkt auf (5b).
-- `templates/layout.php`: – (erledigt mit 5a)
-- `pages/system_health.php`: `exec("php monitoring_run-cli.php")` synchron im Webprozess (S37, 5b); Systemprüfungen (5b).
 - `pages/update.php`: ausgehender Update-Check per curl ohne Rollenprüfung.
 
 **Authentifizierung:**
@@ -211,7 +213,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | **2 DynDNS** | `DyndnsAccountService` (anlegen, ändern, Passwort, löschen), `DyndnsReadService` (Liste ohne Hash, zulässige Zonen für beide Formulare), `DyndnsUpdateService` (API: authentifizieren, sperren, planen, anwenden, publizieren; Antwortprotokoll bleibt im Endpunkt). Die DynDNS-eigenen Record-Mutationen werden im Service gebündelt, mit den Sperrfunktionen aus `dyndns_guard`. Das Einzel-Publish wird über eine Schnittstelle mit **unverändertem** Verhalten angebunden. | **erledigt** (PR #56) |
 | **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **erledigt** (PR #57) |
 | **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **erledigt** (4a PR #58, 4b PR #59) |
-| **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60); 5b–5d offen |
+| **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60); **5b Draft-PR**; 5c–5d offen |
 | **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | offen |
 
 **Begründete Anpassungen gegenüber der vorgegebenen Reihenfolge:**
@@ -233,7 +235,7 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | S34 | Feste bzw. vorhersagbare `/tmp`-Pfade (`named-checkzone-error.log`, `dnsmanager_conf_{ip}`, Agent-Lock) | Generator, Distributor, Agent – **Generator/Distributor behoben mit 4a** (`BindWorkDir`); Agent-Teil offen |
 | S35 | Logout per GET ohne CSRF; Login überspringt die CSRF-Prüfung bei fehlendem Token | `logout.php`, `login.php` |
 | S36 | `pages/update.php`: keine Rollenprüfung; `href` aus fremder JSON-Antwort ohne Schemaprüfung | `pages/update.php` |
-| S37 | `system_health.php` startet das Monitoring per `exec` im Webprozess; `db.php` gibt den DB-Fehlertext per `die()` aus | `pages/system_health.php`, `inc/db.php` |
+| S37 | `system_health.php` startet das Monitoring per `exec` im Webprozess; `db.php` gibt den DB-Fehlertext per `die()` aus | `pages/system_health.php`, `inc/db.php` – **`exec` behoben mit 5b** (Monitoring im Webprozess über `MonitoringService`); `db.php`-Fehlertext offen |
 | S38 | `getDiagnosticResults()` ohne Berechtigungsbezug; `records.php` filtert erst in PHP | `inc/diagnostics.php`, `pages/records.php` – **behoben** (`records.php` mit Paket 3, übrige Seiten mit 5a; Funktion entfernt) |
 | F1 | Die Änderungserkennung in der Serveränderung vergleicht DB-Zeichenketten mit Integern (`'1' !== 1`). Daher erscheint „Keine Änderungen“ praktisch nie. Bei der Entkopplung bewusst unverändert übernommen. | `ServerService::updateServer` (vorher `server_update.php`) |
 | F2 | Sprachschlüssel `topology_locked`, `publish_all_locked` und `zone_prefix_placeholder` fehlen; die Actions nutzen Fallback-Texte | `web/lang/*.php` |
@@ -252,3 +254,4 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | 12.11.2026 | 4a | BIND-/Publish-Infrastruktur entkoppelt (PR #58, gemergt als `5f7bd6a`; D4–D7 akzeptiert): explizite Abhängigkeiten, `BindAgentClient`, `BindWorkDir` (S34), `zone_name_is_safe` (S33), `BindZoneBuildBackend`, ServerService-NS/Glue atomar |
 | 12.11.2026 | 4b | S32: DynDNS-Einzelpublish nach dem Commit über `PublishService::publishZone()` mit gemeinsamer Zonenlogik, Lock und Tri-State; Retry ausstehender Publishes; Review-Korrektur gelöschte Zone (PR #59, gemergt als `43e4823`; D8–D11 akzeptiert) |
 | 12.11.2026 | 5a | Status- und Diagnose-Lesezugriffe (Dashboard, Layout, System-Health) über `SystemStatusReadService`/`DiagnosticReadService`; `getDiagnosticResults()` entfernt (S38) (PR #60, gemergt als `afb6c0c`; D12 akzeptiert) |
+| 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService` (Draft-PR) |

@@ -5,20 +5,25 @@
  * Zweck: Entfernt veraltete Einträge aus der Tabelle `diagnostic_log` entsprechend der konfigurierten Aufbewahrungsfrist.
  *
  * Details:
- * - Die Aufbewahrungsfrist wird über die Konstante MONITORING_LOG_RETENTION gesteuert (z. B. '30D', '12M', '1Y').
- * - Nur CLI-Aufruf erlaubt.
+ * - CLI-Adapter (Paket 5b): Die Fachlogik liegt in MonitoringService::purgeLog() (inc/app/monitoring).
+ * - Die Aufbewahrungsfrist wird über die Konstante MONITORING_LOG_RETENTION gesteuert (z. B. '30D', '12M', '1Y');
+ *   ohne Konstante gilt '30D'.
+ * - Nur CLI-Aufruf erlaubt (cliGuard vor dem Laden von Konfiguration und Datenbank).
  * - Bei ungültiger Frist wird ein Fehlerprotokoll geschrieben.
- * - Erfolgreiche Löschoperationen werden per AppLog und CLI ausgegeben.
+ * - Erfolgreiche Löschoperationen werden per AppLog ausgegeben.
  *
  * Konfiguration:
- * - Konstante MONITORING_LOG_RETENTION aus ui_config.php (z. B. '90D', '1Y', '72H')
+ * - Konstante MONITORING_LOG_RETENTION aus ui_config.php (z. B. '90D', '1Y', '72H')
  */
 
-require_once __DIR__ . '/../config/ui_config.php';
-require_once __DIR__ . '/../inc/db.php';
 require_once __DIR__ . '/../inc/helpers_cli.php';
 cliGuard();
+require_once __DIR__ . '/../config/ui_config.php';
+require_once __DIR__ . '/../inc/db.php';
 require_once __DIR__ . '/../inc/logging.php';
+require_once __DIR__ . '/../inc/app/monitoring/MonitoringService.php';
+require_once __DIR__ . '/../inc/deploy/AgentMonitoringBackend.php';
+require_once __DIR__ . '/../inc/deploy/PhpMailerNotifier.php';
 
 date_default_timezone_set('UTC');
 
@@ -30,50 +35,28 @@ if (!isset($GLOBALS['pdo']) || !$GLOBALS['pdo']) {
     exit(1);
 }
 
-$db = $GLOBALS['pdo'];
-$retention = MONITORING_LOG_RETENTION ?? '30D';
-$interval = parseIntervalToDateTime($retention);
+$retention = defined('MONITORING_LOG_RETENTION') ? (string)MONITORING_LOG_RETENTION : '30D';
+$service = new MonitoringService($GLOBALS['pdo'], new AgentMonitoringBackend(), new PhpMailerNotifier(), false);
+$result = $service->purgeLog($retention);
+$message = $result->messages[0];
+$ctx = $message->context;
 
-if ($interval === null) {
-    $msg = "Ungültige Aufbewahrungsfrist: '$retention'";
-    appLog('error', $msg);
-    echo "[Fehler] $msg\n";
-    exit(1);
-}
+switch ($message->code) {
+    case 'monitoring.log_cleanup.success':
+        appLog('info', "{$ctx['count']} veraltete Einträge aus diagnostic_log entfernt (älter als {$ctx['threshold']})");
+        exit(0);
 
-$threshold = (new DateTime())->sub($interval)->format('Y-m-d H:i:s');
+    case 'monitoring.log_cleanup.invalid_retention':
+        $msg = "Ungültige Aufbewahrungsfrist: '{$ctx['retention']}'";
+        appLog('error', $msg);
+        echo "[Fehler] $msg\n";
+        exit(1);
 
-try {
-    $stmt = $db->prepare("DELETE FROM diagnostic_log WHERE changed_at < ?");
-    $stmt->execute([$threshold]);
-    $count = $stmt->rowCount();
+    case 'monitoring.log_cleanup.failed':
+        appLog('error', "Fehler bei der Bereinigung: " . $ctx['detail']);
+        exit(1);
 
-    $msg = "$count veraltete Einträge aus diagnostic_log entfernt (älter als $threshold)";
-    appLog('info', $msg);
-    exit(0);
-} catch (Exception $e) {
-    $msg = "Fehler bei der Bereinigung: " . $e->getMessage();
-    appLog('error', $msg);
-    exit(1);
-}
-
-/**
- * Hilfsfunktion: Wandelt einen Zeitbezeichner wie „30D“ oder „6M“ in ein DateInterval-Objekt.
- * Unterstützte Einheiten: H = Stunden, D = Tage, W = Wochen, M = Monate, Y = Jahre.
- *
- * @param string $spec Zeitbezeichner, z. B. '30D'
- * @return DateInterval|null
- */
-function parseIntervalToDateTime(string $spec): ?DateInterval {
-    if (!preg_match('/^(\d+)([HDWMY])$/i', $spec, $match)) return null;
-    [$_, $amount, $unit] = $match;
-
-    return match (strtoupper($unit)) {
-        'H' => new DateInterval("PT{$amount}H"),
-        'D' => new DateInterval("P{$amount}D"),
-        'W' => new DateInterval("P" . ($amount * 7) . "D"),
-        'M' => new DateInterval("P{$amount}M"),
-        'Y' => new DateInterval("P{$amount}Y"),
-        default => null
-    };
+    default:
+        appLog('error', "Unbehandelte ServiceMessage '{$message->code}' (monitoring log cleanup)");
+        exit(1);
 }

@@ -10,7 +10,6 @@
 
 define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
-require_once __DIR__ . '/../inc/diagnostics.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
