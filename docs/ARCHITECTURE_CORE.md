@@ -1,6 +1,6 @@
 # DNS Manager – Core-/UI-Trennung: Architektur-Inventar und Restarbeiten
 
-Stand: 12.11.2026, Basis `main` = `afb6c0c` (nach Paket 5a). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
+Stand: 12.11.2026, Basis `main` = `aabe398` (nach Paket 5b). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
 „vollständige Trennung der Fachlogik von der Weboberfläche“. Es wird mit jedem Arbeitspaket aktualisiert.
 
 **Legende:**
@@ -145,7 +145,7 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - Optional (Agent): Sperr- und Temporärdateien des Agenten in `/tmp` (S34, Agent-Teil); Serial-Prüfung im Agenten als spätere zusätzliche Absicherung.
 - Der Netzwerkzugriff im Monitoring bleibt in Paket 5.
 
-### 3.5 Monitoring, Dashboard, Authentifizierung und übrige Kopplungen (Paket 5 – 5a erledigt, PR #60, `main` `afb6c0c`; 5b Draft-PR; 5c–5d offen)
+### 3.5 Monitoring, Dashboard, Authentifizierung und übrige Kopplungen (Paket 5 – 5a erledigt, PR #60; 5b erledigt, PR #61, `main` `aabe398`; 5c–5d offen)
 
 **Gliederung Paket 5 (Reihenfolge):** 5a Status- und Diagnose-Lesezugriffe → 5b Monitoring und Systemprüfungen → 5c Authentifizierung → 5d übrige Kopplungen (Logging-Helfer, `pages/update.php`), danach Paket 6.
 
@@ -213,7 +213,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | **2 DynDNS** | `DyndnsAccountService` (anlegen, ändern, Passwort, löschen), `DyndnsReadService` (Liste ohne Hash, zulässige Zonen für beide Formulare), `DyndnsUpdateService` (API: authentifizieren, sperren, planen, anwenden, publizieren; Antwortprotokoll bleibt im Endpunkt). Die DynDNS-eigenen Record-Mutationen werden im Service gebündelt, mit den Sperrfunktionen aus `dyndns_guard`. Das Einzel-Publish wird über eine Schnittstelle mit **unverändertem** Verhalten angebunden. | **erledigt** (PR #56) |
 | **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **erledigt** (PR #57) |
 | **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **erledigt** (4a PR #58, 4b PR #59) |
-| **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60); **5b Draft-PR**; 5c–5d offen |
+| **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60), **5b erledigt** (PR #61); 5c–5d offen |
 | **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | offen |
 
 **Begründete Anpassungen gegenüber der vorgegebenen Reihenfolge:**
@@ -254,4 +254,4 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | 12.11.2026 | 4a | BIND-/Publish-Infrastruktur entkoppelt (PR #58, gemergt als `5f7bd6a`; D4–D7 akzeptiert): explizite Abhängigkeiten, `BindAgentClient`, `BindWorkDir` (S34), `zone_name_is_safe` (S33), `BindZoneBuildBackend`, ServerService-NS/Glue atomar |
 | 12.11.2026 | 4b | S32: DynDNS-Einzelpublish nach dem Commit über `PublishService::publishZone()` mit gemeinsamer Zonenlogik, Lock und Tri-State; Retry ausstehender Publishes; Review-Korrektur gelöschte Zone (PR #59, gemergt als `43e4823`; D8–D11 akzeptiert) |
 | 12.11.2026 | 5a | Status- und Diagnose-Lesezugriffe (Dashboard, Layout, System-Health) über `SystemStatusReadService`/`DiagnosticReadService`; `getDiagnosticResults()` entfernt (S38) (PR #60, gemergt als `afb6c0c`; D12 akzeptiert) |
-| 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService` (Draft-PR) |
+| 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService`; Review-Korrektur Runner-Fehlerbehandlung (PR #61, gemergt als `aabe398`; D13–D16 akzeptiert) |
