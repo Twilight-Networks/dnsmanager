@@ -25,13 +25,15 @@
  * - Technischer Fehler bei der Prüfung → Fail-Closed: Die Anfrage wird mit HTTP 503 abgebrochen,
  *   der Fehler protokolliert (ohne Zugangsdaten, Session-ID oder SQL-Details).
  *
+ * Paket 5c: Die fachliche Prüfung (Regeln und Reihenfolge unverändert) liegt im webunabhängigen
+ * AuthService::validateSession(); diese Datei bildet dessen Ergebnis auf Widerruf, HTTP 503 und die
+ * bisherigen Protokollzeilen ab. Zulässige Rollen: AuthService::ROLES.
+ *
  * Abhängigkeiten: laufende Session (inc/session.php), appLog() (inc/logging.php), BASE_URL.
  */
 
 require_once __DIR__ . '/../app/SchemaCheck.php';
-
-/** Zulässige Rollen einer gültigen Session */
-const SESSION_GUARD_ROLES = ['admin', 'zoneadmin'];
+require_once __DIR__ . '/../app/auth/AuthService.php';
 
 /**
  * Prüft das vom Code vorausgesetzte Datenbankschema (SchemaCheck) und beendet die Anfrage bei
@@ -52,6 +54,18 @@ function session_guard_require_schema(PDO $pdo): void
         return;
     }
 
+    session_guard_schema_failed($problems);
+}
+
+/**
+ * Protokolliert ein inkompatibles Schema und beendet die Anfrage mit HTTP 503 (Fail-Closed).
+ *
+ * @param array<int, string> $problems Befunde aus SchemaCheck
+ *
+ * @return never
+ */
+function session_guard_schema_failed(array $problems): never
+{
     appLog('error', 'event=schema_incompatible detail=' . implode('; ', $problems)
         . ' hinweis=Migration sql/migrations/001 vor dem Code ausrollen', true);
     http_response_code(503);
@@ -75,57 +89,51 @@ function revalidate_session(PDO $pdo): void
     }
 
     $sessionUser = (string)($_SESSION['username'] ?? '');
-    $sessionRole = $_SESSION['role'] ?? null;
-    $userId = filter_var($_SESSION['user_id'], FILTER_VALIDATE_INT);
 
-    if ($userId === false || $userId <= 0) {
-        session_guard_revoke($sessionUser, 0, 'session_invalid');
+    // Fachliche Prüfung (Identität, Rolle, Aktivstatus, Sitzungsgeneration, Schema) im Core (Paket 5c);
+    // hier nur Abbildung auf Widerruf, HTTP 503 und die bisherigen Protokollzeilen.
+    $result = (new AuthService($pdo))->validateSession(
+        $_SESSION['user_id'],
+        $_SESSION['username'] ?? null,
+        $_SESSION['role'] ?? null,
+        $_SESSION['session_epoch'] ?? null
+    );
+
+    foreach ($result->messages as $message) {
+        $ctx = $message->context;
+        switch ($message->code) {
+            case 'auth.session.valid':
+                return;
+
+            case 'auth.session.revoked':
+                session_guard_revoke($sessionUser, (int)$ctx['userId'], (string)$ctx['reason']);
+
+            case 'auth.session.schema_incompatible':
+                session_guard_schema_failed($ctx['problems']);
+
+            case 'auth.session.check_failed':
+                // Fail-Closed: ohne bestätigte Identität und Rolle läuft die Anfrage nicht weiter.
+                appLog('error', sprintf(
+                    'event=session_revalidation_failed user=%s userId=%d ip=%s error=%s code=%s',
+                    $sessionUser,
+                    (int)$ctx['userId'],
+                    $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+                    $ctx['errorClass'],
+                    $ctx['errorCode']
+                ), true);
+                http_response_code(503);
+                exit('Dienst vorübergehend nicht verfügbar.');
+
+            default:
+                // Unbekannte ServiceMessages nie still verwerfen (Fail-Closed, siehe unten)
+                appLog('error', "Unbehandelte ServiceMessage '{$message->code}' (session_guard)", true);
+                break;
+        }
     }
 
-    session_guard_require_schema($pdo);
-
-    try {
-        $stmt = $pdo->prepare('SELECT id, username, role, active, session_epoch FROM users WHERE id = ?');
-        $stmt->bindValue(1, $userId, PDO::PARAM_INT);
-        $stmt->execute();
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) {
-        // Fail-Closed: ohne bestätigte Identität und Rolle läuft die Anfrage nicht weiter.
-        $code = $e instanceof PDOException ? (string)$e->getCode() : '-';
-        appLog('error', sprintf(
-            'event=session_revalidation_failed user=%s userId=%d ip=%s error=%s code=%s',
-            $sessionUser,
-            $userId,
-            $_SERVER['REMOTE_ADDR'] ?? 'unknown',
-            get_class($e),
-            preg_replace('/[^A-Za-z0-9]/', '', $code)
-        ), true);
-        http_response_code(503);
-        exit('Dienst vorübergehend nicht verfügbar.');
-    }
-
-    if ($row === false) {
-        session_guard_revoke($sessionUser, $userId, 'user_missing');
-    }
-    if ((string)$row['username'] !== $sessionUser) {
-        session_guard_revoke($sessionUser, $userId, 'username_changed');
-    }
-    if (!is_string($sessionRole) || (string)$row['role'] !== $sessionRole) {
-        session_guard_revoke($sessionUser, $userId, 'role_changed');
-    }
-    if (!in_array((string)$row['role'], SESSION_GUARD_ROLES, true)) {
-        session_guard_revoke($sessionUser, $userId, 'role_invalid');
-    }
-    if ((int)$row['active'] !== 1) {
-        session_guard_revoke($sessionUser, $userId, 'account_inactive');
-    }
-    $sessionEpoch = $_SESSION['session_epoch'] ?? null;
-    if (!is_string($sessionEpoch) || !ctype_digit($sessionEpoch)) {
-        session_guard_revoke($sessionUser, $userId, 'epoch_missing');
-    }
-    if ($sessionEpoch !== (string)$row['session_epoch']) {
-        session_guard_revoke($sessionUser, $userId, 'epoch_changed');
-    }
+    // Kein eindeutiges Ergebnis: Fail-Closed wie bei einem technischen Fehler
+    http_response_code(503);
+    exit('Dienst vorübergehend nicht verfügbar.');
 }
 
 /**
