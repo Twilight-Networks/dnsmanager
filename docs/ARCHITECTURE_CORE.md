@@ -282,7 +282,7 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 **Übersicht nach Status:**
 - **Offen:** S34 (Agent-Teil), S36 (Teil b), S37 (`db.php`-Teil), **S40** (teilweise, priorisiert), **S41** (zurückgestellt), I1, I2, F1–F8.
 - **Teilweise behoben:** S34 (Generator/Distributor behoben, Agent offen), S37 (`exec` behoben, `db.php` offen), S40 (HTTP auf ns1 abgeschaltet; Secure-Cookie mit PR #67, `main` `ce3b245`; Zertifikat/HSTS offen); S36 (Rollenprüfung behoben mit SP3a, Antwortprüfung offen).
-- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a); **mit Security-Paket SP1 (PR #65, `main` `bc8b607`):** S29, S30, S31; **mit SP2 (PR #66, `main` `4f37f08`):** S28, S35; **S42** (technisch abgeschlossen 13.11.2026: PR #68, #70; Umstellung ns1/ns2, siehe `docs/AGENT_TLS.md`); **mit SP3a:** S39.
+- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a); **mit Security-Paket SP1 (PR #65, `main` `bc8b607`):** S29, S30, S31; **mit SP2 (PR #66, `main` `4f37f08`):** S28, S35; **S42** (technisch abgeschlossen 13.11.2026: PR #68, #70; Umstellung ns1/ns2, siehe `docs/AGENT_TLS.md`); **mit SP3a (PR #73, `main` `a6339d9`):** S39.
 
 **Betriebsbefund Schutzmechanismen (Stand 13.11.2026, rein lesend erhoben, nichts geändert):**
 - **Fail2Ban:** ns1 installiert (1.1.0), aber `disabled`/`inactive`; der installierte Filter `filter.d/dnsmanager.conf` ist veraltet (0 Treffer, siehe S41), ein `dnsmanager`-Jail ist **nicht** eingerichtet (nur `defaults-debian.conf` mit `banaction = nftables` und aktivem `sshd`-Jail bei Start). ns2: nicht installiert. Die Fail2Ban-Konfiguration des Repositorys (`fail2ban/`) ist damit auf keiner VM wirksam. Die Protokollkette wäre vorhanden: `LOG_TARGET = syslog`, rsyslog aktiv, Sicherheitsereignisse über `LOG_AUTH` in `/var/log/auth.log`.
@@ -394,3 +394,4 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | 13.11.2026 | S42 | E8: Ausstellungsrechner Windows-PC; OpenSSL-Umgebungen geprüft (Git `ucrt64` 3.5.9 geeignet, Trockenlauf mit Wegwerf-Material); Ablauf W0–W7 und N1 in `docs/AGENT_TLS.md` |
 | 13.11.2026 | S42 | S42 technisch abgeschlossen: Phase 2 (W0–W6, N1, D0–D7, E, F, G0–G6) auf ns1/ns2 durchgeführt, Agent-TLS-Prüfung produktiv aktiv; Vorfälle dokumentiert; offen W7 |
 | 13.11.2026 | SP3a | S39 und S36a: Rollenprüfung vor jeder Ausgabe (`servers.php`, `dyndns.php`, `update.php`, DynDNS-Actions) mit `requireRole()`/`access_denied`-Log; Update-Link nur für Admins; Web-Golden t73 (27/27) |
+| 13.11.2026 | SP3a | PR #73 gemergt (`a6339d9`; enthält den S42-Abschluss-Doku-Commit); kein Deployment auf ns1 |
