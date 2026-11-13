@@ -59,6 +59,14 @@ foreach ($result->messages as $message) {
             );
             break;
 
+        case 'dyndns.password.not_found':
+            // F3: unbekannte bzw. zwischenzeitlich gelöschte Account-ID
+            toastError(
+                $LANG['dyndns_error_not_found'],
+                "Passwort-Änderung abgelehnt: DynDNS-ID {$ctx['accountId']} nicht gefunden."
+            );
+            break;
+
         case 'dyndns.password.failed':
             toastError(
                 $LANG['error_password_save'],

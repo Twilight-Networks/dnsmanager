@@ -402,10 +402,10 @@ final class DyndnsAccountService
     /* ======================================================================================== */
 
     /**
-     * Setzt ein neues Passwort (unverändert wie bisher: Mindestlänge PASSWORD_MIN_LENGTH, PASSWORD_DEFAULT,
-     * keine Existenzprüfung des Accounts).
+     * Setzt ein neues Passwort (Mindestlänge PASSWORD_MIN_LENGTH, PASSWORD_DEFAULT). F3: Der Account wird in der
+     * Schreibtransaktion mit FOR UPDATE geladen; ein nicht vorhandener Account ergibt not_found statt success.
      *
-     * Codes: access_denied, too_short (minLength), hash_failed, failed (detail), success
+     * Codes: access_denied, too_short (minLength), hash_failed, not_found (accountId), failed (detail), success
      */
     public function changePassword(Actor $actor, int $id, string $password): ServiceResult
     {
@@ -429,6 +429,16 @@ final class DyndnsAccountService
             if (!$this->isDbAdmin($actor)) {
                 $this->rollbackIfActive();
                 return self::one(false, 'audit', 'dyndns.password.access_denied', ['actorId' => $actor->userId, 'reason' => 'db_role']);
+            }
+
+            // F3: Account unter Sperre laden; ein nicht (mehr) vorhandener Account erhält keine Erfolgsmeldung
+            $stmt = $this->pdo->prepare("SELECT id FROM dyndns_accounts WHERE id = ? FOR UPDATE");
+            $stmt->execute([$id]);
+            $exists = $stmt->fetchColumn();
+            $stmt->closeCursor();
+            if ($exists === false) {
+                $this->rollbackIfActive();
+                return self::one(false, 'error', 'dyndns.password.not_found', ['accountId' => $id]);
             }
 
             $stmt = $this->pdo->prepare("UPDATE dyndns_accounts SET password_hash = ? WHERE id = ?");
