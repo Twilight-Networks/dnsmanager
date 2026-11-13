@@ -16,6 +16,8 @@
  *   confError/confWarning   – zone_conf_status eines Servers error bzw. warning
  *   serverError             – server_status eines Servers error
  *   zoneError/zoneWarning   – zone_status einer Zone error|not_found bzw. warning
+ * - problems: Problemeinträge der Systemstatus-Seite je Bereich server, conf, zone (Paket 6, K2; Regeln siehe
+ *   getOverview). Gruppierung der Serverdiagnosen über ServerReadService::getServerDiagnosticChecks().
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -37,7 +39,11 @@ final class DiagnosticReadService
     /**
      * @return array{serverChecks: array<int, array<string, array{status: string, message: ?string, serverName: ?string}>>,
      *               zoneChecks: array<int, array>, summary: array{confError: bool, confWarning: bool, serverError: bool,
-     *               zoneError: bool, zoneWarning: bool}}|null  null = kein Admin
+     *               zoneError: bool, zoneWarning: bool},
+     *               problems: array{server: array<int, array{serverName: ?string, status: string, message: ?string}>,
+     *                               conf: array<int, array{serverName: ?string, status: ?string, message: ?string}>,
+     *                               zone: array<int, array{zoneName: ?string, serverName: ?string, status: ?string, message: ?string}>}}|null
+     *         null = kein Admin
      */
     public function getOverview(Actor $actor): ?array
     {
@@ -45,14 +51,7 @@ final class DiagnosticReadService
             return null;
         }
 
-        $serverChecks = [];
-        foreach ($this->servers->listServerDiagnostics($actor) as $d) {
-            $serverChecks[$d['serverId']][$d['checkType']] = [
-                'status'     => $d['status'],
-                'message'    => $d['message'],
-                'serverName' => $d['serverName'],
-            ];
-        }
+        $serverChecks = $this->servers->getServerDiagnosticChecks($actor);
 
         $zoneChecks = $this->zones->listZoneDiagnostics($actor);
 
@@ -71,6 +70,42 @@ final class DiagnosticReadService
             $summary['zoneWarning'] = $summary['zoneWarning'] || $z['status'] === 'warning';
         }
 
-        return ['serverChecks' => $serverChecks, 'zoneChecks' => $zoneChecks, 'summary' => $summary];
+        // Problemeinträge der Systemstatus-Seite (Paket 6, K2; Regeln unverändert aus pages/system_health.php):
+        // - server: Server mit Prüfart server_status, deren Status nicht 'ok' ist;
+        // - conf:   alle Server, deren zone_conf_status nicht 'ok' ist – auch Server ohne diese Prüfart (Status null);
+        // - zone:   alle Zonendiagnosen, deren zone_status nicht 'ok' ist – Einträge anderer Prüfart mit Status null.
+        // Jeweils in der Reihenfolge von serverChecks bzw. zoneChecks; Namen/Meldung null = nicht vorhanden.
+        $problems = ['server' => [], 'conf' => [], 'zone' => []];
+        foreach ($serverChecks as $checks) {
+            if (isset($checks['server_status']) && $checks['server_status']['status'] !== 'ok') {
+                $problems['server'][] = [
+                    'serverName' => $checks['server_status']['serverName'],
+                    'status'     => $checks['server_status']['status'],
+                    'message'    => $checks['server_status']['message'],
+                ];
+            }
+            $conf = $checks['zone_conf_status'] ?? null;
+            if (($conf['status'] ?? null) !== 'ok') {
+                $problems['conf'][] = [
+                    'serverName' => $conf['serverName'] ?? null,
+                    'status'     => $conf['status'] ?? null,
+                    'message'    => $conf['message'] ?? null,
+                ];
+            }
+        }
+        foreach ($zoneChecks as $z) {
+            $isZoneStatus = $z['checkType'] === 'zone_status';
+            $status = $isZoneStatus ? $z['status'] : null;
+            if ($status !== 'ok') {
+                $problems['zone'][] = [
+                    'zoneName'   => $z['zoneName'],
+                    'serverName' => $z['serverName'],
+                    'status'     => $status,
+                    'message'    => $isZoneStatus ? $z['message'] : null,
+                ];
+            }
+        }
+
+        return ['serverChecks' => $serverChecks, 'zoneChecks' => $zoneChecks, 'summary' => $summary, 'problems' => $problems];
     }
 }

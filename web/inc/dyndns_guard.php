@@ -4,7 +4,6 @@
  * Zweck: Gemeinsame Schutzfunktionen für die DynDNS-Accountverwaltung
  *
  * Enthalten:
- * - DynDNS-spezifische Ausnahme für verständliche Abbrüche (DyndnsActionError)
  * - Kanonisierung gespeicherter DNS-Namen (Groß-/Kleinschreibung, absolute Namen)
  * - Deterministische Zonen-Zeilensperren (dyndnsLockZones)
  * - Kollisionsprüfung für neue/geänderte DynDNS-Hostnamen (dyndnsFindHostnameConflicts)
@@ -30,23 +29,6 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/validators.php';
-
-/**
- * Fachlicher Abbruch einer DynDNS-Aktion mit einer für Administratoren verständlichen
- * Meldung (Toast, bereits HTML-sicher) und einer optionalen Detailmeldung fürs Log.
- */
-final class DyndnsActionError extends RuntimeException
-{
-    public string $toastMessage;
-    public ?string $logMessage;
-
-    public function __construct(string $toastMessage, ?string $logMessage = null)
-    {
-        parent::__construct($logMessage ?? strip_tags($toastMessage));
-        $this->toastMessage = $toastMessage;
-        $this->logMessage = $logMessage;
-    }
-}
 
 /**
  * Bringt einen gespeicherten DNS-Namen in eine kanonische, relative Form (Kleinbuchstaben).
@@ -390,15 +372,6 @@ function dyndnsDeleteRecords(PDO $pdo, array $ids): int
     }
 
     return $deleted;
-}
-
-/**
- * Liefert den Sprachschlüssel zu einem Fehler- oder Konfliktcode
- * (z. B. DYNDNS_CONFLICT_CNAME → dyndns_conflict_cname).
- */
-function dyndnsLangKey(string $code): string
-{
-    return strtolower($code);
 }
 
 /**

@@ -105,6 +105,78 @@ final class ServerReadService
         return $result;
     }
 
+    /**
+     * Serverdiagnosen je Server und Prüfart (Paket 6, K2/K3; bisher in pages/servers.php und DiagnosticReadService).
+     *
+     * Gruppierung unverändert: Reihenfolge der Server nach erstem Auftreten in listServerDiagnostics(); ein späterer
+     * Eintrag derselben Prüfart überschreibt einen früheren.
+     *
+     * @return array<int, array<string, array{status: string, message: ?string, serverName: ?string}>>
+     */
+    public function getServerDiagnosticChecks(Actor $actor): array
+    {
+        $checks = [];
+        foreach ($this->listServerDiagnostics($actor) as $d) {
+            $checks[$d['serverId']][$d['checkType']] = [
+                'status'     => $d['status'],
+                'message'    => $d['message'],
+                'serverName' => $d['serverName'],
+            ];
+        }
+
+        return $checks;
+    }
+
+    /**
+     * Auswertung der Serverdiagnosen für die Serverübersicht (Paket 6, K3; Regeln unverändert aus pages/servers.php).
+     *
+     * - serverStatus: je Server der Status der Prüfart server_status (nur Server mit dieser Prüfart).
+     * - hasErrors / hasWarnings: irgendein Eintrag der Prüfarten server_status bzw. zone_conf_status mit Status
+     *   error bzw. warning.
+     * - problems: Einträge dieser beiden Prüfarten mit Status ungleich 'ok', je Server in der Reihenfolge
+     *   server_status, zone_conf_status (fehlende Prüfarten entfallen).
+     *
+     * @return array{serverStatus: array<int, string>, hasErrors: bool, hasWarnings: bool,
+     *               problems: array<int, array{serverName: ?string, checkType: string, status: string, message: ?string}>}
+     */
+    public function getServerStatusOverview(Actor $actor): array
+    {
+        $serverStatus = [];
+        $hasErrors = false;
+        $hasWarnings = false;
+        $problems = [];
+
+        foreach ($this->getServerDiagnosticChecks($actor) as $serverId => $checks) {
+            if (isset($checks['server_status']['status'])) {
+                $serverStatus[$serverId] = $checks['server_status']['status'];
+            }
+
+            foreach (['server_status', 'zone_conf_status'] as $check) {
+                if (!isset($checks[$check])) {
+                    continue;
+                }
+
+                $status = $checks[$check]['status'] ?? 'ok';
+                if ($status === 'error') {
+                    $hasErrors = true;
+                } elseif ($status === 'warning') {
+                    $hasWarnings = true;
+                }
+
+                if ($status !== 'ok') {
+                    $problems[] = [
+                        'serverName' => $checks[$check]['serverName'],
+                        'checkType'  => $check,
+                        'status'     => $status,
+                        'message'    => $checks[$check]['message'],
+                    ];
+                }
+            }
+        }
+
+        return ['serverStatus' => $serverStatus, 'hasErrors' => $hasErrors, 'hasWarnings' => $hasWarnings, 'problems' => $problems];
+    }
+
     /** @return array{sql: string, params: array<int, int>}|null */
     private function adminCondition(Actor $actor): ?array
     {

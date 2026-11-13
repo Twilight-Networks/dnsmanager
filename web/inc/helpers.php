@@ -5,8 +5,7 @@
  *
  * Abgrenzung (Core-/UI-Trennung, docs/ARCHITECTURE_CORE.md):
  * - Enthält ausschließlich Web-Funktionen: requireRole (Rollenprüfung nach Session, 403), isActive
- *   (Navigation), csrf_input (Formularfeld), safe_return_path (Rücksprungziel), validatePassword
- *   (derzeit ungenutzt).
+ *   (Navigation), csrf_input (Formularfeld), safe_return_path (Rücksprungziel).
  * - Die früheren Rebuild-Funktionen (rebuild_zone_and_validate, rebuild_zone_and_flag_if_valid,
  *   rebuild_ns_and_glue_for_zone_and_flag_if_valid) sind mit Paket 4a nach inc/deploy/BindZoneBuildBackend.php
  *   (ZoneBuildBackend) verlagert.
@@ -40,18 +39,6 @@ function requireRole(array $allowedRoles): void
         http_response_code(403);
         exit('Zugriff verweigert: Unzureichende Berechtigungen.');
     }
-}
-
-/**
- * Prüft, ob ein Passwort die in der Konfiguration definierte Mindestlänge erreicht.
- *
- * @param string $password Das zu prüfende Passwort.
- *
- * @return bool true, wenn Passwort gültig; false, wenn zu kurz.
- */
-function validatePassword(string $password): bool
-{
-    return strlen($password) >= PASSWORD_MIN_LENGTH;
 }
 
 /**

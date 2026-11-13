@@ -35,7 +35,7 @@ if ($_SESSION['role'] !== 'admin') {
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
 $add_new = isset($_GET['add_new']) && $_GET['add_new'] == '1';
 
-// Server und Serverdiagnosen laden (ServerReadService: nur aktive Admins laut Datenbank, explizite Spalten).
+// Server laden (ServerReadService: nur aktive Admins laut Datenbank, explizite Spalten).
 // Übersetzung in die bisherige Struktur für die unveränderte Darstellung und die Formular-Templates.
 $actor = actorFromSession();
 $serverReadService = new ServerReadService($pdo);
@@ -52,44 +52,20 @@ foreach ($serverReadService->listServers($actor) as $s) {
     ];
 }
 
-$server_diag = [];
-foreach ($serverReadService->listServerDiagnostics($actor) as $d) {
-    $server_diag[$d['serverId']][$d['checkType']] = [
-        'status'  => $d['status'],
-        'message' => $d['message'],
-        'server'  => $d['serverName'],
-    ];
-}
-
-$server_status = [];
-foreach ($server_diag as $serverId => $checks) {
-    if (isset($checks['server_status']['status'])) {
-        $server_status[$serverId] = $checks['server_status']['status'];
-    }
-}
+// Serverdiagnosen und ihre Auswertung über den ServerReadService (Paket 6, K3): Status je Server, Kennzeichen und
+// Problemeinträge. Hier nur Übersetzung in die bisherige Darstellung (Symbole, HTML, Texte).
+$server_overview = $serverReadService->getServerStatusOverview($actor);
+$server_status = $server_overview['serverStatus'];
 
 // Statusindikatoren für Diagnoseauswertung
-$has_server_errors = false;
-$has_server_warnings = false;
+$has_server_errors = $server_overview['hasErrors'];
+$has_server_warnings = $server_overview['hasWarnings'];
 $server_diagnostics_output = [];
 
-foreach ($server_diag as $entry) {
-    foreach (['server_status', 'zone_conf_status'] as $check) {
-        if (!isset($entry[$check])) {
-            continue;
-        }
-
-        $status = $entry[$check]['status'] ?? 'ok';
-        $server = htmlspecialchars($entry[$check]['server'] ?? '(unbekannt)');
-        $message = htmlspecialchars($entry[$check]['message'] ?? '');
-
-        if ($status === 'error') $has_server_errors = true;
-        elseif ($status === 'warning') $has_server_warnings = true;
-
-        if ($status !== 'ok') {
-            $server_diagnostics_output[] = "<strong>$server</strong><br><pre class='mb-2'>{$message}</pre>";
-        }
-    }
+foreach ($server_overview['problems'] as $problem) {
+    $server = htmlspecialchars($problem['serverName'] ?? '(unbekannt)');
+    $message = htmlspecialchars($problem['message'] ?? '');
+    $server_diagnostics_output[] = "<strong>$server</strong><br><pre class='mb-2'>{$message}</pre>";
 }
 
 if ($has_server_errors) {
