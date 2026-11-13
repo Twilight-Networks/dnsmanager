@@ -282,11 +282,11 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 **Übersicht nach Status:**
 - **Offen:** S28, S34 (Agent-Teil), S35, S36, S37 (`db.php`-Teil), S39, I1, I2, F1–F7.
 - **Teilweise behoben:** S34 (Generator/Distributor behoben, Agent offen), S37 (`exec` behoben, `db.php` offen).
-- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a); **mit Security-Paket SP1 (Draft-PR):** S29, S30, S31.
+- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a); **mit Security-Paket SP1 (PR #65, `main` `bc8b607`):** S29, S30, S31.
 
 **Security-Hardening (Pakete):** SP1 Zugangsdaten und Geheimnisse (S29, S30, S31) → SP2 Sitzung und Anfrageschutz (S28 inkl. SameSite, S35) → SP3 Zugriffskontrolle und Fehlerausgabe (S39, S36, S37b, optional Sicherheitsheader) → SP4 Agent und Nebenläufigkeit (S34b, I2, Entscheidung zu I1). I1/I2 sind nicht akzeptiert.
 
-**Konfiguration (Stand 13.11.2026):** `PASSWORD_MIN_LENGTH` ist in `ui_config-sample.php` und auf der Testinstallation **4**. Die Mindestlänge gilt seit SP1 für Benutzer- und DynDNS-Passwörter beim Setzen; ob 4 ausreicht, ist gesondert zu entscheiden (keine Änderung bestehender Passwörter). Das DynDNS-Anlageformular verlangt clientseitig weiterhin `minlength="6"` (nur Browserprüfung).
+**Passwortpolitik (offen):** Die technische Durchsetzung von `PASSWORD_MIN_LENGTH` für Benutzer- und DynDNS-Passwörter ist mit SP1 erledigt. Der konfigurierte Wert **4** (`ui_config-sample.php` und Testinstallation) ist **sicherheitstechnisch unzureichend**. Erhöhung des Werts und Vereinheitlichung mit der clientseitigen Validierung (DynDNS-Anlageformular `minlength="6"`, nur Browserprüfung) werden gesondert entschieden; bestehende Passwörter bleiben unverändert.
 
 | Nr. | Befund | Ort |
 |---|---|---|
@@ -310,7 +310,7 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | F4 | Login mit abweichender Groß-/Kleinschreibung des Benutzernamens gelingt (Kollation `utf8mb4_unicode_ci`); die Session speichert die eingegebene Schreibweise, daher widerruft die nächste Anfrage die Session (`username_changed`). Kein Rechtegewinn; mit 5c unverändert übernommen. | `AuthService::authenticate`, `login_user` |
 | F5 | Update-Seite: Der Fehlerrahmen beginnt immer mit „Verbindung zum Update-Server fehlgeschlagen“ (`update_error`), auch bei ungültiger Antwort; bei Verbindungsfehlern erscheint der Text doppelt (`update_error` + `update_connection_failed`). Nur Darstellung; mit 5d unverändert übernommen. | `pages/update.php` |
 | F6 | Einschränkung „nur ein lokaler Server“ beim Anlegen nicht nachgewiesen race-sicher (kein UNIQUE-Schutz; unter READ COMMITTED keine Gap-Locks; Details 3.1). **Offen.** | `ServerService::createServer` |
-| F7 | Die Sperrnamen (`GET_LOCK`: `dnsmanager_publish_all`, `dnsmanager_monitoring`, Topologie-Lock) gelten serverweit für den MariaDB-Server, nicht je Datenbank. Mehrere Installationen auf demselben Datenbankserver blockieren sich gegenseitig (beobachtet in der SP1-Testumgebung: ein Cron-Lauf der Testinstallation wurde übersprungen, während eine isolierte Testinstanz das Monitoring ausführte). **Offen.** | `PublishService`, `MonitoringService`, `TopologyLock` |
+| F7 | Die Sperrnamen (`GET_LOCK`: `dnsmanager_publish_all`, `dnsmanager_monitoring`, Topologie-Lock) gelten serverweit für den MariaDB-Server, nicht je Datenbank. Mehrere Installationen auf demselben Datenbankserver beeinflussen sich gegenseitig (beobachtet in der SP1-Testumgebung: ein Cron-Lauf der Testinstallation wurde übersprungen, während eine isolierte Testinstanz das Monitoring ausführte). **Offener Funktions-/Betriebsbefund**; bei Tests Auswirkungen auf den regulären Cron vermeiden. | `PublishService`, `MonitoringService`, `TopologyLock` |
 
 ## 7. Eignung für eine spätere MCP-Anbindung
 
@@ -348,4 +348,5 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | 13.11.2026 | 6 | Abschlussprüfung: Ergebnis (Abschnitt 0), 3.8 mit Prüfvorgehen und Zuordnung, K1 Zonenstatus in `ZoneReadService`, B1–B3 entfernt, Korrektur `DyndnsApiReject`, Befundliste vollständig (S28, S39, I1, I2, F6; Teilstatus S34/S37), Abschnitt 7 MCP-Eignung |
 | 13.11.2026 | 6 | K2 (Systemstatus: `summary` und `problems` aus `DiagnosticReadService`) und K3 (`ServerReadService::getServerStatusOverview`) ausgelagert, `inc/web/diagnostics_view.php` entfallen, D17 (nur Log); Abschlussvermerk ohne Einschränkung (PR #64, gemergt als `2a077a2`; D17 akzeptiert) |
 | 13.11.2026 | – | Meilenstein Core-/UI-Trennung abgeschlossen: ns1 auf `2a077a2`, Betriebsprüfung (Zonen, Server, Systemstatus, Dashboard, Login, Monitoring, Serials ns1/ns2) ohne Befund. Nächster Schritt: Security-Hardening Phase 1 (Bestandsaufnahme der Befunde aus Abschnitt 6) |
-| 13.11.2026 | SP1 | Security-Paket 1: S29 (Agent-Token), S30 (DynDNS-Mindestlänge), S31 (Dummy-Hash) behoben (Draft-PR); Paketplan SP1–SP4; `PASSWORD_MIN_LENGTH` = 4 dokumentiert; Befund F7 (serverweite Sperrnamen) |
+| 13.11.2026 | SP1 | Security-Paket 1: S29 (Agent-Token), S30 (DynDNS-Mindestlänge), S31 (Dummy-Hash) behoben (PR #65, gemergt als `bc8b607`; D18–D21 akzeptiert); Paketplan SP1–SP4; `PASSWORD_MIN_LENGTH` = 4 dokumentiert; Befund F7 (serverweite Sperrnamen) |
+| 13.11.2026 | SP1 | ns1 auf `bc8b607`, Betriebsprüfung ohne Befund; Passwortpolitik (Wert 4) als unzureichend gekennzeichnet; F7 als offener Betriebsbefund; nächster Schritt: Planung SP2 (S28, S35) |
