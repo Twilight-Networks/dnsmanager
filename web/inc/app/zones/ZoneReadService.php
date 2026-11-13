@@ -278,6 +278,98 @@ final class ZoneReadService
     }
 
     /**
+     * Auswertung der Zonendiagnosen für die Zonenübersicht (Paket 6, K1; bisher in pages/zones.php).
+     *
+     * Grundlage sind dieselben Einträge wie listZoneDiagnostics() (gleiche Berechtigung, gleiche Reihenfolge).
+     * Regeln unverändert übernommen:
+     * - zones: je Zone der maßgebliche Diagnose-Eintrag. Der erste Eintrag einer Zone gilt; ein späterer
+     *   Eintrag ersetzt ihn nur, wenn der bisherige Status 'ok' und der neue nicht 'ok' ist oder der bisherige
+     *   'warning' und der neue 'error' ist ('not_found' und 'error' werden nie ersetzt, 'warning' nicht durch
+     *   'not_found'). Maßgeblich ist der Status der Prüfart zone_status; Einträge anderer Prüfart haben den
+     *   Status null (werden wie bisher nie ersetzt und zählen als 'ok').
+     * - hasErrors / hasWarnings: irgendein Eintrag mit Status error|not_found bzw. warning (Status null = 'ok').
+     * - problems: alle Einträge mit einem Status ungleich 'ok' (null = 'ok'), in Lesereihenfolge.
+     *
+     * Den Anzeigestatus einer Zone ermittelt zoneDisplayStatus() aus dem maßgeblichen Status und dem
+     * ausstehenden Publish (listZones: pendingPublish).
+     *
+     * @return array{zones: array<int, array{status: ?string, serverName: ?string, message: ?string}>,
+     *               hasErrors: bool, hasWarnings: bool,
+     *               problems: array<int, array{zoneName: ?string, serverName: ?string, status: string, message: ?string}>}
+     *         zones nach Zonen-ID; Namen null = Zone bzw. Server nicht (mehr) vorhanden
+     */
+    public function getZoneStatusOverview(Actor $actor): array
+    {
+        $zones = [];
+        $hasErrors = false;
+        $hasWarnings = false;
+        $problems = [];
+
+        foreach ($this->listZoneDiagnostics($actor) as $diag) {
+            $isZoneStatus = $diag['checkType'] === 'zone_status';
+            $status = $isZoneStatus ? $diag['status'] : null;
+            $entry = [
+                'status'     => $status,
+                'serverName' => $diag['serverName'],
+                'message'    => $isZoneStatus ? $diag['message'] : null,
+            ];
+
+            if (!isset($zones[$diag['zoneId']])) {
+                $zones[$diag['zoneId']] = $entry;
+            } else {
+                $current = $zones[$diag['zoneId']]['status'];
+                if (($current === 'ok' && $status !== 'ok') || ($current === 'warning' && $status === 'error')) {
+                    $zones[$diag['zoneId']] = $entry;
+                }
+            }
+
+            $effective = $status ?? 'ok';
+            if (in_array($effective, ['error', 'not_found'], true)) {
+                $hasErrors = true;
+            } elseif ($effective === 'warning') {
+                $hasWarnings = true;
+            }
+            if ($effective !== 'ok') {
+                $problems[] = [
+                    'zoneName'   => $diag['zoneName'],
+                    'serverName' => $diag['serverName'],
+                    'status'     => $effective,
+                    'message'    => $entry['message'],
+                ];
+            }
+        }
+
+        return ['zones' => $zones, 'hasErrors' => $hasErrors, 'hasWarnings' => $hasWarnings, 'problems' => $problems];
+    }
+
+    /**
+     * Anzeigestatus einer Zone (Paket 6, K1; Regeln unverändert aus pages/zones.php).
+     *
+     * error|not_found → 'error', warning → 'warning', sonst 'ok'; eine Zone mit Status 'ok' und ausstehendem
+     * Publish (changed ≠ 0) wird 'changed'. Fehler und Warnungen haben Vorrang vor 'changed'.
+     *
+     * @param ?string $diagnosticStatus maßgeblicher Status aus getZoneStatusOverview() (null = keiner)
+     * @param bool    $pendingPublish   ausstehender Publish (listZones: pendingPublish)
+     *
+     * @return string ok | warning | error | changed
+     */
+    public static function zoneDisplayStatus(?string $diagnosticStatus, bool $pendingPublish): string
+    {
+        $status = 'ok';
+        if (in_array($diagnosticStatus, ['error', 'not_found'], true)) {
+            $status = 'error';
+        } elseif ($diagnosticStatus === 'warning') {
+            $status = 'warning';
+        }
+
+        if ($status === 'ok' && $pendingPublish) {
+            $status = 'changed';
+        }
+
+        return $status;
+    }
+
+    /**
      * @param array<string, mixed> $row
      */
     private static function mapZone(array $row): array

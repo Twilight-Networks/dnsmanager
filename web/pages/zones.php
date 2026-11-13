@@ -94,67 +94,18 @@ if ($_SESSION['role'] === 'admin' && isset($_GET['add_new']) && $_GET['add_new']
     }
 }
 
-// Zonendiagnosen laden – nur für Zonen, die der Benutzer lesen darf (Berechtigung in derselben Abfrage,
-// ZoneAccess, S25). Übersetzung in die bisherige Struktur von getDiagnosticResults()['zone'] für die
-// unveränderte Auswertung und Darstellung unten.
-$zone_results = [];
-foreach ($zoneReadService->listZoneDiagnostics($actor) as $diag) {
-    $zone_results[] = [
-        'zone'   => $diag['zoneName'] ?? '(unbekannt)',
-        'server' => $diag['serverName'] ?? '(unbekannt)',
-        $diag['checkType'] => [
-            'status'  => $diag['status'],
-            'message' => $diag['message'],
-        ],
-    ];
-}
-
-// Ergebnisse nach Zonenname gruppieren und besten Status ermitteln
-$zone_statuses = [];
-
-foreach ($zone_results as $entry) {
-    $zone_name = $entry['zone'] ?? '(unbekannt)';
-    $server_name = $entry['server'] ?? '(unbekannt)';
-    $status = $entry['zone_status']['status'];
-    $output = $entry['zone_status']['message'];
-
-    if (!isset($zone_statuses[$zone_name])) {
-        $zone_statuses[$zone_name] = ['status' => $status, 'output' => "($server_name)\n$output"];
-    } else {
-        $current = $zone_statuses[$zone_name]['status'];
-        $overwrite = false;
-
-        if ($current === 'ok' && $status !== 'ok') $overwrite = true;
-        if ($current === 'warning' && $status === 'error') $overwrite = true;
-
-        if ($overwrite) {
-            $zone_statuses[$zone_name] = ['status' => $status, 'output' => "($server_name)\n$output"];
-        }
-    }
-}
+// Zonendiagnosen und ihre Auswertung über den ZoneReadService (Berechtigung in derselben Abfrage, ZoneAccess,
+// S25; Statusregeln seit Paket 6 im Core: getZoneStatusOverview, zoneDisplayStatus). Hier nur Übersetzung in
+// die bisherige Darstellung.
+$zone_status_overview = $zoneReadService->getZoneStatusOverview($actor);
 
 // Statusinformationen den geladenen Zonen zuweisen
+// changed: 0 = sauber, 1 = wartet auf Publish, 2 = von Publish übernommen bzw. nicht sicher abgeschlossen
 foreach ($zones as &$zone) {
-    $zname = $zone['name'];
-
-    $zone['status'] = 'ok';
-    $zone['output'] = '';
-
-    if (isset($zone_statuses[$zname])) {
-        $zone['output'] = $zone_statuses[$zname]['output'];
-
-        if (in_array($zone_statuses[$zname]['status'], ['error', 'not_found'], true)) {
-            $zone['status'] = 'error';
-        } elseif ($zone_statuses[$zname]['status'] === 'warning') {
-            $zone['status'] = 'warning';
-        }
-    }
-
-    // Geänderte Zonen markieren, sofern keine Fehler vorliegen
-    // changed: 0 = sauber, 1 = wartet auf Publish, 2 = von Publish übernommen bzw. nicht sicher abgeschlossen
-    if ($zone['status'] === 'ok' && (int)$zone['changed'] !== 0) {
-        $zone['status'] = 'changed';
-    }
+    $zone['status'] = ZoneReadService::zoneDisplayStatus(
+        $zone_status_overview['zones'][$zone['id']]['status'] ?? null,
+        (int)$zone['changed'] !== 0
+    );
 }
 unset($zone); // Referenz aufheben
 
@@ -179,25 +130,18 @@ $reverse_zones = array_filter($zones, fn($z) => $z['type'] === 'reverse');
 
 <?php
 // Zonenstatus-Übersicht
-// Initialstatus
-$has_zone_errors = false;
-$has_zone_warnings = false;
 $zone_diagnostics_output = [];
 
-// Einzelbewertungen pro Zonen-Diagnoseeintrag
-foreach ($zone_results as $entry) {
-    $status = $entry['zone_status']['status'] ?? 'ok';
-    $zone = htmlspecialchars($entry['zone'] ?? '(unbekannt)');
-    $server = htmlspecialchars($entry['server'] ?? '(unbekannt)');
-    $message = htmlspecialchars($entry['zone_status']['message'] ?? '');
+// Gesamtbewertung und Problemeinträge aus dem Core (getZoneStatusOverview); hier nur Darstellung
+$has_zone_errors = $zone_status_overview['hasErrors'];
+$has_zone_warnings = $zone_status_overview['hasWarnings'];
 
-    if (in_array($status, ['error', 'not_found'], true)) $has_zone_errors = true;
-    elseif ($status === 'warning') $has_zone_warnings = true;
-
-    // Detaillierte Ausgabe nur bei Problemen
-    if ($status !== 'ok') {
-        $zone_diagnostics_output[] = "<strong>{$zone} @ {$server}</strong><br><pre class='mb-2'>{$message}</pre>";
-    }
+// Detaillierte Ausgabe nur bei Problemen
+foreach ($zone_status_overview['problems'] as $problem) {
+    $zone = htmlspecialchars($problem['zoneName'] ?? '(unbekannt)');
+    $server = htmlspecialchars($problem['serverName'] ?? '(unbekannt)');
+    $message = htmlspecialchars($problem['message'] ?? '');
+    $zone_diagnostics_output[] = "<strong>{$zone} @ {$server}</strong><br><pre class='mb-2'>{$message}</pre>";
 }
 
 // Zusammenfassung für Statusanzeige oben
