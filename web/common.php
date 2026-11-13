@@ -58,6 +58,7 @@ if (defined('PHP_ERR_REPORT') && PHP_ERR_REPORT === true) {
 
 // Logging- und Fehlerbehandlung laden
 require_once __DIR__ . '/inc/logging.php';
+require_once __DIR__ . '/inc/web/security_log.php';
 
 // Session-Management und Login-Absicherung
 require_once __DIR__ . '/inc/session.php';

@@ -3,16 +3,15 @@
  * Datei: pages/update.php
  * Zweck: Prüft, ob eine neue Version des DNSManagers verfügbar ist.
  *
- * - Ruft die aktuelle Version von einer JSON-Datei über HTTPS ab.
- * - Vergleicht sie mit der lokal installierten Version.
- * - Gibt entsprechende Meldungen (aktuell / Update verfügbar / Fehler) aus.
+ * - Abruf (CurlUpdateFeed), Auswertung und Versionsvergleich im webunabhängigen UpdateCheckService (Paket 5d).
+ * - Diese Seite übersetzt das Ergebnis in Meldungen (aktuell / Update verfügbar / Fehler) und stellt sie dar.
+ * - Bekannt und bewusst unverändert (S36): keine Rollenprüfung, Links aus der Antwort ohne Schemaprüfung.
  */
 
 require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../config/version.php';
-
-// Remote-URL zur JSON-Datei mit Versionsinformationen
-$update_url = 'https://www.twilight-networks.com/dnsmanager-update/latest.json';
+require_once __DIR__ . '/../inc/app/update/UpdateCheckService.php';
+require_once __DIR__ . '/../inc/deploy/CurlUpdateFeed.php';
 
 // Lokale installierte Version
 $current_version = DNSMANAGER_VERSION;
@@ -20,32 +19,34 @@ $current_version = DNSMANAGER_VERSION;
 // Initialisierung
 $remote_version = null;
 $release_date = null;
+$download_url = null;
 $changelog_url = null;
+$update_available = false;
 $error = null;
 
-// cURL-basierte Abfrage
-$ch = curl_init($update_url);
-curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT => 5,
-    CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    CURLOPT_SSL_VERIFYPEER => true,
-    CURLOPT_SSL_VERIFYHOST => 2,
-]);
+$result = (new UpdateCheckService(new CurlUpdateFeed()))->check($current_version);
 
-$response = curl_exec($ch);
-
-if ($response === false) {
-    $error = sprintf($LANG['update_connection_failed'], curl_error($ch));
-} else {
-    $data = json_decode($response, true);
-    if (!is_array($data) || empty($data['version'])) {
-        $error = $LANG['update_invalid_response'];
-    } else {
-        $remote_version = $data['version'];
-        $release_date = $data['release_date'] ?? $LANG['unknown'];
-        $download_url = $data['download_url'] ?? null;
-        $changelog_url = $data['changelog_url'] ?? null;
+foreach ($result->messages as $message) {
+    $ctx = $message->context;
+    switch ($message->code) {
+        case 'update.check.connection_failed':
+            $error = sprintf($LANG['update_connection_failed'], $ctx['detail']);
+            break;
+        case 'update.check.invalid_response':
+            $error = $LANG['update_invalid_response'];
+            break;
+        case 'update.check.result':
+            $remote_version = $ctx['remoteVersion'];
+            $release_date = $ctx['releaseDate'] ?? $LANG['unknown'];
+            $download_url = $ctx['downloadUrl'];
+            $changelog_url = $ctx['changelogUrl'];
+            $update_available = $ctx['updateAvailable'];
+            break;
+        default:
+            // Unbekannte ServiceMessages nie still verwerfen
+            appLog('error', "Unbehandelte ServiceMessage '{$message->code}' (update)");
+            $error = $LANG['update_invalid_response'];
+            break;
     }
 }
 
@@ -62,7 +63,7 @@ include __DIR__ . '/../templates/layout.php';
     <div class="alert alert-danger">
         ❌ <?= htmlspecialchars($LANG['update_error'] . ': ' . $error) ?>
     </div>
-<?php elseif (version_compare($remote_version, $current_version, '>')): ?>
+<?php elseif ($update_available): ?>
     <div class="alert alert-warning">
         ⚠️ <?= $LANG['update_available'] ?><br><br>
         <strong><?= sprintf($LANG['update_version'], htmlspecialchars($remote_version)) ?></strong>

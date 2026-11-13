@@ -22,7 +22,8 @@
  */
 
 require_once __DIR__ . '/db.php';
-require_once __DIR__ . '/helpers.php'; // Sicherstellen, dass logFailedLogin verfügbar ist
+require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/web/security_log.php'; // logFailedLogin (Web-Adapter, Paket 5d)
 require_once __DIR__ . '/app/auth/AuthService.php';
 
 /**
