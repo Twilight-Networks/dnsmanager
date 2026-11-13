@@ -26,9 +26,9 @@ try {
     // PDO-Instanz mit Fehlerbehandlung initialisieren
     $pdo = AppBootstrap::createPdo();
 } catch (PDOException $e) {
-    // Verbindung fehlgeschlagen – sicherer Abbruch (S37b): serverseitig nur eine feste Meldung mit SQLSTATE
+    // Verbindung fehlgeschlagen – sicherer Abbruch (S37b): serverseitig nur eine feste Meldung mit Fehlercode
     // protokollieren (kein Exception-Text, damit keine Zugangsdaten); Antwort generisch, Web HTTP 503, CLI Exit-Code 1.
-    error_log('[DNSMANAGER] Datenbankverbindung fehlgeschlagen (SQLSTATE ' . (string)$e->getCode() . ')');
+    error_log('[DNSMANAGER] Datenbankverbindung fehlgeschlagen (Fehlercode ' . (string)$e->getCode() . ')');
     if (PHP_SAPI === 'cli') {
         fwrite(STDERR, "Datenbankverbindung fehlgeschlagen.\n");
         exit(1);
