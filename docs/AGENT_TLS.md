@@ -4,7 +4,8 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 
 **Status:**
 - **Phase 1 – erledigt:** PR #68, `main` `b17d946`. Code-Option `AGENT_TLS_CA_FILE` in `BindAgentClient`, isoliert getestet (Abschnitt 12).
-- **Phase 2 – vorbereitet:** E5 freigegeben, E6 freigegeben mit Ergänzung, E7/E8 grundsätzlich freigegeben. Die Durchführung wird gesondert freigegeben.
+- **Phase 2 – vorbereitet:** E5 freigegeben; E6-A umgesetzt (PR #70, `main` `407c6ae`); E7/E8 grundsätzlich freigegeben; Testzone `zone.example.test` akzeptiert; Einzelzonen-Publish per Skript vorbereitet (Abschnitt 6 G). Die Durchführung wird gesondert freigegeben.
+- **Projektgrenze:** zwei gültige Agent-Zertifikate, zuverlässige TLS-Prüfung und die bestehende Ablaufwarnung im Systemstatus. Keine weitere Zertifikatsverwaltungsfunktion, kein Mail-Relay oder Mailserver, keine zusätzliche PKI-Infrastruktur.
 - Bis dahin gilt:
   - keine produktive CA erzeugen;
   - keine Zertifikate austauschen;
@@ -19,6 +20,7 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 | `s42-vhost-check.sh` | VirtualHost-Auswahl und Zertifikatsauslieferung (E5) | je Host |
 | `s42-precheck.sh` | Vorprüfung vor der Aktivierung (CA-Datei, Kette, Rechte, Handshake, PHP-Stack, Oberfläche unverändert) | ns1 |
 | `s42-nc-negative.sh` | Negativtest der `nameConstraints` mit dem PHP-cURL-Stack (E7) | ns1 |
+| `s42-publish-zone.php` | einmaliger Einzelzonen-Publish der Testzone über `PublishService::publishZone()` (E4) | ns1, als `www-data` per `sudo` von root |
 
 ## 1. Entscheidungen
 
@@ -27,7 +29,7 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 | S42-E1 | Interne CA mit IP-SANs. Adressierung (`servers.api_ip`) und Datenbankstruktur bleiben unverändert. | freigegeben |
 | S42-E2 | Eigene Agent-CA:<br>– CA ca. 5 Jahre, Serverzertifikate 1 Jahr;<br>– Erneuerung ≥ 30 Tage vor Ablauf;<br>– je Server ein eigener Schlüssel;<br>– SANs = Agent-IPs plus passende DNS-Namen;<br>– CA-Schlüssel nicht auf ns1/ns2. | freigegeben |
 | S42-E3 | Phase 1: optionale, ausschließliche CA-Vertrauensstellung im Code | erledigt (#68) |
-| S42-E4 | Abnahme in dieser Reihenfolge:<br>1. lesende Agent-Aufrufe und der reguläre Monitoring-Cron;<br>2. BIND-Reload und Publish erst im Rahmen der gesondert freigegebenen Abnahme, Publish nur auf einer ausdrücklich freigegebenen Testzone. | freigegeben. Testzone: Vorschlag in Abschnitt 6 G, Freigabe offen. |
+| S42-E4 | Abnahme in dieser Reihenfolge:<br>1. lesende Agent-Aufrufe und der reguläre Monitoring-Cron;<br>2. BIND-Reload und Publish erst im Rahmen der gesondert freigegebenen Abnahme, Publish nur auf einer ausdrücklich freigegebenen Testzone. | freigegeben. Testzone `zone.example.test` akzeptiert; Änderung nur TXT `s42-tls-test`; gezielter Einzelzonen-Publish (Abschnitt 6 G). |
 | S42-E5 | Getrennte, IP-gebundene Apache-VirtualHosts für die Agent-Zertifikate:<br>– ns1 `127.0.0.1:443`, ns2 `192.168.53.125:443`;<br>– die Oberfläche auf ns1 `192.168.53.122:443` bleibt unverändert;<br>– die Agent-CA wird **nicht** auf Admin-Arbeitsplätzen importiert.<br>Vor der Aktivierung sind die tatsächliche VirtualHost-Auswahl, die Zertifikatsauslieferung und der unveränderte Browserzugriff nachzuweisen (Schritt D4/D5). | freigegeben |
 | S42-E6 | Die Ablaufüberwachung muss **vor** der TLS-Aktivierung nachweislich alarmieren. Eine bloße Logzeile reicht nicht. Keine neue externe Benachrichtigungsinfrastruktur ohne Rücksprache. | freigegeben mit Ergänzung. Alarmweg **E6-A** entschieden und umgesetzt (Abschnitt 9). |
 | S42-E7 | CA mit kritischen `nameConstraints` auf genau die benötigten Agent-IPs und DNS-Namen (Abschnitt 5). Negativtest mit dem PHP-cURL-Stack vor produktiver Verwendung (Schritt D6). | grundsätzlich freigegeben |
@@ -291,29 +293,85 @@ Danach:
    - keine TLS-Meldungen im PHP-/Apache-Fehlerprotokoll.
 4. Bei einem Fehler: Rückweg Stufe 1 (Abschnitt 7).
 
-**G – Abnahme schreibend** (nur im Rahmen der gesondert freigegebenen Abnahme).
+**G – Abnahme schreibend** (nur im Rahmen der gesondert freigegebenen Abnahme; Testzone `zone.example.test`, id 3, akzeptiert).
 
-1. BIND-Reload je Server über die Oberfläche.
-2. Publish auf der freigegebenen Testzone, danach Serial und Antworten auf ns1/ns2 prüfen (`dig @192.168.53.122` / `@192.168.53.125`).
+**G0 – Zustand unmittelbar vorher bestätigen (lesend):**
+- `zone.example.test`: `changed = 0`, `allow_dyndns = 0`, keine DynDNS-Konten, Serial in der Datenbank = SOA auf ns1 und ns2 (`dig +short SOA zone.example.test @192.168.53.122` / `@192.168.53.125`);
+- keine Delegation aus `example.test` (kein NS-Eintrag `zone` in `example.test`);
+- keine andere Zone mit `changed ≠ 0`, `bind_dirty = 0`;
+- `s42-publish-zone.php … --dry-run` (siehe G3) bricht nur mit „keine ausstehende Änderung“ ab, d. h. alle übrigen Prüfungen sind bestanden.
 
-**Vorschlag Testzone: `zone.example.test`** (id 3; Freigabe offen; rein lesend ermittelt am 13.11.2026).
-- **Inhalt:** 2 NS-Einträge (ns1/ns2.example.test) und 1 A-Eintrag `test30-zoneadmin` → `192.0.2.33` (TEST-NET-1, Dokumentationsbereich). Als Testzone angelegt.
-- **Abhängigkeiten:** keine DynDNS-Konten, `allow_dyndns = 0`, keine Delegation aus `example.test`, keine Abhängigkeit des Betriebs.
-- **Zustand:** `changed = 0`, Serial `2026110902` auf ns1 und ns2 identisch.
-- **Zuordnung:** Die Zone ist dem Konto `zoneadmin` (id 5) zugeordnet. Das Konto selbst wird nicht verändert.
+**G1 – BIND-Reload** je Server über die Oberfläche (Serverseite). Danach Systemstatus und Agent-Zugriffslog prüfen.
 
-**Nicht geeignet:**
-- `example.test`: Glue-/Hosteinträge von ns1/ns2 sowie DynDNS-Konten `dyndnstest`/`n1race`.
+**G2 – TXT-Eintrag anlegen** über die Oberfläche: Zone `zone.example.test`, Name `s42-tls-test`, Typ TXT, Wert `"S42 TLS-Abnahme"`. Danach ist `changed = 1`. Keine weitere Änderung, kein „Publish All“.
+
+**G3 – Einzelzonen-Publish** mit `docs/agent-tls/s42-publish-zone.php`:
+```bash
+install -d -m 750 -o root -g www-data /usr/local/lib/dnsmanager-s42
+install -m 640 -o root -g www-data s42-publish-zone.php /usr/local/lib/dnsmanager-s42/
+sudo -u www-data php /usr/local/lib/dnsmanager-s42/s42-publish-zone.php 3 zone.example.test --dry-run    # Exit 0
+sudo -u www-data php /usr/local/lib/dnsmanager-s42/s42-publish-zone.php 3 zone.example.test --execute    # Exit 0 = published
+```
+Das Skript:
+- ruft ausschließlich den vorhandenen `PublishService::publishZone()` auf, mit derselben Zonenlogik, Publish-Sperre (`dnsmanager_publish_all`, Wartezeit 5 s) und Flag-Verwaltung wie der DynDNS-Publish;
+- führt kein Publish All aus: kein Orphan-Cleanup, kein `bind_dirty`-Neuaufbau, keine anderen Zonen.
+
+**Autorisierung:**
+- nur CLI;
+- nur als `www-data`, wie Webserver und DynDNS-Publish; so entstehen keine root-eigenen Dateien;
+- nur von root per `sudo` gestartet (`SUDO_UID = 0`);
+- nur die fest eingetragene Testzone: ID **und** Name müssen in Skript, Argumenten und Datenbank übereinstimmen;
+- Ausführung nur mit `--execute`.
+
+**Vorprüfung vor jedem Lock:**
+- Zone vorhanden, Name passt;
+- keine DynDNS-Freigabe und keine DynDNS-Konten;
+- die aktiven Ziele der Zone sind **genau** die Test-VM-Agenten `127.0.0.1` und `192.168.53.125`;
+- keine weitere aktive Server-Adresse;
+- Publish-Sperre frei;
+- Änderung ausstehend.
+
+Jede Abweichung führt zum Abbruch mit Exit 2, Aufruf- oder Autorisierungsfehler zu Exit 3.
+
+**Produktionskonfiguration:** Sie wird nur gelesen (`inc/db.php` → `ui_config.php`). Es werden keine Konfigurationswerte, Tokens oder Zugangsdaten ausgegeben. Start und Ende werden über `appLog()` protokolliert.
+
+**G4 – Prüfen:**
+- `dig +short TXT s42-tls-test.zone.example.test` an `@192.168.53.122` und `@192.168.53.125` → `"S42 TLS-Abnahme"`;
+- SOA-Serial auf beiden = Serial in der Datenbank (vom Skript ausgegeben);
+- `changed = 0`;
+- Agent-Zugriffslogs: `zone_sync`/`conf_sync` mit HTTP 200 auf beiden Servern, kein `zone_cleanup`.
+
+**G5 – Wiederherstellen:**
+1. TXT-Eintrag über die Oberfläche löschen.
+2. G3 erneut ausführen (`--dry-run`, dann `--execute`).
+3. Prüfen: `s42-tls-test` liefert auf beiden Servern NXDOMAIN bzw. keine Antwort; Serial auf beiden gleich und höher als vor G2; `changed = 0`.
+
+**G6 – Aufräumen:**
+```bash
+rm -rf /usr/local/lib/dnsmanager-s42
+```
+Danach Systemstatus, Monitoring-Cron und PHP-Fehlerprotokoll prüfen.
+
+**Isolierter Nachweis t72** (13.11.2026, ns1; eigene Installation aus `main` `407c6ae`, isolierte DB, Agent-Stubs auf `127.0.0.1`). Die Testkopie unterscheidet sich nur in `APP_ROOT` und `EXPECTED_AGENTS`.
+- **Abgewiesen ohne jede Wirkung** auf Datenbank und Agenten:
+  - mit Exit 3: falscher Zonenname, andere Zone, falsche Argumentzahl, Start als root, Start als `www-data` ohne root-`sudo`;
+  - mit Exit 2: fremdes Ziel, weiterer aktiver Server, DynDNS-Freigabe, belegte Publish-Sperre, keine ausstehende Änderung.
+- **`--execute`:**
+  - `published`, `changed` 1 → 0, Serial erhöht, Sperre erhalten und freigegeben;
+  - je Agent genau `zone_sync` und `conf_sync` für `zone.example.test`, kein `zone_cleanup`;
+  - eine weitere ausstehende Zone blieb unberührt;
+  - kein Arbeitsverzeichnis übrig.
+- **Lesender Probelauf des Originalskripts gegen die Produktionskonfiguration** (`--dry-run`):
+  - Ziele `127.0.0.1` und `192.168.53.125` bestätigt;
+  - keine weitere ausstehende Zone, Sperre frei;
+  - Abbruch erwartungsgemäß mit „keine ausstehende Änderung“;
+  - Produktionsdaten unverändert (Prüfsummen).
+
+**Hintergrund Publish-Semantik** (`PublishService`): „Publish All“ verteilt nur Zonen mit ausstehender Änderung (`changed ≠ 0`) bzw. bei `bind_dirty` alle Zonen und führt nach Erfolg zusätzlich das Orphan-Cleanup aus. Deshalb wird für die Abnahme der Einzelzonen-Publish verwendet.
+
+**Nicht geeignet als Testzone:**
+- `example.test`: Glue-/Hosteinträge von ns1/ns2 sowie DynDNS-Konten `dyndnstest`/`n1race`;
 - `53.168.192.in-addr.arpa`: PTR-Einträge der VMs.
-- Die IPv6-Reverse-Zone `…8.b.d.0.1.0.0.2.ip6.arpa` wäre ebenfalls unkritisch (Dokumentationspräfix), ist aber nur zweite Wahl, da sie Testeinträge von `example.test` referenziert.
-
-**Wichtig zur Publish-Semantik** (`PublishService`):
-- „Publish All“ verteilt nur Zonen mit ausstehender Änderung (`changed ≠ 0`) bzw. bei `bind_dirty` alle Zonen.
-- Ein echter Verteiltest von `zone.example.test` braucht daher eine **ausstehende Änderung in dieser Zone**.
-- Vorschlag: einen TXT-Eintrag `s42-tls-test` mit einem Testwert anlegen, publizieren, prüfen, den Eintrag wieder entfernen und erneut publizieren.
-- Diese Inhaltsänderung bedarf der Freigabe zusammen mit der Testzone.
-- **Unmittelbar vor dem Publish** prüfen, dass `bind_dirty = 0` ist und keine andere Zone `changed ≠ 0` hat. Sonst würden weitere Zonen mitverteilt.
-- Ein Publish All führt nach Erfolg zusätzlich das Orphan-Cleanup auf den Agenten aus.
 
 ## 7. Rückweg
 
