@@ -29,7 +29,7 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 | S42-E3 | Phase 1: optionale, ausschließliche CA-Vertrauensstellung im Code | erledigt (#68) |
 | S42-E4 | Abnahme in dieser Reihenfolge:<br>1. lesende Agent-Aufrufe und der reguläre Monitoring-Cron;<br>2. BIND-Reload und Publish erst im Rahmen der gesondert freigegebenen Abnahme, Publish nur auf einer ausdrücklich freigegebenen Testzone. | freigegeben. Testzone: Vorschlag in Abschnitt 6 G, Freigabe offen. |
 | S42-E5 | Getrennte, IP-gebundene Apache-VirtualHosts für die Agent-Zertifikate:<br>– ns1 `127.0.0.1:443`, ns2 `192.168.53.125:443`;<br>– die Oberfläche auf ns1 `192.168.53.122:443` bleibt unverändert;<br>– die Agent-CA wird **nicht** auf Admin-Arbeitsplätzen importiert.<br>Vor der Aktivierung sind die tatsächliche VirtualHost-Auswahl, die Zertifikatsauslieferung und der unveränderte Browserzugriff nachzuweisen (Schritt D4/D5). | freigegeben |
-| S42-E6 | Die Ablaufüberwachung muss **vor** der TLS-Aktivierung nachweislich alarmieren. Eine bloße Logzeile reicht nicht. Keine neue externe Benachrichtigungsinfrastruktur ohne Rücksprache. | freigegeben mit Ergänzung. Alarmweg: Abschnitt 9, Entscheidung E6-A/E6-B offen. |
+| S42-E6 | Die Ablaufüberwachung muss **vor** der TLS-Aktivierung nachweislich alarmieren. Eine bloße Logzeile reicht nicht. Keine neue externe Benachrichtigungsinfrastruktur ohne Rücksprache. | freigegeben mit Ergänzung. Alarmweg **E6-A** entschieden und umgesetzt (Abschnitt 9). |
 | S42-E7 | CA mit kritischen `nameConstraints` auf genau die benötigten Agent-IPs und DNS-Namen (Abschnitt 5). Negativtest mit dem PHP-cURL-Stack vor produktiver Verwendung (Schritt D6). | grundsätzlich freigegeben |
 | S42-E8 | CA-Schlüssel:<br>– verschlüsselt;<br>– zwei getrennte Offline-Sicherungen;<br>– Passphrase im Passwortmanager.<br>Vor der CA-Erstellung legt Thomas fest: Ausstellungsrechner, Offline-Speicherorte und Wiederherstellungszuständigkeit. | grundsätzlich freigegeben, Festlegungen offen |
 
@@ -363,22 +363,39 @@ Bei falscher Konfiguration entsteht kein stiller unsicherer Zustand. Fehler sind
 - Ein externer Alarmweg (Mail, Monitoring-System) existiert derzeit nicht und wird ohne Rücksprache nicht eingerichtet.
 - Ein wirksamer und nachprüfbarer Alarm muss daher einen **vorhandenen, beobachteten Kanal** nutzen: die Diagnose der Anwendung. Sie ist für alle Administratoren in der Oberfläche sichtbar, protokolliert Statuswechsel in `diagnostic_log` und sendet bei später aktiviertem Mailer automatisch E-Mails.
 
-**Optionen (Entscheidung offen):**
+**Optionen (entschieden: E6-A):**
 
 | Option | Beschreibung | Bewertung |
 |---|---|---|
-| **E6-A (empfohlen)** | **Ablaufprüfung im regulären Monitoring-Lauf.** Bei jeder Serverprüfung (`server_status`, alle 5 Minuten) liest die Anwendung die Restlaufzeit des ausgelieferten Agent-Zertifikats sowie jedes Zertifikats in `AGENT_TLS_CA_FILE`. Unter einer Schwelle (Standard 30 Tage, konfigurierbar) setzt sie den Status `warning` mit Meldung, z. B. „Agent-Zertifikat läuft am … ab (noch N Tage)“. | Nutzt den vorhandenen Kanal:<br>– Problemliste der Systemstatus-Seite;<br>– `diagnostic_log`;<br>– Mail, sobald `MAILER_ENABLED` freigegeben ist.<br>Kein Schemawechsel (`server_status`/`warning` vorhanden). Der Cron prüft sich mit, weil ausbleibende Läufe ohnehin sichtbar werden.<br>Erfordert einen **kleinen eigenen Code-PR vor der Aktivierung**, mit isolierten Tests. Dabei zu prüfen: Die Dashboard-Zusammenfassung kennt bisher nur `serverError`; die Sichtbarkeit von `warning` dort ist im PR herzustellen. |
+| **E6-A (entschieden, umgesetzt)** | **Ablaufprüfung im regulären Monitoring-Lauf.** Bei jeder Serverprüfung (`server_status`, alle 5 Minuten) liest die Anwendung die Restlaufzeit des ausgelieferten Agent-Zertifikats sowie jedes Zertifikats in `AGENT_TLS_CA_FILE`. Unter einer Schwelle (Standard 30 Tage, konfigurierbar) setzt sie den Status `warning` mit Meldung, z. B. „Agent-Zertifikat läuft am … ab (noch N Tage)“. | Nutzt den vorhandenen Kanal:<br>– Problemliste der Systemstatus-Seite;<br>– `diagnostic_log`;<br>– Mail, sobald `MAILER_ENABLED` freigegeben ist.<br>Kein Schemawechsel (`server_status`/`warning` vorhanden). Der Cron prüft sich mit, weil ausbleibende Läufe ohnehin sichtbar werden.<br>Umgesetzt im eigenen Code-PR, Details unten. |
 | E6-B | **Tägliches Prüfskript ohne Codeänderung:** `logger` mit Priorität `warning`, Exit-Code ≠ 0, Statusdatei und Hinweis in der Anmeldemeldung (`/etc/update-motd.d`). | Ohne Code umsetzbar, aber nur passiv: Der Alarm wird erst bei einer SSH-Anmeldung gesehen. Erfüllt E6 („nicht nur eine Logzeile“) nur eingeschränkt. Nur als zusätzliche Absicherung zu E6-A sinnvoll. |
 | E6-C | Externer Kanal (SMTP-Relay für den vorhandenen Mailer oder ein vorhandenes Unternehmens-Monitoring) | Nur nach Rücksprache. Kann mit E6-A kombiniert werden: Der Mailer meldet dann dieselben Diagnosewechsel. |
 
-**Nachweis wirksamer Alarmierung (Voraussetzung für Schritt E, bei E6-A):**
-1. **Isoliert:** Mit Wegwerf-CA und kurzer Laufzeit zeigt der Test, dass `warning` mit der erwarteten Meldung entsteht und bei ausreichender Laufzeit wieder `ok` gilt. Er läuft wie t70, ohne Datenbank des Betriebs und ohne Locks.
-2. **Auf ns1 nach D4/D5, vor E:** Die Schwelle vorübergehend auf einen Wert über der Laufzeit setzen, z. B. 400 Tage. Den nächsten regulären Cron-Lauf abwarten. Nachzuweisen ist:
+**Umsetzung E6-A** (`AgentCertificateExpiryCheck`, aufgerufen aus `AgentMonitoringBackend::serverStatus()`):
+- **Aktivierung:**
+  - `AGENT_TLS_EXPIRY_WARN_DAYS` > 0, z. B. 400 für den Alarmtest;
+  - ohne diesen Eintrag 30 Tage, sobald `AGENT_TLS_CA_FILE` gesetzt ist;
+  - `0` schaltet die Prüfung aus;
+  - ohne beide Einträge: keine Prüfung, Verhalten unverändert.
+- **Geprüft werden:**
+  - das vom Agenten ausgelieferte Zertifikat, über eine eigene kurze TLS-Verbindung zur Agent-Adresse (ohne SNI, Zeitgrenze 5 s, nur lesen, kein Vertrauen);
+  - jedes Zertifikat in `AGENT_TLS_CA_FILE`.
+- **Wirkung auf den Status:**
+  - `ok` → `warning`; ein vorhandenes `warning` bleibt `warning`, die Meldung wird ergänzt („… – Zertifikatswarnung: Agent-Zertifikat läuft am JJJJ-MM-TT (UTC) ab (noch N Tage)“).
+  - **`error` und jeder andere Status bleiben unverändert**, und die Prüfung wird dann nicht ausgeführt.
+  - Ist die Restlaufzeit nicht ermittelbar, entsteht eine Warnung.
+- **Unverändert:** MonitoringService, Statusprotokollierung (`diagnostic_log`), Benachrichtigungslogik und Datenbankschema.
+- **Anzeige:** In der Systemstatus-Seite erscheint die Zeile „Serverstatus“ bei reinen Warnungen als „⚠️ Warnungen“ mit „N Warnung(en) erkannt“ und gelb hinterlegtem Eintrag. Fehler werden unverändert angezeigt.
+- **Dashboard:** Es fasst den Serverstatus weder bei Fehlern noch bei Warnungen zusammen und bleibt unverändert (Befund F8).
+
+**Nachweis wirksamer Alarmierung (Voraussetzung für Schritt E):**
+1. **Isoliert:** erledigt mit t71 (Code-PR). Wegwerf-CAs, kurze Laufzeiten, MonitoringService von Anfang bis Ende: ok → warning → ok mit `diagnostic_log`-Einträgen und Benachrichtigungen; Fehlerstatus nie verändert.
+2. **Auf ns1 nach D4/D5, vor E:** vorübergehend `define('AGENT_TLS_EXPIRY_WARN_DAYS', 400);` setzen, d. h. eine Schwelle über der Laufzeit. Den nächsten regulären Cron-Lauf abwarten. Nachzuweisen ist:
    - `server_status` von ns1 und ns2 steht auf `warning`;
    - es gibt einen `diagnostic_log`-Eintrag ok → warning;
    - der Eintrag ist in der Systemstatus-Seite sichtbar.
 
-   Danach die Schwelle zurücksetzen und den Wechsel zurück auf `ok` im nächsten Lauf nachweisen. Die Prüfung funktioniert auch bei noch abgeschalteter TLS-Verifikation, weil das ausgelieferte Zertifikat gelesen wird.
+   Danach den Eintrag wieder entfernen und den Wechsel zurück auf `ok` im nächsten Lauf nachweisen. Die Prüfung funktioniert auch bei noch abgeschalteter TLS-Verifikation, weil das ausgelieferte Zertifikat gelesen wird.
 3. Bei späterer Mail-Freigabe (E6-C): denselben Test mit Empfang der E-Mail wiederholen.
 
 **Ergänzendes Prüfskript (E6-B)**, falls gewünscht, als `/etc/cron.daily/dnsmanager-agent-tls-check` (root 0755). Es braucht keine Geheimnisse, beeinflusst keine Locks und wurde mit einer Wegwerf-CA geprüft.
