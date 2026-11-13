@@ -69,7 +69,8 @@ final class DyndnsAccountService
     /* ======================================================================================== */
 
     /**
-     * Codes: access_denied, missing_fields, rejected, duplicate_username (username), locked, failed, success
+     * Codes: access_denied, missing_fields, too_short (minLength; S30), rejected, duplicate_username (username),
+     *        locked, failed, success
      */
     public function createAccount(Actor $actor, DyndnsAccountInput $in): ServiceResult
     {
@@ -83,6 +84,12 @@ final class DyndnsAccountService
 
         if ($username === '' || $in->password === '' || $hostname === '' || $zone_id <= 0) {
             return self::one(false, 'error', 'dyndns.create.missing_fields', []);
+        }
+
+        // S30 (SP1): Mindestlänge wie bei der Passwortänderung
+        $minLength = self::passwordMinLength();
+        if (strlen($in->password) < $minLength) {
+            return self::one(false, 'error', 'dyndns.create.too_short', ['minLength' => $minLength]);
         }
 
         $hash = password_hash($in->password, PASSWORD_BCRYPT);
@@ -154,7 +161,8 @@ final class DyndnsAccountService
     /**
      * Ändert Benutzername, Hostname, Zone und optional das Passwort ($in->password leer = unverändert).
      *
-     * Codes: access_denied, invalid_input, not_found (vor der Transaktion), unchanged, rejected, warning (je
+     * Codes: access_denied, invalid_input, too_short (minLength; S30, nur bei neu gesetztem Passwort),
+     *        not_found (vor der Transaktion), unchanged, rejected, warning (je
      *        Hinweis, nach Commit in bisheriger Reihenfolge), duplicate_username, locked, failed,
      *        success (rebuilt: bool)
      */
@@ -171,6 +179,12 @@ final class DyndnsAccountService
 
         if ($id <= 0 || $hostname === '' || $zone_id <= 0 || $username === '') {
             return self::one(false, 'error', 'dyndns.update.invalid_input', []);
+        }
+
+        // S30 (SP1): ein neu gesetztes Passwort unterliegt der Mindestlänge (leer = Passwort unverändert)
+        $minLength = self::passwordMinLength();
+        if ($password !== '' && strlen($password) < $minLength) {
+            return self::one(false, 'error', 'dyndns.update.too_short', ['minLength' => $minLength]);
         }
 
         // Bestehende Werte vorläufig laden (ohne Sperre): nur zur Bestimmung der zu sperrenden Zonen und der
@@ -399,7 +413,7 @@ final class DyndnsAccountService
             return self::one(false, 'audit', 'dyndns.password.access_denied', ['actorId' => $actor->userId, 'reason' => 'role']);
         }
 
-        $minLength = defined('PASSWORD_MIN_LENGTH') ? (int)PASSWORD_MIN_LENGTH : 0;
+        $minLength = self::passwordMinLength();
         if (strlen($password) < $minLength) {
             return self::one(false, 'error', 'dyndns.password.too_short', ['minLength' => $minLength]);
         }
@@ -602,5 +616,11 @@ final class DyndnsAccountService
     private static function one(bool $ok, string $kind, string $code, array $context): ServiceResult
     {
         return new ServiceResult($ok, [new ServiceMessage($kind, $code, $context)]);
+    }
+
+    /** Mindestlänge für DynDNS-Passwörter (PASSWORD_MIN_LENGTH; nicht definiert = 0, wie bisher bei der Passwortänderung) */
+    private static function passwordMinLength(): int
+    {
+        return defined('PASSWORD_MIN_LENGTH') ? (int)PASSWORD_MIN_LENGTH : 0;
     }
 }

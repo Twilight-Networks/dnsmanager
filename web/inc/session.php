@@ -36,6 +36,12 @@ ini_set('session.cookie_secure', isset($_SERVER['HTTPS']));
 ini_set('session.use_only_cookies', '1');
 session_name('twl_dnsmgr_sid'); // eindeutiger Session-Name
 
+// S29 (SP1): Dynamische Seiten mit Session nicht im Browser-/Proxy-Cache ablegen – ausdrücklich gesetzt statt
+// abhängig von php.ini (session.cache_limiter). „nocache“ sendet beim session_start()
+// „Cache-Control: no-store, no-cache, must-revalidate“, „Pragma: no-cache“ und „Expires“ in der Vergangenheit
+// (bisheriger php.ini-Standard). Statische Assets laufen nicht über PHP und bleiben unverändert.
+session_cache_limiter('nocache');
+
 ob_start(); // Absicherung gegen vorzeitige Ausgabe
 session_start(); // Session starten
 

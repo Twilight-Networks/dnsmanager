@@ -328,6 +328,7 @@ return [
     'api_ip' => 'Dirección IP de API (IPv4/IPv6)',
     'api_token' => 'Clave de API',
     'api_token_placeholder' => 'p. ej. cadena hex de 64 caracteres',
+    'api_token_keep_placeholder' => 'Dejar vacío para mantener la clave de API; introduzca una nueva para reemplazarla',
     'generate' => 'Generar',
     'server_active' => 'El servidor está activo',
     'server_is_local' => 'Este servidor es el local (host de la interfaz web)',

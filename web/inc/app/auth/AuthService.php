@@ -14,7 +14,8 @@
  *   bestimmt weiterhin UserService beim Setzen des Passworts.
  * - Nur aktive Konten (users.active = 1) werden angemeldet (S27). password_verify läuft auch für deaktivierte
  *   Konten; ein deaktiviertes Konto mit falschem Passwort ist von einem falschen Passwort nicht unterscheidbar.
- * - Bekannt und bewusst unverändert (S31): Für unbekannte Benutzernamen entfällt password_verify (Antwortzeit).
+ * - S31 (SP1): Für unbekannte Benutzernamen erfolgt eine Prüfung gegen DummyPasswordHash (Ergebnis verworfen),
+ *   um die zeitliche Unterscheidbarkeit zu verringern; Ergebnis-Codes und Protokolle unverändert.
  * - Eine Anmeldung ist nur gültig, wenn Benutzer-ID, Benutzername, Rolle (admin|zoneadmin), Aktivstatus und
  *   Sitzungsgeneration (session_epoch, S26) mit der Datenbank übereinstimmen; die Prüfung erfolgt in der
  *   bisherigen Reihenfolge und liefert den ersten zutreffenden Widerrufsgrund.
@@ -23,6 +24,7 @@
 require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../SchemaCheck.php';
+require_once __DIR__ . '/DummyPasswordHash.php';
 
 final class AuthService
 {
@@ -52,6 +54,10 @@ final class AuthService
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         $stmt->closeCursor();
 
+        if (!$user) {
+            // S31 (SP1): unbekannter Benutzer – Prüfung gegen festen Dummy-Hash, Ergebnis wird verworfen
+            DummyPasswordHash::consumeVerification($password);
+        }
         $passwordOk = $user && password_verify($password, $user['password_hash']);
 
         if ($passwordOk && (int)$user['active'] === 1) {

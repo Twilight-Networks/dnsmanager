@@ -56,6 +56,14 @@ foreach ($result->messages as $message) {
             toastError($LANG['dyndns_error_missing_fields']);
             break;
 
+        case 'dyndns.create.too_short':
+            // S30 (SP1): bestehender Text der Passwortänderung
+            toastError(
+                sprintf($LANG['error_password_too_short'], $ctx['minLength']),
+                'DynDNS-Account-Anlage abgelehnt: Passwort zu kurz.'
+            );
+            break;
+
         case 'dyndns.create.rejected':
             toastError(dyndnsToast($LANG, $ctx), $ctx['detail']);
             break;
