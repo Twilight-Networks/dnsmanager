@@ -57,12 +57,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 // Verarbeitung von Login-Daten
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (empty($_SESSION['csrf_token'])) {
-        // Session war abgelaufen oder CSRF-Token fehlt → Tokenprüfung überspringen, neues Token setzen
-        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-    } else {
-        verify_csrf_token();
-    }
+    // S35 (SP2-E7): Jeder Login-POST benötigt ein gültiges CSRF-Token (fehlend oder ungültig → 403). Der frühere
+    // Ausnahmezweig ohne Session-Token war unerreichbar (inc/session.php setzt für jede Session ein Token).
+    verify_csrf_token();
 
     if (login_user($_POST['username'], $_POST['password'])) {
         // Erfolgreiche Anmeldung → Weiterleitung zum Dashboard

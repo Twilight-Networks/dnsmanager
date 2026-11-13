@@ -53,6 +53,8 @@ function login_user(string $username, string $password): bool
                 $_SESSION['role'] = $ctx['role'];
                 $_SESSION['username'] = $ctx['username'];
                 $_SESSION['session_epoch'] = $ctx['sessionEpoch'];
+                // S28 (SP2-E1): Anmeldezeitpunkt für die absolute Höchstdauer (inc/session.php); nie verlängert
+                $_SESSION['login_time'] = time();
                 return true;
 
             case 'auth.login.inactive':

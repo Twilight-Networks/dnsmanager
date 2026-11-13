@@ -113,6 +113,25 @@ a:active {
     color: #444444 !important;
 }
 
+/* Logout ist ein <button> (POST-Formular, SP2): Darstellung wie die bisherigen Sidebar-Links (.sidebar a) */
+.sidebar .sidebar-logout button {
+    display: block;
+    width: 100%;
+    padding: 10px;
+    margin: 0;
+    border: 0;
+    background: none;
+    color: #444444 !important;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sidebar .sidebar-logout button:hover,
+.sidebar .sidebar-logout button:focus {
+    background: #BABDBF;
+}
+
 #system_healthButton.has-errors {
     background-color: #F8D7DA !important;
     color: black;

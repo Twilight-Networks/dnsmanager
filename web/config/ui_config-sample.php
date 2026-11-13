@@ -53,6 +53,7 @@ define('PASSWORD_MIN_LENGTH', 4);           // Minimale Anzahl Zeichen für Pass
  *  Session-Timeout
  * --------------------------------------- */
 define('SESSION_TIMEOUT_SECONDS', 900); // z. B. 15 Minuten Inaktivität
+define('SESSION_MAX_LIFETIME_SECONDS', 43200); // Absolute Höchstdauer einer Anmeldung (12 Stunden), unabhängig von Aktivität; ohne Eintrag 43200
 
 /** ---------------------------------------
  *  Remote-API Konfiguration
