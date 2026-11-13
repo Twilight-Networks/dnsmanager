@@ -19,7 +19,6 @@ require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/status/DiagnosticReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
-require_once __DIR__ . '/../inc/web/diagnostics_view.php';
 
 // Zugriffsbeschränkung: Nur Administratoren dürfen diese Seite aufrufen (vor jeder Layout-Ausgabe)
 requireRole(['admin']);
@@ -61,72 +60,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['force_update'])) {
     exit;
 }
 
-// Diagnosedaten über den DiagnosticReadService (nur aktiver Admin), dargestellt in der bisherigen Struktur
-$diagnostics = diagnosticsLegacyView((new DiagnosticReadService($pdo, new ZoneAccess($pdo)))->getOverview(actorFromSession()));
+// Diagnosen und ihre Auswertung über den DiagnosticReadService (nur aktiver Admin; Paket 6, K2): Kennzeichen aus
+// summary, Problemeinträge aus problems. Hier nur Übersetzung in die bisherige Darstellung (HTML, Texte).
+$diagnostics = (new DiagnosticReadService($pdo, new ZoneAccess($pdo)))->getOverview(actorFromSession());
+$diag_summary = $diagnostics['summary'] ?? ['confError' => false, 'confWarning' => false, 'serverError' => false, 'zoneError' => false, 'zoneWarning' => false];
+$diag_problems = $diagnostics['problems'] ?? ['server' => [], 'conf' => [], 'zone' => []];
 
-$conf_results = $diagnostics['server'];
-$zone_results = $diagnostics['zone'];
-
-$conf_errors = [];
-$conf_warnings = [];
+$conf_errors = $diag_summary['confError'];
+$conf_warnings = $diag_summary['confWarning'];
 $conf_outputs = [];
 
-foreach ($conf_results as $entry) {
-    $status = $entry['zone_conf_status']['status'];
-    $server = htmlspecialchars($entry['zone_conf_status']['server'] ?? 'unbekannt');
-    $output = htmlspecialchars($entry['zone_conf_status']['message']);
-
-    if ($status === 'error') {
-        $conf_errors[] = true;
-    } elseif ($status === 'warning') {
-        $conf_warnings[] = true;
-    }
-
-    if ($status !== 'ok') {
-        $conf_outputs[] = "<strong>$server</strong><br><pre>$output</pre>";
-    }
+foreach ($diag_problems['conf'] as $problem) {
+    $server = htmlspecialchars($problem['serverName'] ?? 'unbekannt');
+    $output = htmlspecialchars($problem['message']);
+    $conf_outputs[] = "<strong>$server</strong><br><pre>$output</pre>";
 }
 
-$has_errors = false;
-$has_warnings = false;
+$has_errors = $diag_summary['zoneError'];
+$has_warnings = $diag_summary['zoneWarning'];
 $outputs = [];
 
-foreach ($zone_results as $entry) {
-    $status = $entry['zone_status']['status'];
-    $zone = htmlspecialchars($entry['zone']);
-    $server = htmlspecialchars($entry['server']);
-    $output = htmlspecialchars($entry['zone_status']['message']);
-
-    if (in_array($status, ['error', 'not_found'], true)) {
-        $has_errors = true;
-    } elseif ($status === 'warning') {
-        $has_warnings = true;
-    }
-
-    if ($status !== 'ok') {
-        $outputs[] = "<strong>$zone @ $server</strong><br><pre>$output</pre>";
-    }
+foreach ($diag_problems['zone'] as $problem) {
+    $zone = htmlspecialchars($problem['zoneName'] ?? '(unbekannt)');
+    $server = htmlspecialchars($problem['serverName'] ?? '(unbekannt)');
+    $output = htmlspecialchars($problem['message']);
+    $outputs[] = "<strong>$zone @ $server</strong><br><pre>$output</pre>";
 }
 
-$remote_errors = [];
+$remote_errors = $diag_summary['serverError'];
 $remote_outputs = [];
 
-foreach ($conf_results as $entry) {
-    if (!isset($entry['server_status'])) {
-        continue;
-    }
-
-    $status = $entry['server_status']['status'];
-    $server = htmlspecialchars($entry['server_status']['server'] ?? 'unbekannt');
-    $output = htmlspecialchars($entry['server_status']['message']);
-
-    if ($status === 'error') {
-        $remote_errors[] = true;
-    }
-
-    if ($status !== 'ok') {
-        $remote_outputs[] = "<strong>$server</strong><br><pre>$output</pre>";
-    }
+foreach ($diag_problems['server'] as $problem) {
+    $server = htmlspecialchars($problem['serverName'] ?? 'unbekannt');
+    $output = htmlspecialchars($problem['message']);
+    $remote_outputs[] = "<strong>$server</strong><br><pre>$output</pre>";
 }
 ?>
 
