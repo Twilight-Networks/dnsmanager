@@ -23,13 +23,11 @@ require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/servers/ServerReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
-include __DIR__ . '/../templates/layout.php';
 
-// Zugriffsbeschränkung: Nur Administratoren dürfen diese Seite aufrufen
-if ($_SESSION['role'] !== 'admin') {
-    http_response_code(403);
-    exit('Zugriff verweigert.');
-}
+// Zugriffsbeschränkung: Nur Administratoren (vor jeder Layout-Ausgabe; HTTP 403 und access_denied-Log, S39)
+requireRole(['admin']);
+
+include __DIR__ . '/../templates/layout.php';
 
 // Parameter verarbeiten
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;

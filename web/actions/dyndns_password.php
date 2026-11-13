@@ -8,7 +8,8 @@
  * Sie wird typischerweise aus einem Modal heraus aufgerufen, das in `dyndns.php` definiert ist.
  *
  * Sicherheitsmaßnahmen:
- * - Nur Admins (bei fehlender Berechtigung Toast und Rückleitung wie bisher)
+ * - Nur Admins: bei fehlender Berechtigung HTTP 403 und access_denied-Log über requireRole() (S39; vorher Toast und
+ *   Rückleitung)
  * - CSRF-Schutz
  * - Passwort wird nur in gehashter Form gespeichert
  *
@@ -23,14 +24,8 @@ require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 verify_csrf_token();
 
-if ($_SESSION['role'] !== 'admin') {
-    toastError(
-        $LANG['dyndns_error_unauthorized'],
-        "Nicht-Admin versucht DynDNS-Passwort zu ändern."
-    );
-    header("Location: " . rtrim(BASE_URL, '/') . "/pages/dyndns.php");
-    exit;
-}
+// Nur Admins (HTTP 403 und access_denied-Log, S39)
+requireRole(['admin']);
 
 $account_id = (int)($_POST['id'] ?? 0);
 $password = trim($_POST['password'] ?? '');

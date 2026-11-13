@@ -4,14 +4,9 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 
 **Status:**
 - **Phase 1 – erledigt:** PR #68, `main` `b17d946`. Code-Option `AGENT_TLS_CA_FILE` in `BindAgentClient`, isoliert getestet (Abschnitt 12).
-- **Phase 2 – vorbereitet:** E5 freigegeben; E6-A umgesetzt (PR #70, `main` `407c6ae`); E7/E8 grundsätzlich freigegeben; Testzone `zone.example.test` akzeptiert; Einzelzonen-Publish per Skript vorbereitet (Abschnitt 6 G). Die Durchführung wird gesondert freigegeben.
+- **Phase 2 – durchgeführt (13.11.2026):** W0–W6, N1, D0–D7, E, F und G0–G6 auf ns1/ns2 bestanden; Agent-TLS-Prüfung seit 13.11.2026 19:46 produktiv aktiv, Ablaufwarnung aktiv. Offen: W7 (CA-Schlüssel vom Ausstellungsrechner entfernen). Fingerprints: CA `2F:5E:A9:48:…:31:0F`, ns1 `FB:A4:B6:0B:…:B1:54:17`, ns2 `CD:E4:F3:33:…:1A:97:0E`.
 - **Projektgrenze:** zwei gültige Agent-Zertifikate, zuverlässige TLS-Prüfung und die bestehende Ablaufwarnung im Systemstatus. Keine weitere Zertifikatsverwaltungsfunktion, kein Mail-Relay oder Mailserver, keine zusätzliche PKI-Infrastruktur.
-- Bis dahin gilt:
-  - keine produktive CA erzeugen;
-  - keine Zertifikate austauschen;
-  - die TLS-Prüfung bleibt aus;
-  - kein produktiver BIND-Reload oder Publish.
-- S42 bleibt offen, bis Phase 2 produktiv abgenommen ist.
+- **S42 ist technisch abgeschlossen** (13.11.2026). Die Abschnitte 6 bis 9 gelten weiter für Erneuerung, CA-Wechsel und Rückweg.
 
 **Hilfsskripte** (`docs/agent-tls/`, keine Geheimnisse, Ergebnis über Exit-Code):
 

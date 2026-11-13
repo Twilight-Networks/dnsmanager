@@ -21,10 +21,8 @@ require_once __DIR__ . '/../inc/web/web_adapter.php';
 require_once __DIR__ . '/../inc/web/dyndns_messages.php';
 verify_csrf_token();
 
-if ($_SESSION['role'] !== 'admin') {
-    http_response_code(403);
-    exit('Zugriff verweigert.');
-}
+// Nur Admins (HTTP 403 und access_denied-Log, S39)
+requireRole(['admin']);
 
 $id       = (int)($_POST['id'] ?? 0);
 $username = trim($_POST['username'] ?? '');
