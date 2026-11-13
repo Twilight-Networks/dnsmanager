@@ -19,7 +19,8 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 |---|---|---|
 | `s42-vhost-check.sh` | VirtualHost-Auswahl und Zertifikatsauslieferung (E5) | je Host |
 | `s42-precheck.sh` | Vorprüfung vor der Aktivierung (CA-Datei, Kette, Rechte, Handshake, PHP-Stack, Oberfläche unverändert) | ns1 |
-| `s42-nc-negative.sh` | Negativtest der `nameConstraints` mit dem PHP-cURL-Stack (E7) | ns1 |
+| `s42-ca-ext-check.sh` | Prüfung der Extensions der produktiven Agent-CA: `basicConstraints`, `keyUsage`, exakte `nameConstraints` (D6, E7) | ns1 |
+| `s42-nc-negative.sh` | Negativtest der `nameConstraints` mit dem PHP-cURL-Stack. **Nur mit Wegwerf-CA**; mit Trockenlauf 2 erbracht, wird mit der produktiven CA nicht ausgeführt. | – |
 | `s42-publish-zone.php` | einmaliger Einzelzonen-Publish der Testzone über `PublishService::publishZone()` (E4) | ns1, nur vorübergehend außerhalb des Webroots; Ausführung durch den Administrator per `sudo -u www-data` |
 
 ## 1. Entscheidungen
@@ -32,7 +33,7 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 | S42-E4 | Abnahme in dieser Reihenfolge:<br>1. lesende Agent-Aufrufe und der reguläre Monitoring-Cron;<br>2. BIND-Reload und Publish erst im Rahmen der gesondert freigegebenen Abnahme, Publish nur auf einer ausdrücklich freigegebenen Testzone. | freigegeben. Testzone `zone.example.test` akzeptiert; Änderung nur TXT `s42-tls-test`; gezielter Einzelzonen-Publish (Abschnitt 6 G). |
 | S42-E5 | Getrennte, IP-gebundene Apache-VirtualHosts für die Agent-Zertifikate:<br>– ns1 `127.0.0.1:443`, ns2 `192.168.53.125:443`;<br>– die Oberfläche auf ns1 `192.168.53.122:443` bleibt unverändert;<br>– die Agent-CA wird **nicht** auf Admin-Arbeitsplätzen importiert.<br>Vor der Aktivierung sind die tatsächliche VirtualHost-Auswahl, die Zertifikatsauslieferung und der unveränderte Browserzugriff nachzuweisen (Schritt D4/D5). | freigegeben |
 | S42-E6 | Die Ablaufüberwachung muss **vor** der TLS-Aktivierung nachweislich alarmieren. Eine bloße Logzeile reicht nicht. Keine neue externe Benachrichtigungsinfrastruktur ohne Rücksprache. | freigegeben mit Ergänzung. Alarmweg **E6-A** entschieden und umgesetzt (Abschnitt 9). |
-| S42-E7 | CA mit kritischen `nameConstraints` auf genau die benötigten Agent-IPs und DNS-Namen (Abschnitt 5). Negativtest mit dem PHP-cURL-Stack vor produktiver Verwendung (Schritt D6). | grundsätzlich freigegeben |
+| S42-E7 | CA mit kritischen `nameConstraints` auf genau die benötigten Agent-IPs und DNS-Namen (Abschnitt 5). Negativtest mit dem PHP-cURL-Stack mit Wegwerf-CA erbracht (Trockenlauf 2, Abschnitt 11). Vor produktiver Verwendung werden die Extensions der produktiven CA geprüft (D6). Aus der produktiven CA werden nur die beiden Agent-Zertifikate ausgestellt. | grundsätzlich freigegeben |
 | S42-E8 | CA-Schlüssel:<br>– verschlüsselt;<br>– zwei getrennte Offline-Sicherungen;<br>– Passphrase im Passwortmanager.<br>**Ausstellungsrechner:** der vorhandene Windows-PC von Thomas mit der vorhandenen Git-OpenSSL 3.5.9 (`ucrt64`); keine zusätzliche VM, kein CA-Dienst, keine neue Software. Ablauf W0–W7 in Abschnitt 6. | festgelegt. Aufbewahrungsorte der beiden Datenträger legt Thomas fest. |
 
 ## 2. Ist-Zustand (13.11.2026, `main` `b17d946`)
@@ -159,9 +160,14 @@ Platzhalter:
 
 Trockenläufe mit Wegwerf-Material im Scratchpad (13.11.2026, danach gelöscht) waren ohne Befund:
 - verschlüsselter Schlüssel, CA mit kritischen `nameConstraints`/`pathlen:0`, Signieren eines CSR, `verify -verify_ip` (richtige IP Exit 0, falsche Exit 2);
-- die PowerShell-Blöcke W0, W1 und W3–W5 dieser Anleitung unverändert ausgeführt. Nur für den Trockenlauf wurde eine Test-Passphrase per Umgebungsvariable statt per Eingabeaufforderung übergeben.
-  - Ergebnis: alle CSRs Exit 0, vier Zertifikate ausgestellt;
-  - `verify` für ns1/ns2 Exit 0, für `nc-dns`/`nc-ip` Exit 2 (`nameConstraints`);
+- die PowerShell-Blöcke W0–W5 dieser Anleitung (Fassung mit verbindlichem Abbruch) ausgeführt. Nur für den Trockenlauf wurde eine Test-Passphrase per Umgebungsvariable statt per Eingabeaufforderung übergeben, und die Datenträger wurden durch zwei lokale Verzeichnisse ersetzt.
+  - Ergebnis: alle Schritte „BESTANDEN“; zwei Agent-Zertifikate ausgestellt und geprüft;
+  - Abbruchproben, jeweils Abbruch des ganzen Blocks ohne „BESTANDEN“:
+    - vorhandenes Arbeitsverzeichnis (W0), vorhandener Schlüssel (W1);
+    - falsche Passphrase bei der Wiederherstellungsprobe und Kopierfehler auf schreibgeschütztes Ziel (W2);
+    - fehlender CSR (W3), vorhandenes Zertifikat (W4);
+    - falsches Zertifikat bzw. falsche IP bei `verify` (W5).
+  - Der Zweig „Hash weicht ab“ (W2/W5) ließ sich ohne Manipulation nicht auslösen. Er ist wie die übrigen Prüfungen als `throw` umgesetzt.
   - alle PowerShell-Blöcke parsen fehlerfrei.
 
 **Windows-Besonderheiten:**
@@ -170,13 +176,22 @@ Trockenläufe mit Wegwerf-Material im Scratchpad (13.11.2026, danach gelöscht) 
 - Befehle mit Passphrase in einem PowerShell-Fenster ausführen, nicht in Git Bash.
 - Die Passphrase **nie** per `-pass`/`-passin` auf der Kommandozeile angeben, denn sie landet sonst im PowerShell-Verlauf.
 
+**Verbindlicher Abbruch:** Jeder Schritt W1–W5 ist ein in sich geschlossener Block `& { … }`.
+- Nach jedem kritischen OpenSSL-Befehl prüft `Must` den Exit-Code. Hash-Vergleiche und Erwartungen werden ausdrücklich geprüft.
+- Bei einer Abweichung bricht `throw` den **ganzen Block** ab, sodass die folgenden Befehle nicht ausgeführt werden.
+- Erfolgreich ist ein Schritt nur mit der Schlussmeldung „Wn BESTANDEN“. Erst dann wird der nächste Schritt gestartet.
+- Die Blöcke werden jeweils vollständig in das PowerShell-Fenster eingefügt.
+
 **W0 – Vorbereitung** (ohne Geheimnisse). Arbeitsverzeichnis lokal und außerhalb von Benutzerprofil, OneDrive und Synchronisation, Zugriff nur für das eigene Konto:
 ```powershell
-$O = 'C:\Program Files\Git\ucrt64\bin\openssl.exe'; & $O version          # OpenSSL 3.5.x
-New-Item -ItemType Directory C:\S42-CA, C:\S42-CA\csr | Out-Null
-icacls C:\S42-CA /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"; icacls C:\S42-CA
-Set-Location C:\S42-CA
-@'
+$O = 'C:\Program Files\Git\ucrt64\bin\openssl.exe'
+function global:Must([string]$Step) { if ($LASTEXITCODE -ne 0) { throw "ABBRUCH $Step (Exit-Code $LASTEXITCODE)" } }
+& {
+  & $O version; Must 'W0 OpenSSL'                                         # OpenSSL 3.5.x
+  if (Test-Path C:\S42-CA) { throw 'ABBRUCH W0: C:\S42-CA existiert bereits' }
+  New-Item -ItemType Directory C:\S42-CA, C:\S42-CA\csr -ErrorAction Stop | Out-Null
+  icacls C:\S42-CA /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"; Must 'W0 icacls'
+  @'
 [req]
 distinguished_name = dn
 x509_extensions = v3_ca
@@ -189,79 +204,99 @@ basicConstraints = critical,CA:TRUE,pathlen:0
 keyUsage = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
 nameConstraints = critical,permitted;IP:127.0.0.1/255.255.255.255,permitted;IP:192.168.53.125/255.255.255.255,permitted;DNS:ns1,permitted;DNS:ns2,permitted;DNS:ns1.example.test,permitted;DNS:ns2.example.test
-'@ | Set-Content -Encoding ascii C:\S42-CA\ca.cnf
+'@ | Set-Content -Encoding ascii C:\S42-CA\ca.cnf -ErrorAction Stop
+  'W0 BESTANDEN'
+}
 ```
 Außerdem bereitstellen:
 - zwei beschriftete Offline-Datenträger;
 - eine neue Passphrase im Passwortmanager, zufällig mit mindestens 24 Zeichen.
 
+`$O` und `Must` gelten für das ganze PowerShell-Fenster. Wird das Fenster neu geöffnet, die beiden ersten Zeilen von W0 erneut ausführen.
+
 **W1 – CA erstellen** (Thomas; Passphrase zweimal bei der Erzeugung, einmal beim Selbstsignieren):
 ```powershell
-& $O genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -aes-256-cbc -out C:\S42-CA\dnsmanager-agent-ca.key
-& $O req -x509 -new -config C:\S42-CA\ca.cnf -key C:\S42-CA\dnsmanager-agent-ca.key -sha256 -days 1826 -out C:\S42-CA\dnsmanager-agent-ca.pem
-& $O x509 -in C:\S42-CA\dnsmanager-agent-ca.pem -noout -ext basicConstraints,keyUsage,nameConstraints -enddate -fingerprint -sha256
-Select-String -Path C:\S42-CA\dnsmanager-agent-ca.key -Pattern 'BEGIN ENCRYPTED PRIVATE KEY' -Quiet    # True
+& {
+  if (Test-Path C:\S42-CA\dnsmanager-agent-ca.key) { throw 'ABBRUCH W1: CA-Schlüssel existiert bereits (nicht überschreiben)' }
+  & $O genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -aes-256-cbc -out C:\S42-CA\dnsmanager-agent-ca.key; Must 'W1 genpkey'
+  if (-not (Select-String -Path C:\S42-CA\dnsmanager-agent-ca.key -Pattern 'BEGIN ENCRYPTED PRIVATE KEY' -Quiet)) { throw 'ABBRUCH W1: Schlüssel nicht verschlüsselt' }
+  & $O req -x509 -new -config C:\S42-CA\ca.cnf -key C:\S42-CA\dnsmanager-agent-ca.key -sha256 -days 1826 -out C:\S42-CA\dnsmanager-agent-ca.pem; Must 'W1 req'
+  & $O x509 -in C:\S42-CA\dnsmanager-agent-ca.pem -noout -ext basicConstraints,keyUsage,nameConstraints -enddate -fingerprint -sha256; Must 'W1 Anzeige'
+  'W1 BESTANDEN'
+}
 ```
 Fingerprint und Ablaufdatum der CA notieren. Der Schlüssel liegt ausschließlich verschlüsselt vor; beim Signieren wird er nur im Speicher entschlüsselt.
 
-**W2 – Sicherung auf zwei Offline-Datenträgern** (Thomas; je Datenträger, Laufwerksbuchstabe z. B. `E:` bzw. `F:`):
+**W2 – Sicherung auf zwei Offline-Datenträgern** (Thomas; je Datenträger einmal, mit dessen Laufwerksbuchstaben):
 ```powershell
-$M = 'E:\S42-CA'; New-Item -ItemType Directory $M -Force | Out-Null
-Copy-Item C:\S42-CA\dnsmanager-agent-ca.key, C:\S42-CA\dnsmanager-agent-ca.pem, C:\S42-CA\ca.cnf $M
-Compare-Object (Get-FileHash C:\S42-CA\dnsmanager-agent-ca.key).Hash (Get-FileHash "$M\dnsmanager-agent-ca.key").Hash   # keine Ausgabe = identisch
-& $O pkey -in "$M\dnsmanager-agent-ca.key" -noout; "Wiederherstellung (Passphrase) Exit: $LASTEXITCODE"           # 0
+& {
+  param([string]$M)
+  New-Item -ItemType Directory $M -Force -ErrorAction Stop | Out-Null
+  foreach ($f in 'dnsmanager-agent-ca.key', 'dnsmanager-agent-ca.pem', 'ca.cnf') {
+    Copy-Item "C:\S42-CA\$f" $M -ErrorAction Stop
+    if ((Get-FileHash "C:\S42-CA\$f" -ErrorAction Stop).Hash -ne (Get-FileHash "$M\$f" -ErrorAction Stop).Hash) { throw "ABBRUCH W2: Kopie $f auf $M weicht ab" }
+  }
+  & $O pkey -in "$M\dnsmanager-agent-ca.key" -noout; Must "W2 Wiederherstellungsprobe $M (Passphrase)"
+  "W2 BESTANDEN für $M"
+} 'E:\S42-CA'                                                              # zweiter Datenträger z. B. 'F:\S42-CA'
 ```
 Danach den Datenträger sicher auswerfen. Die beiden Datenträger getrennt aufbewahren (Orte: Thomas). Die Passphrase liegt nur im Passwortmanager.
 
-**N1 – Schlüssel und CSRs auf den Servern** (per SSH als root; jeder Server erzeugt seinen eigenen Schlüssel, nur der CSR verlässt den Host):
+**N1 – Schlüssel und CSR je Server** (per SSH als root; jeder Server erzeugt seinen eigenen Schlüssel, nur der CSR verlässt den Host):
 ```bash
 install -d -m 750 -o root -g root /etc/ssl/dnsmanager
 ( umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /etc/ssl/dnsmanager/agent.key )
 openssl req -new -key /etc/ssl/dnsmanager/agent.key -subj "/O=Twilight-Networks/CN=$(hostname)" -out /root/$(hostname)-agent.csr
-# nur ns1: Testschlüssel für den Negativtest D6 (Zertifikate 1 Tag gültig)
-install -d -m 700 /root/s42-nc
-for n in nc-dns nc-ip; do ( umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /root/s42-nc/$n.key ); \
-  openssl req -new -key /root/s42-nc/$n.key -subj "/O=Twilight-Networks/CN=ns1" -out /root/s42-nc/$n.csr; done
 ```
 
-**W3 – CSRs übertragen und prüfen** (öffentliche Daten; per `scp` nach `C:\S42-CA\csr\`):
-- von ns1: `ns1-agent.csr`, `nc-dns.csr`, `nc-ip.csr`;
-- von ns2: `ns2-agent.csr`.
+**W3 – CSRs übertragen und prüfen** (öffentliche Daten): `ns1-agent.csr` von ns1 und `ns2-agent.csr` von ns2 per `scp` nach `C:\S42-CA\csr\`.
 ```powershell
-foreach ($c in Get-ChildItem C:\S42-CA\csr\*.csr) { & $O req -in $c.FullName -noout -verify -subject; "$($c.Name) Exit: $LASTEXITCODE" }   # je 0
+& {
+  foreach ($c in 'ns1-agent.csr', 'ns2-agent.csr') {
+    if (-not (Test-Path "C:\S42-CA\csr\$c")) { throw "ABBRUCH W3: $c fehlt" }
+    & $O req -in "C:\S42-CA\csr\$c" -noout -verify -subject; Must "W3 $c"
+  }
+  'W3 BESTANDEN'
+}
 ```
 Die SANs werden nicht aus dem CSR übernommen, sondern ausschließlich in W4 festgelegt.
 
-**W4 – Ausstellen** (Thomas; je Zertifikat einmal Passphrase):
+**W4 – Ausstellen** (Thomas; je Zertifikat einmal Passphrase). Aus der produktiven CA werden **nur die beiden Agent-Zertifikate** ausgestellt:
 ```powershell
-function Sign([string]$Name, [string]$San, [int]$Days) {
-  "basicConstraints=critical,CA:FALSE`nkeyUsage=critical,digitalSignature,keyEncipherment`nextendedKeyUsage=serverAuth`nsubjectAltName=$San`nauthorityKeyIdentifier=keyid" |
-    Set-Content -Encoding ascii "C:\S42-CA\$Name.ext"
-  & $O x509 -req -in "C:\S42-CA\csr\$Name.csr" -CA C:\S42-CA\dnsmanager-agent-ca.pem -CAkey C:\S42-CA\dnsmanager-agent-ca.key `
-    -CAserial C:\S42-CA\dnsmanager-agent-ca.srl -CAcreateserial -sha256 -days $Days -extfile "C:\S42-CA\$Name.ext" -out "C:\S42-CA\$Name.pem"
-  "$Name Exit: $LASTEXITCODE"
+& {
+  function Sign([string]$Name, [string]$San) {
+    if (Test-Path "C:\S42-CA\$Name.pem") { throw "ABBRUCH W4: $Name.pem existiert bereits" }
+    "basicConstraints=critical,CA:FALSE`nkeyUsage=critical,digitalSignature,keyEncipherment`nextendedKeyUsage=serverAuth`nsubjectAltName=$San`nauthorityKeyIdentifier=keyid" |
+      Set-Content -Encoding ascii "C:\S42-CA\$Name.ext" -ErrorAction Stop
+    & $O x509 -req -in "C:\S42-CA\csr\$Name.csr" -CA C:\S42-CA\dnsmanager-agent-ca.pem -CAkey C:\S42-CA\dnsmanager-agent-ca.key `
+      -CAserial C:\S42-CA\dnsmanager-agent-ca.srl -CAcreateserial -sha256 -days 365 -extfile "C:\S42-CA\$Name.ext" -out "C:\S42-CA\$Name.pem"
+    Must "W4 $Name"
+  }
+  Sign ns1-agent 'IP:127.0.0.1,DNS:ns1,DNS:ns1.example.test'
+  Sign ns2-agent 'IP:192.168.53.125,DNS:ns2,DNS:ns2.example.test'
+  'W4 BESTANDEN'
 }
-Sign ns1-agent 'IP:127.0.0.1,DNS:ns1,DNS:ns1.example.test' 365
-Sign ns2-agent 'IP:192.168.53.125,DNS:ns2,DNS:ns2.example.test' 365
-Sign nc-dns 'IP:127.0.0.1,DNS:ns1,DNS:nicht-erlaubt.invalid' 1      # Negativtest D6
-Sign nc-ip 'IP:127.0.0.1,IP:192.168.53.122' 1                         # Negativtest D6
 ```
 
-**W5 – Prüfen** (ohne Geheimnisse; Abbruch, wenn eine Erwartung nicht zutrifft):
+**W5 – Prüfen und Seriennummer sichern** (ohne Geheimnisse; beide Datenträger eingesteckt, Laufwerksbuchstaben anpassen):
 ```powershell
-$v = { param($ip, $f) & $O verify -CAfile C:\S42-CA\dnsmanager-agent-ca.pem -no-CApath -no-CAstore -purpose sslserver -verify_ip $ip $f *> $null; $LASTEXITCODE }
-"ns1-agent: $(& $v 127.0.0.1 C:\S42-CA\ns1-agent.pem)  ns2-agent: $(& $v 192.168.53.125 C:\S42-CA\ns2-agent.pem)"   # beide 0
-"nc-dns: $(& $v 127.0.0.1 C:\S42-CA\nc-dns.pem)  nc-ip: $(& $v 127.0.0.1 C:\S42-CA\nc-ip.pem)"                      # beide ≠ 0 (nameConstraints)
-foreach ($n in 'ns1-agent', 'ns2-agent') { & $O x509 -in "C:\S42-CA\$n.pem" -noout -subject -ext subjectAltName -enddate -fingerprint -sha256 }
+& {
+  param([string[]]$Media)
+  foreach ($c in @(@('ns1-agent', '127.0.0.1'), @('ns2-agent', '192.168.53.125'))) {
+    & $O verify -CAfile C:\S42-CA\dnsmanager-agent-ca.pem -no-CApath -no-CAstore -purpose sslserver -verify_ip $c[1] "C:\S42-CA\$($c[0]).pem"; Must "W5 verify $($c[0])"
+    & $O x509 -in "C:\S42-CA\$($c[0]).pem" -noout -subject -ext subjectAltName -enddate -fingerprint -sha256; Must "W5 Anzeige $($c[0])"
+  }
+  foreach ($M in $Media) {
+    Copy-Item C:\S42-CA\dnsmanager-agent-ca.srl $M -ErrorAction Stop
+    if ((Get-FileHash C:\S42-CA\dnsmanager-agent-ca.srl).Hash -ne (Get-FileHash "$M\dnsmanager-agent-ca.srl" -ErrorAction Stop).Hash) { throw "ABBRUCH W5: Seriennummer-Datei auf $M weicht ab" }
+  }
+  'W5 BESTANDEN'
+} -Media 'E:\S42-CA', 'F:\S42-CA'
 ```
-Die Fingerprints der beiden Agent-Zertifikate werden für D4/D5 notiert. Danach Seriennummer-Datei und Ablaufdaten auf beide Datenträger nachsichern:
-```powershell
-Copy-Item C:\S42-CA\dnsmanager-agent-ca.srl E:\S42-CA\
-```
-Für `F:` entsprechend. Die Seriennummer-Datei wird für spätere Ausstellungen benötigt.
+Die Fingerprints der beiden Agent-Zertifikate werden für D4/D5 notiert.
 
 **W6 – Übertragen** (öffentliche Daten, per `scp`):
-- nach ns1 `/root/s42-in/`: `dnsmanager-agent-ca.pem`, `ns1-agent.pem`, `nc-dns.pem`, `nc-ip.pem`;
+- nach ns1 `/root/s42-in/`: `dnsmanager-agent-ca.pem`, `ns1-agent.pem`;
 - nach ns2 `/root/s42-in/`: `ns2-agent.pem`.
 
 Auf den Servern nach LF normalisieren und Fingerprints mit W5 vergleichen:
@@ -269,15 +304,15 @@ Auf den Servern nach LF normalisieren und Fingerprints mit W5 vergleichen:
 sed -i 's/\r$//' /root/s42-in/*.pem
 for f in /root/s42-in/*.pem; do openssl x509 -in $f -noout -fingerprint -sha256; done
 ```
-Danach weiter mit D1, mit den Dateien aus `/root/s42-in/`; die `nc-*.pem` kommen nach `/root/s42-nc/`.
+Danach weiter mit D1, mit den Dateien aus `/root/s42-in/`.
 
-**W7 – Abschluss auf dem Windows-PC** (nach erfolgreicher Prüfung beider Datenträger):
+**W7 – Abschluss auf dem Windows-PC** (nach „W2 BESTANDEN“ für beide Datenträger und „W5 BESTANDEN“):
 ```powershell
-Remove-Item C:\S42-CA\dnsmanager-agent-ca.key
+Remove-Item C:\S42-CA\dnsmanager-agent-ca.key -ErrorAction Stop
 ```
-Der CA-Schlüssel liegt dann nur noch verschlüsselt auf den beiden Datenträgern. Die übrigen Dateien in `C:\S42-CA` sind öffentlich und können als Arbeitskopie bleiben: CA-Zertifikat, Konfiguration, Seriennummer, Serverzertifikate, CSRs.
+Der CA-Schlüssel liegt dann nur noch verschlüsselt auf den beiden Datenträgern. Die übrigen Dateien in `C:\S42-CA` sind öffentlich und können als Arbeitskopie bleiben.
 
-**Spätere Erneuerung:** Den Schlüssel von einem Datenträger nach `C:\S42-CA` kopieren, dann W3–W6 ausführen, die neue Seriennummer-Datei auf beide Datenträger sichern und W7 wiederholen.
+**Spätere Erneuerung:** Den Schlüssel von einem Datenträger nach `C:\S42-CA` kopieren, dann N1 und W3–W6 ausführen (bestehende `*.pem`/`*.ext` vorher umbenennen), die neue Seriennummer-Datei sichern (in W5 enthalten) und W7 wiederholen.
 
 **D – Vorprüfungen.** Bei Exit-Code ≠ 0 abbrechen.
 
@@ -336,16 +371,20 @@ Der CA-Schlüssel liegt dann nur noch verschlüsselt auf den beiden Datenträger
      - Handshake mit `s_client -verify_return_error` (Exit-Code);
      - PHP/libcurl als `www-data` mit der Agent-CA ohne Token: leerer `curlError` **und** HTTP 401;
    - Oberfläche: Fingerprint unverändert und HTTP 200 der Login-Seite über `https://192.168.53.122/`.
-6. **Negativtest `nameConstraints` (E7)** auf ns1 mit `docs/agent-tls/s42-nc-negative.sh`:
+6. **Extensions der produktiven CA (E7)** auf ns1 mit `docs/agent-tls/s42-ca-ext-check.sh`:
    ```bash
-   bash s42-nc-negative.sh /root/s42-nc
+   bash s42-ca-ext-check.sh /etc/dnsmanager/agent-ca.pem
    ```
-   Ein temporärer `openssl s_server` auf `127.0.0.1:18443` liefert nacheinander drei Zertifikate aus:
-   - das echte Agent-Zertifikat von ns1 → muss angenommen werden;
-   - `nc-dns` → muss abgelehnt werden (leerer HTTP-Code, `curlError` gesetzt; erwartet Fehler 47);
-   - `nc-ip` → muss abgelehnt werden.
+   Das Skript prüft per Exit-Code:
+   - die CA-Datei enthält genau ein Zertifikat;
+   - `basicConstraints` „critical, CA:TRUE, pathlen:0“;
+   - `keyUsage` „critical, Certificate Sign, CRL Sign“;
+   - `nameConstraints` kritisch und **exakt** die sechs festgelegten Einträge (Abschnitt 5), ohne weitere;
+   - das CA-Zertifikat ist selbstsigniert gültig.
 
-   Die Bewertung erfolgt über den Exit-Code des PHP-Tests. Danach `/root/s42-nc` löschen.
+   **Wirksamkeit der `nameConstraints`:** Mit Wegwerf-CA und dem echten PHP-cURL-Stack ist sie bereits nachgewiesen (Trockenlauf 2, `s42-nc-negative.sh`, einschließlich Gegenprobe ohne Constraints). Aus der produktiven CA werden dafür keine zusätzlichen Zertifikate ausgestellt.
+
+   Gegenproben mit Wegwerf-CA auf ns1: breite Freigabe `.example.test`, zusätzlich erlaubte IP sowie zwei Zertifikate in der Datei → jeweils Exit 1; korrekte CA → Exit 0.
 7. **Alarmweg nachweisen (E6)** gemäß Abschnitt 9. Ohne nachgewiesenen Alarm keine Aktivierung.
 
 **E – Aktivierung** (ns1, nur wenn D0–D7 bestanden):
