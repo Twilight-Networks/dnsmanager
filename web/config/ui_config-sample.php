@@ -79,6 +79,16 @@ define('REMOTE_API_BASE', '/dnsmanager-agent/api/v1');
 define('CURL_SSL_VERIFYPEER', false);
 define('CURL_SSL_VERIFYHOST', 0);
 
+/**
+ * Agent-TLS-Vertrauensstellung (S42): ausschließlich dieser CA-Datei (PEM) vertrauen, wenn
+ * CURL_SSL_VERIFYPEER = true ist (dann CURL_SSL_VERIFYHOST = 2 erforderlich). Das systemweite CA-Verzeichnis
+ * wird dabei nicht verwendet. Ist die Datei nicht vorhanden, nicht lesbar oder ohne Zertifikat, werden keine
+ * Agent-Verbindungen aufgebaut (kein Rückfall auf ungeprüfte Verbindungen). Für einen CA-Wechsel kann die Datei
+ * vorübergehend alte und neue CA enthalten. Ohne Eintrag bleibt das bisherige Verhalten unverändert.
+ * Rechte: root:www-data, 0640.
+ */
+// define('AGENT_TLS_CA_FILE', '/etc/dnsmanager/agent-ca.pem');
+
 /** ---------------------------------------
  *  Zeitzoneneinstellung
  * --------------------------------------- */
