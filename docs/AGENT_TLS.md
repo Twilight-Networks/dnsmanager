@@ -20,7 +20,7 @@ Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6)
 | `s42-vhost-check.sh` | VirtualHost-Auswahl und Zertifikatsauslieferung (E5) | je Host |
 | `s42-precheck.sh` | Vorprüfung vor der Aktivierung (CA-Datei, Kette, Rechte, Handshake, PHP-Stack, Oberfläche unverändert) | ns1 |
 | `s42-nc-negative.sh` | Negativtest der `nameConstraints` mit dem PHP-cURL-Stack (E7) | ns1 |
-| `s42-publish-zone.php` | einmaliger Einzelzonen-Publish der Testzone über `PublishService::publishZone()` (E4) | ns1, als `www-data` per `sudo` von root |
+| `s42-publish-zone.php` | einmaliger Einzelzonen-Publish der Testzone über `PublishService::publishZone()` (E4) | ns1, nur vorübergehend außerhalb des Webroots; Ausführung durch den Administrator per `sudo -u www-data` |
 
 ## 1. Entscheidungen
 
@@ -319,9 +319,15 @@ Das Skript:
 **Autorisierung:**
 - nur CLI;
 - nur als `www-data`, wie Webserver und DynDNS-Publish; so entstehen keine root-eigenen Dateien;
-- nur von root per `sudo` gestartet (`SUDO_UID = 0`);
+- Plausibilitätsprüfung `SUDO_UID = 0` als Bedienschutz gegen versehentliche Aufrufe. Das ist **kein manipulationssicherer Nachweis**, dass der Aufruf von root stammt: Die Umgebungsvariable kann setzen, wer bereits als `www-data` Code ausführt. Das Skript gewährt `www-data` aber keine zusätzlichen Rechte, denn publizieren kann der Webserver-Benutzer über den `PublishService` ohnehin. Die Schutzgrenze ist die Betriebsweise (siehe unten);
 - nur die fest eingetragene Testzone: ID **und** Name müssen in Skript, Argumenten und Datenbank übereinstimmen;
 - Ausführung nur mit `--execute`.
+
+**Betriebsweise:**
+- Das Skript wird erst unmittelbar vor der freigegebenen Abnahme abgelegt, außerhalb des Webroots (`/usr/local/lib/dnsmanager-s42`).
+- Der Administrator führt es per `sudo -u www-data` aus.
+- Es ist kein dauerhafter, öffentlich oder regulär nutzbarer Bestandteil des DNS-Managers.
+- Unmittelbar nach der Abnahme wird es wieder entfernt (G6).
 
 **Vorprüfung vor jedem Lock:**
 - Zone vorhanden, Name passt;
@@ -354,7 +360,7 @@ Danach Systemstatus, Monitoring-Cron und PHP-Fehlerprotokoll prüfen.
 
 **Isolierter Nachweis t72** (13.11.2026, ns1; eigene Installation aus `main` `407c6ae`, isolierte DB, Agent-Stubs auf `127.0.0.1`). Die Testkopie unterscheidet sich nur in `APP_ROOT` und `EXPECTED_AGENTS`.
 - **Abgewiesen ohne jede Wirkung** auf Datenbank und Agenten:
-  - mit Exit 3: falscher Zonenname, andere Zone, falsche Argumentzahl, Start als root, Start als `www-data` ohne root-`sudo`;
+  - mit Exit 3: falscher Zonenname, andere Zone, falsche Argumentzahl, Start als root, Start als `www-data` ohne `SUDO_UID = 0` (Bedienschutz);
   - mit Exit 2: fremdes Ziel, weiterer aktiver Server, DynDNS-Freigabe, belegte Publish-Sperre, keine ausstehende Änderung.
 - **`--execute`:**
   - `published`, `changed` 1 → 0, Serial erhöht, Sperre erhalten und freigegeben;

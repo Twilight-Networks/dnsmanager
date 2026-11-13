@@ -8,8 +8,14 @@
  *
  * Autorisierung (publishZone() ist eine interne Systemoperation ohne Benutzerbezug; die Berechtigung prüft der
  * Aufrufer, hier dieses Skript):
- * - nur CLI; nur als www-data (wie Webserver und DynDNS-Publish), und nur von root per sudo gestartet
- *   (SUDO_UID = 0) – also nur durch einen root-berechtigten Betreiber auf ns1;
+ * - nur CLI; nur als www-data (wie Webserver und DynDNS-Publish);
+ * - Plausibilitätsprüfung SUDO_UID = 0 (Bedienschutz gegen versehentlichen Aufruf, z. B. aus einer
+ *   www-data-Shell). SUDO_UID ist eine Umgebungsvariable und KEIN manipulationssicherer Nachweis, dass der
+ *   Aufruf von root stammt: Wer bereits als www-data Code ausführen kann, kann sie setzen. Die eigentliche
+ *   Schutzgrenze ist die Betriebsweise – das Skript liegt nur unmittelbar vor der freigegebenen Abnahme
+ *   außerhalb des Webroots, wird vom Administrator per "sudo -u www-data" ausgeführt und unmittelbar danach
+ *   wieder entfernt; es ist kein regulär nutzbarer Bestandteil des DNS-Managers. Es gewährt www-data keine
+ *   zusätzlichen Rechte (www-data kann über die Weboberfläche bzw. den PublishService ohnehin publizieren);
  * - nur die fest eingetragene Testzone (ID UND Name müssen übereinstimmen, zusätzlich als Argumente bestätigt);
  * - Ausführung nur mit --execute; ohne Argument bzw. mit --dry-run nur lesende Vorprüfung.
  *
@@ -42,7 +48,8 @@ function stop(int $code, string $s): never { fwrite(STDOUT, "ABBRUCH: $s\n"); ex
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit("Zugriff verweigert.\n"); }
 $user = posix_getpwuid(posix_geteuid())['name'] ?? '';
 if ($user !== 'www-data') { stop(3, "muss als www-data laufen (sudo -u www-data …), läuft als '$user'"); }
-if (getenv('SUDO_UID') !== '0') { stop(3, 'muss von root per sudo gestartet werden'); }
+// Plausibilitätsprüfung (Bedienschutz), kein Sicherheitsnachweis – siehe Dateikopf
+if (getenv('SUDO_UID') !== '0') { stop(3, 'Aufruf nur durch den Administrator per "sudo -u www-data" vorgesehen (SUDO_UID = 0 fehlt)'); }
 $args = array_slice($argv, 1);
 $mode = $args[2] ?? '--dry-run';
 if (count($args) < 2 || count($args) > 3 || !in_array($mode, ['--dry-run', '--execute'], true)) {
@@ -100,7 +107,7 @@ if ($mode === '--dry-run') {
 }
 
 // --- Ausführung: vorhandener Einzelzonen-Publish ---
-appLog('info', 'S42-Abnahme: Einzelzonen-Publish per CLI gestartet (Zone ' . ZONE_ID . ' ' . ZONE_NAME . ', Aufrufer root via sudo)');
+appLog('info', 'S42-Abnahme: Einzelzonen-Publish per CLI gestartet (Zone ' . ZONE_ID . ' ' . ZONE_NAME . ', Aufruf per sudo, SUDO_UID=0)');
 $service = new PublishService(
     $pdo,
     new LegacyBindPublishBackend($pdo),
