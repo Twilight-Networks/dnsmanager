@@ -416,3 +416,4 @@ Verbleibendes Restrisiko: Eine bereits laufende Anfrage endet nach einem Rechtee
 | 13.11.2026 | SP4a | S34b: Agent-Sperrdatei und Temp-Zonendatei im Zonenverzeichnis (Draft-PR); isolierter Agent-Test t75 (14/14, Lock-Wait nachgewiesen, Gegenprobe alter Pfad) |
 | 13.11.2026 | SP4a | PR #75 gemergt (`324636e`); kein Deployment. Hinweis für das Deployment: Der Publish-Lock blockiert keine direkten Agent-Aufrufe – laufende Agent-Schreiboperationen müssen beendet und neue bis zum Abschluss des Lock-Pfad-Wechsels verhindert sein |
 | 13.11.2026 | SP4b | I1: Hinweis statt pauschaler Erfolgsmeldung bei während des Publish geänderten Zonen (t76, 4/4); I2: schreibende Services geprüft (Tabelle), Restrisiko akzeptiert |
+| 13.11.2026 | SP4b | PR #76 gemergt (`54bf720`); kein Deployment. Reihenfolge: Abschluss-PR nur für F1, F3, F4; danach kontrollierte Produktivübernahme und Core-Abnahme (SP3, SP4, F1/F3/F4); F2, F5, F8 zur UI-Modernisierung; F6, F7 bleiben dokumentiert |
