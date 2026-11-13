@@ -418,3 +418,4 @@ Verbleibendes Restrisiko: Eine bereits laufende Anfrage endet nach einem Rechtee
 | 13.11.2026 | SP4b | I1: Hinweis statt pauschaler Erfolgsmeldung bei während des Publish geänderten Zonen (t76, 4/4); I2: schreibende Services geprüft (Tabelle), Restrisiko akzeptiert |
 | 13.11.2026 | SP4b | PR #76 gemergt (`54bf720`); kein Deployment. Reihenfolge: Abschluss-PR nur für F1, F3, F4; danach kontrollierte Produktivübernahme und Core-Abnahme (SP3, SP4, F1/F3/F4); F2, F5, F8 zur UI-Modernisierung; F6, F7 bleiben dokumentiert |
 | 13.11.2026 | Core-Abschluss | F1 (Änderungserkennung Server, Rollenprüfung im Pfad „unverändert“), F3 (DynDNS-Passwort: Existenzprüfung unter Sperre), F4 (kanonischer Benutzername in der Session); isolierte Tests t77 (Service 32/32 unter REPEATABLE READ und READ COMMITTED, Web-Golden 10/10) |
+| 13.11.2026 | Core-Abschluss | PR #77 gemergt (`7cdd9a8`, Tree `c73850b`); kein Deployment bis zur Freigabe der Produktivübernahme |
