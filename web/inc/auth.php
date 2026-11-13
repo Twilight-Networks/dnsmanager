@@ -1,11 +1,12 @@
 <?php
 /**
  * Datei: auth.php
- * Zweck: Verwaltung der Benutzeranmeldung (Login) für den DNS-Manager.
+ * Zweck: Web-Adapter der Benutzeranmeldung (Login) für den DNS-Manager.
  *
  * Details:
- * - Verifiziert Benutzername und Passwort gegen die Datenbankeinträge.
- * - Setzt bei erfolgreicher Authentifizierung die Session-Variablen.
+ * - Die fachliche Prüfung von Benutzername, Passwort und Kontostatus erfolgt im webunabhängigen
+ *   AuthService (inc/app/auth/AuthService.php, Paket 5c); Abfrage und Prüfregeln unverändert.
+ * - Setzt bei erfolgreicher Authentifizierung die Session-Variablen (Session-Regeneration wie bisher).
  * - Loggt fehlgeschlagene Loginversuche für spätere Auswertung (z.B. Fail2Ban).
  *
  * Sicherheit:
@@ -22,6 +23,7 @@
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/helpers.php'; // Sicherstellen, dass logFailedLogin verfügbar ist
+require_once __DIR__ . '/app/auth/AuthService.php';
 
 /**
  * Versucht, einen Benutzer anhand der Anmeldedaten einzuloggen.
@@ -35,31 +37,40 @@ function login_user(string $username, string $password): bool
 {
     global $pdo;
 
-    $stmt = $pdo->prepare("SELECT id, password_hash, role, active, session_epoch FROM users WHERE username = ?");
-    $stmt->execute([$username]);
-    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    // Fachliche Prüfung (Zugangsdaten, Kontostatus) im Core; hier nur Session und Protokoll (Paket 5c)
+    $result = (new AuthService($pdo))->authenticate($username, $password);
 
-    $passwordOk = $user && password_verify($password, $user['password_hash']);
+    foreach ($result->messages as $message) {
+        $ctx = $message->context;
+        switch ($message->code) {
+            case 'auth.login.success':
+                // Session-Fixation verhindern
+                session_regenerate_id(true);
 
-    if ($passwordOk && (int)$user['active'] === 1) {
-        // Session-Fixation verhindern
-        session_regenerate_id(true);
+                // Login erfolgreich: Session-Daten setzen (inkl. Sitzungsgeneration)
+                $_SESSION['user_id'] = $ctx['userId'];
+                $_SESSION['role'] = $ctx['role'];
+                $_SESSION['username'] = $ctx['username'];
+                $_SESSION['session_epoch'] = $ctx['sessionEpoch'];
+                return true;
 
-        // Login erfolgreich: Session-Daten setzen (inkl. Sitzungsgeneration)
-        $_SESSION['user_id'] = $user['id'];
-        $_SESSION['role'] = $user['role'];
-        $_SESSION['username'] = $username;
-        $_SESSION['session_epoch'] = (string)$user['session_epoch'];
-        return true;
-    }
+            case 'auth.login.inactive':
+                // Korrektes Passwort, Konto deaktiviert: Zusatzhinweis für Administratoren (nicht Fail2Ban)
+                appLog('error', sprintf(
+                    'event=login_rejected_inactive user=%s ip=%s',
+                    $username,
+                    $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+                ), true);
+                break;
 
-    if ($passwordOk) {
-        // Korrektes Passwort, Konto deaktiviert: Zusatzhinweis für Administratoren (nicht Fail2Ban)
-        appLog('error', sprintf(
-            'event=login_rejected_inactive user=%s ip=%s',
-            $username,
-            $_SERVER['REMOTE_ADDR'] ?? 'unknown'
-        ), true);
+            case 'auth.login.failed':
+                break;
+
+            default:
+                // Unbekannte ServiceMessages nie still verwerfen; Anmeldung gilt als fehlgeschlagen
+                appLog('error', "Unbehandelte ServiceMessage '{$message->code}' (auth)");
+                break;
+        }
     }
 
     // Login fehlgeschlagen: Protokollieren

@@ -1,6 +1,6 @@
 # DNS Manager – Core-/UI-Trennung: Architektur-Inventar und Restarbeiten
 
-Stand: 12.11.2026, Basis `main` = `afb6c0c` (nach Paket 5a). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
+Stand: 12.11.2026, Basis `main` = `aabe398` (nach Paket 5b). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
 „vollständige Trennung der Fachlogik von der Weboberfläche“. Es wird mit jedem Arbeitspaket aktualisiert.
 
 **Legende:**
@@ -45,7 +45,7 @@ Stand: 12.11.2026, Basis `main` = `afb6c0c` (nach Paket 5a). Dieses Dokument ist
 | DynDNS-Update-API | ✅ **mit Paket 2/4b** | `DyndnsUpdateService` (Commit vor Publish, Retry ausstehender Publishes), Veröffentlichung über `PublishService::publishZone()` | – |
 | Monitoring/Diagnose | ✅ **mit 5b** | `MonitoringService` (Lauf mit Laufsperre, Speichern, Orphan-Bereinigung, Benachrichtigung, Log-Retention), `MonitoringBackend` + `AgentMonitoringBackend`, `MonitoringNotifier` + `PhpMailerNotifier` | CLI-Skripte und Systemstatus-Seite als Adapter (`inc/monitoring_runner.php`) |
 | Dashboard/Layout/System-Health | ✅ **mit 5a/5b** | `SystemStatusReadService`, `DiagnosticReadService`, `SystemCheckService` (Systemprüfungen ohne Sprachtexte) | – |
-| Authentifizierung | ❌ | Revalidierung (S3) DB-gestützt, aber Login an Session gebunden | siehe 3.5 |
+| Authentifizierung | ✅ **mit 5c** | `AuthService` (`authenticate`: Zugangsdaten und Kontostatus; `validateSession`: Revalidierung inkl. `session_epoch` und Schema) | `inc/auth.php` und `inc/web/session_guard.php` als Web-Adapter (Session, Revoke, Redirect, 503, Logs) |
 
 ## 3. Verbleibende Kopplungen (Inventar)
 
@@ -145,7 +145,7 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - Optional (Agent): Sperr- und Temporärdateien des Agenten in `/tmp` (S34, Agent-Teil); Serial-Prüfung im Agenten als spätere zusätzliche Absicherung.
 - Der Netzwerkzugriff im Monitoring bleibt in Paket 5.
 
-### 3.5 Monitoring, Dashboard, Authentifizierung und übrige Kopplungen (Paket 5 – 5a erledigt, PR #60, `main` `afb6c0c`; 5b Draft-PR; 5c–5d offen)
+### 3.5 Monitoring, Dashboard, Authentifizierung und übrige Kopplungen (Paket 5 – 5a erledigt, PR #60; 5b erledigt, PR #61, `main` `aabe398`; 5c in Arbeit, Branch `refactor/auth-services`; 5d offen)
 
 **Gliederung Paket 5 (Reihenfolge):** 5a Status- und Diagnose-Lesezugriffe → 5b Monitoring und Systemprüfungen → 5c Authentifizierung → 5d übrige Kopplungen (Logging-Helfer, `pages/update.php`), danach Paket 6.
 
@@ -169,21 +169,25 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 - **Systemprüfungen** im `SystemCheckService` (Konfigurationscodes statt `$LANG`, PHP-Version/Module, Dateirechte); die Texte liefert `inc/web/system_check_messages.php`.
 - Entfernt: `inc/monitoring.php`, `inc/monitoring_mailer.php`, `inc/diagnostics.php` (inkl. Include in `helpers.php`).
 
-**Offen (5c–5d):**
+**Erledigt mit 5c (Branch `refactor/auth-services`, Draft-PR):**
+- **`AuthService`** (`inc/app/auth`), ohne Session, HTTP, Logging und Sprachtexte:
+  - `authenticate($username, $password)`: dieselbe Abfrage, `password_verify` gegen den gespeicherten Hash, nur aktive Konten (S27); Codes `auth.login.success` (ID, Rolle, Sitzungsgeneration), `auth.login.inactive` (Passwort korrekt, Konto deaktiviert), `auth.login.failed`.
+  - `validateSession($userId, $username, $role, $sessionEpoch)`: Regeln und Reihenfolge der bisherigen Revalidierung (S3, S26/S27) – Benutzer-ID → Schema (`SchemaCheck`) → DB-Abfrage → `user_missing`, `username_changed`, `role_changed`, `role_invalid`, `account_inactive`, `epoch_missing`, `epoch_changed`; Codes `auth.session.valid`, `auth.session.revoked` (Grund), `auth.session.schema_incompatible`, `auth.session.check_failed` (Fehlerklasse/-code ohne SQL-Details).
+- **`inc/auth.php`** (`login_user`) ist Web-Adapter: Session-Regeneration, Session-Variablen, `event=login_rejected_inactive` und `logFailedLogin` wie bisher; Rückgabe weiterhin `bool`, `login.php` unverändert.
+- **`inc/web/session_guard.php`** ist Web-Adapter: Abbildung auf `session_guard_revoke` (Log `event=session_revoked`, neue anonyme Session, Redirect), `event=schema_incompatible`/`event=session_revalidation_failed` mit HTTP 503; unbekannter Code → 503 (Fail-Closed).
+- Unverändert: `login.php` (CSRF, Hinweise, Redirect), `logout.php`, Cookies, Inaktivitäts-Timeout (`inc/session.php`), Rollen- und Berechtigungssemantik, `session_epoch`-Vergabe und sofortiger Widerruf (UserService). S31 und S35 bleiben dokumentiert und unverändert.
+
+**Offen (5d):**
 
 **Seiten und Layout:**
 - `pages/update.php`: ausgehender Update-Check per curl ohne Rollenprüfung.
-
-**Authentifizierung:**
-- `inc/auth.php` (`login_user`): Credential-Prüfung und Session-Aufbau sind vermischt; es gibt keine wiederverwendbare Prüffunktion.
-- `inc/web/session_guard.php` (Revalidierung): DB-Prüfung könnte über `ActorAccess` laufen; Revoke und Redirect bleiben 🌐.
 
 **Logging:**
 - `inc/logging.php`: `appLog` ist transportunabhängig; `logAccessDenied`/`logFailedLogin` lesen `$_SESSION`/`$_SERVER`.
 
 ### 3.6 Bleibt legitim im Web (🌐)
 
-- `common.php`, `inc/session.php`, `inc/web/session_guard.php` (Revoke/Redirect), `login.php`, `logout.php`;
+- `common.php`, `inc/session.php`, `inc/auth.php` (Session-Aufbau), `inc/web/session_guard.php` (Revoke/Redirect/503), `login.php`, `logout.php`;
 - `inc/web/web_adapter.php`, die Toast-Funktionen, `requireRole` als Web-Gate, `csrf_input`;
 - Templates, Layout-Ausgabe, `asset_registry`;
 - `inc/db.php`, `helpers_cli.php` (`cliGuard`);
@@ -213,7 +217,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | **2 DynDNS** | `DyndnsAccountService` (anlegen, ändern, Passwort, löschen), `DyndnsReadService` (Liste ohne Hash, zulässige Zonen für beide Formulare), `DyndnsUpdateService` (API: authentifizieren, sperren, planen, anwenden, publizieren; Antwortprotokoll bleibt im Endpunkt). Die DynDNS-eigenen Record-Mutationen werden im Service gebündelt, mit den Sperrfunktionen aus `dyndns_guard`. Das Einzel-Publish wird über eine Schnittstelle mit **unverändertem** Verhalten angebunden. | **erledigt** (PR #56) |
 | **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **erledigt** (PR #57) |
 | **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **erledigt** (4a PR #58, 4b PR #59) |
-| **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60); **5b Draft-PR**; 5c–5d offen |
+| **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60), **5b erledigt** (PR #61); 5c Draft-PR (`AuthService::authenticate`/`validateSession`); 5d offen |
 | **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | offen |
 
 **Begründete Anpassungen gegenüber der vorgegebenen Reihenfolge:**
@@ -229,17 +233,18 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 |---|---|---|
 | S29 | Das Bearbeitungsformular gibt den gespeicherten API-Token im HTML aus (`value` des Passwortfelds). Bei der Entkopplung bewusst beibehalten (`ServerReadService::getServerForEdit`). | `templates/server_edit_form.php` |
 | S30 | Keine serverseitige Mindestlänge für DynDNS-Passwörter beim Anlegen und Ändern | `DyndnsAccountService::createAccount`, `::updateAccount` (vorher `actions/dyndns_add.php`, `dyndns_update.php`) |
-| S31 | Benutzer-Enumeration über die Antwortzeit: kein Dummy-`password_verify` bei unbekanntem Benutzer | `inc/auth.php`, `api/v1/dyndns/update.php` |
+| S31 | Benutzer-Enumeration über die Antwortzeit: kein Dummy-`password_verify` bei unbekanntem Benutzer | `AuthService::authenticate` (vorher `inc/auth.php`, mit 5c unverändert übernommen), `DyndnsUpdateService` (vorher `api/v1/dyndns/update.php`) |
 | S32 | DynDNS-Einzelpublish verteilt vor dem Commit unter Zeilensperre, ohne Publish-Advisory-Lock; `changed = 0` (nur bei vollständigem Erfolg) ohne Rücksicht auf `changed = 2`; gemeinsame `/tmp/dnsmanager_conf_{ip}`-Pfade mit Publish All. **Bewertung (12.11.2026): mittel/niedrig, nicht unmittelbar kritisch** – keine Rechteausweitung, keine Offenlegung, keine Injektion; Auslösung nur mit gültigen DynDNS-Zugangsdaten. Auswirkungen: (1) bei Fehler nach erfolgreicher Verteilung (Rollback) Abweichung DB ↔ BIND inkl. zurückgesetzter SOA-Serial, bis zum nächsten Publish; (2) Zonenzeile bis zu ~30 s je Server gesperrt (Verfügbarkeit); (3) gleichzeitiger Lauf mit Publish All kann `/tmp/dnsmanager_conf_{ip}` gegenseitig leeren → Fehler bzw. erneuter Publish nötig, kein falscher Inhalt (Dateiname je Zone). Behebung in Paket 4. **Behoben mit 4b** (Commit vor Publish, `publishZone()` unter Advisory-Lock, Tri-State). | `inc/deploy/publish_single.php`, `bind_file_distributor.php` |
 | S33 | Zonenname geht ohne zusätzliche Prüfung in die BIND-`.conf` und in den Dateinamen (keine Abwehr wie S17) | `bind_file_generator.php` (`writeZoneConfFile`) – **behoben mit 4a** (`zone_name_is_safe`) |
 | S34 | Feste bzw. vorhersagbare `/tmp`-Pfade (`named-checkzone-error.log`, `dnsmanager_conf_{ip}`, Agent-Lock) | Generator, Distributor, Agent – **Generator/Distributor behoben mit 4a** (`BindWorkDir`); Agent-Teil offen |
-| S35 | Logout per GET ohne CSRF; Login überspringt die CSRF-Prüfung bei fehlendem Token | `logout.php`, `login.php` |
+| S35 | Logout per GET ohne CSRF; Login überspringt die CSRF-Prüfung bei fehlendem Token. Ergänzung 5c (t63): Der Login-Zweig ist praktisch nicht erreichbar, weil `inc/session.php` jeder neuen Session ein Token gibt; ein POST ohne Session endet mit 403. | `logout.php`, `login.php` |
 | S36 | `pages/update.php`: keine Rollenprüfung; `href` aus fremder JSON-Antwort ohne Schemaprüfung | `pages/update.php` |
 | S37 | `system_health.php` startet das Monitoring per `exec` im Webprozess; `db.php` gibt den DB-Fehlertext per `die()` aus | `pages/system_health.php`, `inc/db.php` – **`exec` behoben mit 5b** (Monitoring im Webprozess über `MonitoringService`); `db.php`-Fehlertext offen |
 | S38 | `getDiagnosticResults()` ohne Berechtigungsbezug; `records.php` filtert erst in PHP | `inc/diagnostics.php`, `pages/records.php` – **behoben** (`records.php` mit Paket 3, übrige Seiten mit 5a; Funktion entfernt) |
 | F1 | Die Änderungserkennung in der Serveränderung vergleicht DB-Zeichenketten mit Integern (`'1' !== 1`). Daher erscheint „Keine Änderungen“ praktisch nie. Bei der Entkopplung bewusst unverändert übernommen. | `ServerService::updateServer` (vorher `server_update.php`) |
 | F2 | Sprachschlüssel `topology_locked`, `publish_all_locked` und `zone_prefix_placeholder` fehlen; die Actions nutzen Fallback-Texte | `web/lang/*.php` |
 | F3 | DynDNS-Passwortänderung prüft nicht, ob der Account existiert (Erfolgsmeldung auch bei unbekannter ID); bei der Entkopplung bewusst unverändert übernommen | `DyndnsAccountService::changePassword` (vorher `dyndns_password.php`) |
+| F4 | Login mit abweichender Groß-/Kleinschreibung des Benutzernamens gelingt (Kollation `utf8mb4_unicode_ci`); die Session speichert die eingegebene Schreibweise, daher widerruft die nächste Anfrage die Session (`username_changed`). Kein Rechtegewinn; mit 5c unverändert übernommen. | `AuthService::authenticate`, `login_user` |
 
 ## 7. Änderungsprotokoll dieses Dokuments
 
@@ -254,4 +259,5 @@ Die Nummern setzen die bestehende S-Reihe fort. Sicherheitsrelevante Punkte werd
 | 12.11.2026 | 4a | BIND-/Publish-Infrastruktur entkoppelt (PR #58, gemergt als `5f7bd6a`; D4–D7 akzeptiert): explizite Abhängigkeiten, `BindAgentClient`, `BindWorkDir` (S34), `zone_name_is_safe` (S33), `BindZoneBuildBackend`, ServerService-NS/Glue atomar |
 | 12.11.2026 | 4b | S32: DynDNS-Einzelpublish nach dem Commit über `PublishService::publishZone()` mit gemeinsamer Zonenlogik, Lock und Tri-State; Retry ausstehender Publishes; Review-Korrektur gelöschte Zone (PR #59, gemergt als `43e4823`; D8–D11 akzeptiert) |
 | 12.11.2026 | 5a | Status- und Diagnose-Lesezugriffe (Dashboard, Layout, System-Health) über `SystemStatusReadService`/`DiagnosticReadService`; `getDiagnosticResults()` entfernt (S38) (PR #60, gemergt als `afb6c0c`; D12 akzeptiert) |
-| 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService` (Draft-PR) |
+| 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService`; Review-Korrektur Runner-Fehlerbehandlung (PR #61, gemergt als `aabe398`; D13–D16 akzeptiert) |
+| 12.11.2026 | 5c | Authentifizierung: `AuthService` (Zugangsdaten/Kontostatus, Session-Revalidierung inkl. `session_epoch`); `login_user` und `revalidate_session` als Web-Adapter; Sicherheitsverhalten unverändert (Draft-PR) |
