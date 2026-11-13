@@ -515,6 +515,7 @@ return [
     // === publish_all.php ===
     'publish_all_success'   => 'Todas las zonas se han publicado correctamente.',
     'publish_all_warning'   => 'Advertencia durante la publicación.',
+    'publish_all_pending_changes' => 'Publicación completada. Se realizaron más cambios durante la publicación (zonas: %s). Estos cambios siguen pendientes y requieren otra publicación.',
     'publish_all_error'     => 'Error durante la publicación.',
     'publish_all_exception' => 'La publicación ha fallado.',
 

@@ -106,6 +106,23 @@ if ($result !== null) {
             break;
 
         case 'success':
+            // I1 (SP4-E3): Während des Laufs erneut geänderte Zonen bleiben ausstehend (Tri-State unverändert).
+            // Dann statt der pauschalen Erfolgsmeldung ein Hinweis, dass ein weiterer Publish nötig ist.
+            $keptPending = $result['flags']['keptPendingZoneIds'] ?? [];
+            if (!empty($keptPending)) {
+                $pendingNames = [];
+                foreach ($result['zones'] ?? [] as $zoneReport) {
+                    if (in_array($zoneReport['id'] ?? null, $keptPending, true)) {
+                        $pendingNames[] = (string)$zoneReport['name'];
+                    }
+                }
+                $pendingList = implode(', ', $pendingNames !== [] ? $pendingNames : array_map('strval', $keptPending));
+                toastWarning(
+                    sprintf($LANG['publish_all_pending_changes'], htmlspecialchars($pendingList)),
+                    "Veröffentlichung abgeschlossen; während des Laufs erneut geändert und weiterhin ausstehend: $pendingList"
+                );
+                break;
+            }
             toastSuccess(
                 $LANG['publish_all_success'],
                 "Alle Zonendateien wurden erfolgreich verteilt und BIND wurde neu geladen."
