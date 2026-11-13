@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['force_update'])) {
 // Diagnosen und ihre Auswertung über den DiagnosticReadService (nur aktiver Admin; Paket 6, K2): Kennzeichen aus
 // summary, Problemeinträge aus problems. Hier nur Übersetzung in die bisherige Darstellung (HTML, Texte).
 $diagnostics = (new DiagnosticReadService($pdo, new ZoneAccess($pdo)))->getOverview(actorFromSession());
-$diag_summary = $diagnostics['summary'] ?? ['confError' => false, 'confWarning' => false, 'serverError' => false, 'zoneError' => false, 'zoneWarning' => false];
+$diag_summary = $diagnostics['summary'] ?? ['confError' => false, 'confWarning' => false, 'serverError' => false, 'serverWarning' => false, 'zoneError' => false, 'zoneWarning' => false];
 $diag_problems = $diagnostics['problems'] ?? ['server' => [], 'conf' => [], 'zone' => []];
 
 $conf_errors = $diag_summary['confError'];
@@ -88,12 +88,16 @@ foreach ($diag_problems['zone'] as $problem) {
 }
 
 $remote_errors = $diag_summary['serverError'];
+// S42-E6: Warnungen (z. B. Zertifikatsablauf) sichtbar als Warnung, solange kein Serverfehler vorliegt
+$remote_warnings = !$remote_errors && !empty($diag_summary['serverWarning']);
 $remote_outputs = [];
+$remote_output_classes = [];
 
 foreach ($diag_problems['server'] as $problem) {
     $server = htmlspecialchars($problem['serverName'] ?? 'unbekannt');
     $output = htmlspecialchars($problem['message']);
     $remote_outputs[] = "<strong>$server</strong><br><pre>$output</pre>";
+    $remote_output_classes[] = ($problem['status'] ?? null) === 'warning' ? 'alert-warning' : 'alert-danger';
 }
 ?>
 
@@ -220,18 +224,18 @@ foreach ($diag_problems['server'] as $problem) {
                         <th><?= $LANG['server_status'] ?></th>
                         <td><?= empty($remote_outputs)
                             ? $LANG['server_ok']
-                            : sprintf($LANG['server_errors'], count($remote_outputs)) ?></td>
-                        <td class="text-<?= !empty($remote_errors) ? 'danger' : 'success' ?>">
+                            : sprintf($LANG[$remote_warnings ? 'server_warnings' : 'server_errors'], count($remote_outputs)) ?></td>
+                        <td class="text-<?= !empty($remote_errors) ? 'danger' : ($remote_warnings ? 'warning' : 'success') ?>">
                             <?= !empty($remote_errors)
                                 ? '❌ ' . $LANG['status_error']
-                                : '✅ ' . $LANG['status_ok'] ?>
+                                : ($remote_warnings ? '⚠️ ' . $LANG['status_warning'] : '✅ ' . $LANG['status_ok']) ?>
                         </td>
                     </tr>
                     <?php if (!empty($remote_outputs)): ?>
                     <tr id="remotecheck-row" style="display:none;">
                         <td colspan="3">
-                            <?php foreach ($remote_outputs as $entry): ?>
-                                <div class="alert alert-danger small"><?= $entry ?></div>
+                            <?php foreach ($remote_outputs as $i => $entry): ?>
+                                <div class="alert <?= $remote_output_classes[$i] ?> small"><?= $entry ?></div>
                             <?php endforeach; ?>
                         </td>
                     </tr>

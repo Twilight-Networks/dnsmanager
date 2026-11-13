@@ -88,6 +88,13 @@ define('CURL_SSL_VERIFYHOST', 0);
  * Rechte: root:www-data, 0640.
  */
 // define('AGENT_TLS_CA_FILE', '/etc/dnsmanager/agent-ca.pem');
+/**
+ * Ablaufwarnung Agent-TLS (S42-E6): Das Monitoring setzt den Serverstatus auf "Warnung", wenn das vom Agenten
+ * ausgelieferte Zertifikat oder ein Zertifikat in AGENT_TLS_CA_FILE in weniger als dieser Anzahl Tage abläuft.
+ * Ohne Eintrag: 30 Tage, sofern AGENT_TLS_CA_FILE gesetzt ist, sonst keine Prüfung. 0 = Prüfung aus.
+ * Ein Serverfehler wird dadurch nie verändert.
+ */
+// define('AGENT_TLS_EXPIRY_WARN_DAYS', 30);
 
 /** ---------------------------------------
  *  Zeitzoneneinstellung
