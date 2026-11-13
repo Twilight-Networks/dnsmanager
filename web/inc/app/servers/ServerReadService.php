@@ -6,9 +6,8 @@
  * - Nur admin. Der Akteur wird in derselben Abfrage gegen die Datenbank geprüft (Rolle admin wie im Actor,
  *   Konto aktiv; ActorAccess::activeCondition). Andere oder veraltete Akteure erhalten leere Ergebnisse.
  * - Ausschließlich lesend, explizite Spalten, keine Sperren, keine Transaktion.
- * - Zugangstokens: listServers() liefert kein api_token. getServerForEdit() liefert es als einzige Methode,
- *   weil das bestehende Bearbeitungsformular den gespeicherten Token vorbelegt (unverändertes Verhalten,
- *   siehe Architektur-Inventar, Befund zu Tokens im Formular).
+ * - Zugangstokens: Keine Methode liefert den gespeicherten api_token (S29, SP1; bis dahin belegte
+ *   getServerForEdit() das Bearbeitungsformular damit vor).
  * - Keine Session, kein HTTP, keine Sprachschlüssel.
  */
 
@@ -46,10 +45,12 @@ final class ServerReadService
     }
 
     /**
-     * Ein Server einschließlich API-Token für das Bearbeitungsformular (nur admin).
-     * Nicht vorhanden oder keine Berechtigung → null.
+     * Ein Server für das Bearbeitungsformular (nur admin). Nicht vorhanden oder keine Berechtigung → null.
      *
-     * @return array{id: int, name: string, dnsIp4: ?string, dnsIp6: ?string, apiIp: ?string, isLocal: bool, active: bool, apiToken: string}|null
+     * S29 (SP1): Der gespeicherte API-Token gehört nicht mehr zum Bearbeitungsmodell und wird nicht gelesen;
+     * beim Ändern bedeutet ein leeres Token-Feld „unverändert“ (ServerService::updateServer).
+     *
+     * @return array{id: int, name: string, dnsIp4: ?string, dnsIp6: ?string, apiIp: ?string, isLocal: bool, active: bool}|null
      */
     public function getServerForEdit(Actor $actor, int $serverId): ?array
     {
@@ -58,7 +59,7 @@ final class ServerReadService
             return null;
         }
 
-        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ', s.api_token FROM servers s WHERE s.id = ? AND ' . $access['sql']);
+        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM servers s WHERE s.id = ? AND ' . $access['sql']);
         $this->bind($stmt, array_merge([$serverId], $access['params']));
         $stmt->execute();
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -67,7 +68,7 @@ final class ServerReadService
             return null;
         }
 
-        return self::map($row) + ['apiToken' => (string)$row['api_token']];
+        return self::map($row);
     }
 
     /**

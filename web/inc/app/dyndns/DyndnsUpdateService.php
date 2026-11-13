@@ -42,8 +42,8 @@
  * keptPending, retry), rollback_failed (message).
  * Kontext ab erfolgreicher Authentifizierung zusätzlich: username, fqdn.
  *
- * Bekannte, bewusst unveränderte Grenze (Architektur-Inventar S31): kein Dummy-password_verify bei
- * unbekanntem Benutzer.
+ * S31 (SP1): Bei unbekanntem Benutzer erfolgt eine Prüfung gegen DummyPasswordHash (Ergebnis verworfen), um die
+ * zeitliche Unterscheidbarkeit zu verringern; Ergebnis (auth_failed) und Protokoll unverändert.
  */
 
 declare(strict_types=1);
@@ -53,6 +53,7 @@ require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../zones/ZoneBuildBackend.php';
 require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/../publish/PublishService.php';
+require_once __DIR__ . '/../auth/DummyPasswordHash.php';
 
 /**
  * Interne fachliche Ablehnung des Updates (nur innerhalb des Service verwendet). Die Ausnahmenachricht lautet
@@ -110,6 +111,10 @@ final class DyndnsUpdateService
         $account = $stmt->fetch(PDO::FETCH_ASSOC);
         $stmt->closeCursor();
 
+        if (!$account) {
+            // S31 (SP1): unbekannter Benutzer – Prüfung gegen festen Dummy-Hash, Ergebnis wird verworfen
+            DummyPasswordHash::consumeVerification($password);
+        }
         if (!$account || !password_verify($password, $account['password_hash'])) {
             return self::final('audit', 'dyndns.api.auth_failed', ['username' => $username]);
         }

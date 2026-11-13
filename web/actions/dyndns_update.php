@@ -57,6 +57,15 @@ foreach ($result->messages as $message) {
             $redirect = $redirectEdit;
             break;
 
+        case 'dyndns.update.too_short':
+            // S30 (SP1): bestehender Text der Passwortänderung
+            toastError(
+                sprintf($LANG['error_password_too_short'], $ctx['minLength']),
+                "DynDNS-Account-Änderung für ID {$id} abgelehnt: Passwort zu kurz."
+            );
+            $redirect = $redirectEdit;
+            break;
+
         case 'dyndns.update.not_found':
             toastError($LANG['dyndns_error_not_found']);
             break;

@@ -306,6 +306,7 @@ return [
     'api_ip' => 'API-IP-Adresse (IPv4/IPv6)',
     'api_token' => 'API-Key',
     'api_token_placeholder' => 'z. B. 64-stelliger Hexwert',
+    'api_token_keep_placeholder' => 'Leer lassen = API-Key unverändert; neuen Key eingeben zum Ersetzen',
     'generate' => 'Generieren',
     'server_active' => 'Server ist aktiv',
     'server_is_local' => 'Dieser Server ist der lokale (Webinterface-Host)',

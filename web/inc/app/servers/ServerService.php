@@ -153,7 +153,13 @@ final class ServerService
             return self::fail('audit', 'server.update.access_denied', ['actorId' => $actor->userId, 'reason' => 'role'] + $ctx);
         }
 
-        $errors = self::validate($input, $serverId);
+        // S29 (SP1): leeres Token-Feld = gespeicherten Agent-Token unverändert behalten. Die Spalte wird dann nicht
+        // geschrieben (kein Zurückschreiben eines früher gelesenen Werts); ob für einen Remote-Server ein gültiger
+        // Token gespeichert ist, wird unter der Zeilensperre geprüft (siehe unten). Ein übergebener Token ersetzt
+        // den gespeicherten nach der Validierung. Der Token gelangt in keine ServiceMessage.
+        $keepToken = $input->apiToken === '';
+
+        $errors = self::validate($input, $serverId, $keepToken);
         if ($errors !== []) {
             return self::fail('error', 'server.update.invalid_input', ['errors' => $errors] + $ctx);
         }
@@ -172,8 +178,12 @@ final class ServerService
         }
 
         $update_data = self::rowFromInput($input);
+        if ($keepToken) {
+            unset($update_data['api_token']);
+        }
 
-        // Änderungserkennung: unveränderte Ausdrücke aus actions/server_update.php (inkl. Typvergleich)
+        // Änderungserkennung: unveränderte Ausdrücke aus actions/server_update.php (inkl. Typvergleich);
+        // bei unverändertem Token (S29) zählt der Token nicht als Änderung.
         $server_data_changed = (
             $existing['name']    !== $update_data['name'] ||
             $existing['dns_ip4'] !== $update_data['dns_ip4'] ||
@@ -183,7 +193,7 @@ final class ServerService
             $existing['active'] !== $update_data['active'] ||
             $existing['is_local'] !== $update_data['is_local'] ||
             $existing['api_ip'] !== $update_data['api_ip'] ||
-            $existing['api_token'] !== $update_data['api_token'];
+            (!$keepToken && $existing['api_token'] !== $update_data['api_token']);
 
         if (!$server_data_changed && !$nonCriticalChanged) {
             return new ServiceResult(true, [new ServiceMessage('success', 'server.update.unchanged', $ctx)]);
@@ -227,13 +237,22 @@ final class ServerService
             }
 
             // Zielzeile sperren (serialisiert parallele Änderungen desselben Servers)
-            $stmt = $this->pdo->prepare('SELECT id FROM servers WHERE id = ? FOR UPDATE');
+            $stmt = $this->pdo->prepare('SELECT id, api_token FROM servers WHERE id = ? FOR UPDATE');
             $stmt->execute([$serverId]);
-            $lockedRow = $stmt->fetchColumn();
+            $lockedRow = $stmt->fetch(PDO::FETCH_ASSOC);
             $stmt->closeCursor();
             if ($lockedRow === false) {
                 $this->rollbackIfActive();
                 $m[] = new ServiceMessage('error', 'server.update.not_found', $ctx);
+                $this->releaseLock($m);
+                return new ServiceResult(false, $m);
+            }
+
+            // S29: Unveränderter Token eines Remote-Servers muss auf dem gesperrten Stand gültig sein (gleiche Regel
+            // wie bei einem übergebenen Token); der Token selbst gelangt in keine Meldung.
+            if ($keepToken && !$input->isLocal && strlen((string)$lockedRow['api_token']) < 32) {
+                $this->rollbackIfActive();
+                $m[] = new ServiceMessage('error', 'server.update.invalid_input', ['errors' => ['api_token_required']] + $ctx);
                 $this->releaseLock($m);
                 return new ServiceResult(false, $m);
             }
@@ -243,13 +262,15 @@ final class ServerService
                 $stmt->execute([$serverId]);
             }
 
+            // S29: Bei unverändertem Token wird die Spalte nicht geschrieben – ein zwischenzeitlich rotierter Token
+            // bleibt erhalten, ein früher gelesener Wert wird nie zurückgeschrieben.
             $stmt = $this->pdo->prepare("
                 UPDATE servers
                 SET name = :name,
                     dns_ip4 = :dns_ip4,
                     dns_ip6 = :dns_ip6,
-                    api_ip = :api_ip,
-                    api_token = :api_token,
+                    api_ip = :api_ip," . ($keepToken ? '' : "
+                    api_token = :api_token,") . "
                     is_local = :is_local,
                     active = :active
                 WHERE id = :id
@@ -418,12 +439,13 @@ final class ServerService
 
     /**
      * Eingabevalidierung (unveränderte Regeln und Reihenfolge aus actions/server_add.php bzw. server_update.php).
-     * $serverId = null beim Anlegen (keine ID-Prüfung).
+     * $serverId = null beim Anlegen (keine ID-Prüfung). $keepToken = true beim Ändern mit leerem Token-Feld
+     * (S29): Der gespeicherte Token wird unter Sperre in updateServer() geprüft.
      *
      * @return string[] Fehlercodes (invalid_id, invalid_name, invalid_dns_ip, invalid_ipv4, invalid_ipv6,
      *                  invalid_api_ip, api_ip_required, api_token_required)
      */
-    private static function validate(ServerInput $in, ?int $serverId): array
+    private static function validate(ServerInput $in, ?int $serverId, bool $keepToken = false): array
     {
         $errors = [];
         if ($serverId !== null && $serverId < 1) {
@@ -450,7 +472,7 @@ final class ServerService
         if (!$in->isLocal && $in->apiIp === '') {
             $errors[] = 'api_ip_required';
         }
-        if (!$in->isLocal && ($in->apiToken === '' || strlen($in->apiToken) < 32)) {
+        if (!$keepToken && !$in->isLocal && ($in->apiToken === '' || strlen($in->apiToken) < 32)) {
             $errors[] = 'api_token_required';
         }
 

@@ -145,9 +145,9 @@ if ($has_server_errors) {
 
                     <!-- Bearbeitungsformular darunter -->
                     <?php
-                    // Bearbeitungsdaten einschließlich gespeichertem API-Token (Formular-Vorbelegung wie bisher)
-                    $edit_data = $serverReadService->getServerForEdit($actor, (int)$server['id']);
-                    $edit_server = $server + ['api_token' => $edit_data['apiToken'] ?? ''];
+                    // Bearbeitungsdaten aus der Serverliste; der gespeicherte API-Token wird nicht ausgegeben (S29, SP1):
+                    // leeres Token-Feld = unverändert, ein eingegebener Token ersetzt den gespeicherten.
+                    $edit_server = $server;
                     include __DIR__ . '/../templates/server_edit_form.php';
                     ?>
                 <?php else: ?>

@@ -5,7 +5,8 @@
  * Zweck:
  * - Stellt ein bearbeitbares HTML-Formular zur Verfügung, um die Eigenschaften eines bestehenden DNS-Servers zu ändern.
  * - Eingabefelder: Name, DNS-IP, API-IP, API-Key, Lokaler Server (is_local), Aktivitätsstatus (active).
- * - Die Feldwerte sind vorausgefüllt mit den bestehenden Daten aus `$edit_server`.
+ * - Die Feldwerte sind vorausgefüllt mit den bestehenden Daten aus `$edit_server` – außer dem API-Token (S29, SP1):
+ *   Das Token-Feld bleibt leer; leer = gespeicherter Token bleibt unverändert, ein eingegebener Token ersetzt ihn.
  *
  * Besonderheiten:
  * - Zugriffsschutz über `IN_APP`.
@@ -76,9 +77,11 @@ if (!isset($edit_server)) {
                 <div class="col-md-6 colform-key">
                     <label class="form-label"><?= $LANG['api_token'] ?></label>
                     <div class="input-group">
-                        <input type="password" class="form-control" id="api_token" name="api_token" required maxlength="255"
-                               placeholder="<?= $LANG['api_token_placeholder'] ?>"
-                               value="<?= htmlspecialchars($edit_server['api_token']) ?>">
+                        <?php // S29 (SP1): gespeicherter Token wird nie ausgegeben; leer = unverändert, autocomplete verhindert ungewolltes Ersetzen durch Passwortmanager ?>
+                        <input type="password" class="form-control" id="api_token" name="api_token" maxlength="255"
+                               autocomplete="new-password"
+                               placeholder="<?= $LANG['api_token_keep_placeholder'] ?>"
+                               value="">
                         <button class="btn btn-outline-secondary" type="button" id="toggleTokenVisibility" title="Anzeigen/Ausblenden">👁️</button>
                         <button class="btn btn-outline-secondary" type="button" onclick="generateApiKey()" id="generateBtn"><?= $LANG['generate'] ?></button>
                     </div>

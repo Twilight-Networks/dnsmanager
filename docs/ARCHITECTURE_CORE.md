@@ -1,9 +1,9 @@
 # DNS Manager – Core-/UI-Trennung: Architektur-Inventar und Restarbeiten
 
-Stand: 13.11.2026, Basis `main` = `c0965d2` (nach Paket 5d), ergänzt um Paket 6 (Abschlussprüfung). Dieses Dokument ist die zentrale
-Übersicht für den Meilenstein „vollständige Trennung der Fachlogik von der Weboberfläche“.
+Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
+„vollständige Trennung der Fachlogik von der Weboberfläche“. **Der Meilenstein ist abgeschlossen** (PR #64, Betriebsprüfung auf ns1 am 13.11.2026).
 
-## 0. Ergebnis (Paket 6)
+## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
 - **Die Core-/UI-Trennung ist abgeschlossen.** Mit Paket 6 sind die letzten Kopplungen K1–K3 (Statusauswertungen der Diagnosen in
   `pages/zones.php`, `pages/system_health.php`, `pages/servers.php`) in den Core verlagert und die ungenutzten Helfer B1–B3 entfernt (3.8).
@@ -211,7 +211,7 @@ Endpunkte, auf die sich die Web-App verlässt:
 
 Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; das Web bindet ihn über Adapter an.
 
-### 3.8 Paket 6 – Abschlussprüfung (Branch `docs/architecture-final`, Draft-PR #64)
+### 3.8 Paket 6 – Abschlussprüfung (erledigt, PR #64, `main` `2a077a2`)
 
 **Vorgehen (prüfbar wiederholbar):**
 - Suche in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` und den Einstiegsdateien nach `->prepare|query|exec|beginTransaction|commit|rollBack(`, SQL-Schlüsselwörtern, `exec`/`shell_exec`/`proc_open`/`curl_init` und `global`/`$GLOBALS`.
@@ -266,7 +266,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **erledigt** (PR #57) |
 | **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **erledigt** (4a PR #58, 4b PR #59) |
 | **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60), **5b erledigt** (PR #61); **5c erledigt** (PR #62); **5d erledigt** (PR #63) |
-| **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | **Draft-PR #64** (K1–K3, B1–B3, Inventar im Zielzustand) |
+| **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | **erledigt** (PR #64; K1–K3, B1–B3, Inventar im Zielzustand) |
 
 **Begründete Anpassungen gegenüber der vorgegebenen Reihenfolge:**
 1. **Paket 1 enthält die Serverdiagnosen**, die `pages/servers.php` anzeigt. Die allgemeinen Diagnose-Lesezugriffe für Dashboard, Layout und Records bleiben in Paket 3 bzw. 5.
@@ -280,16 +280,20 @@ Architektur-Restarbeiten** und werden in einer gesonderten Sicherheits- bzw. Fun
 werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis S28, Projektübergabe) ist nur S28 offen; die übrigen sind mit früheren PRs behoben.
 
 **Übersicht nach Status:**
-- **Offen:** S28, S29, S30, S31, S34 (Agent-Teil), S35, S36, S37 (`db.php`-Teil), S39, I1, I2, F1–F6.
+- **Offen:** S28, S34 (Agent-Teil), S35, S36, S37 (`db.php`-Teil), S39, I1, I2, F1–F7.
 - **Teilweise behoben:** S34 (Generator/Distributor behoben, Agent offen), S37 (`exec` behoben, `db.php` offen).
-- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a).
+- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a); **mit Security-Paket SP1 (Draft-PR):** S29, S30, S31.
+
+**Security-Hardening (Pakete):** SP1 Zugangsdaten und Geheimnisse (S29, S30, S31) → SP2 Sitzung und Anfrageschutz (S28 inkl. SameSite, S35) → SP3 Zugriffskontrolle und Fehlerausgabe (S39, S36, S37b, optional Sicherheitsheader) → SP4 Agent und Nebenläufigkeit (S34b, I2, Entscheidung zu I1). I1/I2 sind nicht akzeptiert.
+
+**Konfiguration (Stand 13.11.2026):** `PASSWORD_MIN_LENGTH` ist in `ui_config-sample.php` und auf der Testinstallation **4**. Die Mindestlänge gilt seit SP1 für Benutzer- und DynDNS-Passwörter beim Setzen; ob 4 ausreicht, ist gesondert zu entscheiden (keine Änderung bestehender Passwörter). Das DynDNS-Anlageformular verlangt clientseitig weiterhin `minlength="6"` (nur Browserprüfung).
 
 | Nr. | Befund | Ort |
 |---|---|---|
 | S28 | Keine absolute Höchstdauer einer Sitzung: Eine aktive Session bleibt bei regelmäßiger Nutzung unbegrenzt gültig (nur Inaktivitäts-Timeout, Widerruf über `session_epoch`). **Offen.** | `inc/session.php` |
-| S29 | Das Bearbeitungsformular gibt den gespeicherten API-Token im HTML aus (`value` des Passwortfelds). Bei der Entkopplung bewusst beibehalten (`ServerReadService::getServerForEdit`). | `templates/server_edit_form.php` |
-| S30 | Keine serverseitige Mindestlänge für DynDNS-Passwörter beim Anlegen und Ändern | `DyndnsAccountService::createAccount`, `::updateAccount` (vorher `actions/dyndns_add.php`, `dyndns_update.php`) |
-| S31 | Benutzer-Enumeration über die Antwortzeit: kein Dummy-`password_verify` bei unbekanntem Benutzer | `AuthService::authenticate` (vorher `inc/auth.php`, mit 5c unverändert übernommen), `DyndnsUpdateService` (vorher `api/v1/dyndns/update.php`) |
+| S29 | Das Bearbeitungsformular gab den gespeicherten API-Token im HTML aus (`value` des Passwortfelds). **Behoben mit SP1:** kein Token in HTML, Formular oder Read-Service (`getServerForEdit` ohne Token); leeres Feld = Token unverändert (Spalte wird nicht geschrieben, Prüfung unter Zeilensperre), neuer Token ersetzt nach Validierung; Cache-Header ausdrücklich gesetzt (`session_cache_limiter('nocache')`, bisher nur über `php.ini`). | `templates/server_edit_form.php`, `ServerService::updateServer`, `ServerReadService::getServerForEdit` |
+| S30 | Keine serverseitige Mindestlänge für DynDNS-Passwörter beim Anlegen und Ändern. **Behoben mit SP1:** `PASSWORD_MIN_LENGTH` bei Anlage und neu gesetztem Passwort (`dyndns.create.too_short`, `dyndns.update.too_short`); leer bei Änderung = unverändert. | `DyndnsAccountService::createAccount`, `::updateAccount` |
+| S31 | Benutzer-Enumeration über die Antwortzeit (kein `password_verify` bei unbekanntem Benutzer). **Behoben mit SP1:** Prüfung gegen festen Dummy-Hash (bcrypt, Kosten 12, `DummyPasswordHash`); gemessen auf ns1: unbekannt ≈ bekannt-falsch ≈ 240 ms (vorher < 1 ms gegenüber 240 ms). Keine vollständige Timing-Gleichheit zugesagt. | `AuthService::authenticate`, `DyndnsUpdateService` |
 | S32 | DynDNS-Einzelpublish verteilt vor dem Commit unter Zeilensperre, ohne Publish-Advisory-Lock; `changed = 0` (nur bei vollständigem Erfolg) ohne Rücksicht auf `changed = 2`; gemeinsame `/tmp/dnsmanager_conf_{ip}`-Pfade mit Publish All. **Bewertung (12.11.2026): mittel/niedrig, nicht unmittelbar kritisch** – keine Rechteausweitung, keine Offenlegung, keine Injektion; Auslösung nur mit gültigen DynDNS-Zugangsdaten. Auswirkungen: (1) bei Fehler nach erfolgreicher Verteilung (Rollback) Abweichung DB ↔ BIND inkl. zurückgesetzter SOA-Serial, bis zum nächsten Publish; (2) Zonenzeile bis zu ~30 s je Server gesperrt (Verfügbarkeit); (3) gleichzeitiger Lauf mit Publish All kann `/tmp/dnsmanager_conf_{ip}` gegenseitig leeren → Fehler bzw. erneuter Publish nötig, kein falscher Inhalt (Dateiname je Zone). Behebung in Paket 4. **Behoben mit 4b** (Commit vor Publish, `publishZone()` unter Advisory-Lock, Tri-State). | `inc/deploy/publish_single.php`, `bind_file_distributor.php` |
 | S33 | Zonenname geht ohne zusätzliche Prüfung in die BIND-`.conf` und in den Dateinamen (keine Abwehr wie S17) | `bind_file_generator.php` (`writeZoneConfFile`) – **behoben mit 4a** (`zone_name_is_safe`) |
 | S34 | Feste bzw. vorhersagbare `/tmp`-Pfade (`named-checkzone-error.log`, `dnsmanager_conf_{ip}`, Agent-Lock) | **Teil a (Generator/Distributor): behoben mit 4a** (`BindWorkDir`). **Teil b (Agent-Lock und -Temporärdateien): offen.** |
@@ -306,6 +310,7 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | F4 | Login mit abweichender Groß-/Kleinschreibung des Benutzernamens gelingt (Kollation `utf8mb4_unicode_ci`); die Session speichert die eingegebene Schreibweise, daher widerruft die nächste Anfrage die Session (`username_changed`). Kein Rechtegewinn; mit 5c unverändert übernommen. | `AuthService::authenticate`, `login_user` |
 | F5 | Update-Seite: Der Fehlerrahmen beginnt immer mit „Verbindung zum Update-Server fehlgeschlagen“ (`update_error`), auch bei ungültiger Antwort; bei Verbindungsfehlern erscheint der Text doppelt (`update_error` + `update_connection_failed`). Nur Darstellung; mit 5d unverändert übernommen. | `pages/update.php` |
 | F6 | Einschränkung „nur ein lokaler Server“ beim Anlegen nicht nachgewiesen race-sicher (kein UNIQUE-Schutz; unter READ COMMITTED keine Gap-Locks; Details 3.1). **Offen.** | `ServerService::createServer` |
+| F7 | Die Sperrnamen (`GET_LOCK`: `dnsmanager_publish_all`, `dnsmanager_monitoring`, Topologie-Lock) gelten serverweit für den MariaDB-Server, nicht je Datenbank. Mehrere Installationen auf demselben Datenbankserver blockieren sich gegenseitig (beobachtet in der SP1-Testumgebung: ein Cron-Lauf der Testinstallation wurde übersprungen, während eine isolierte Testinstanz das Monitoring ausführte). **Offen.** | `PublishService`, `MonitoringService`, `TopologyLock` |
 
 ## 7. Eignung für eine spätere MCP-Anbindung
 
@@ -340,5 +345,7 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService`; Review-Korrektur Runner-Fehlerbehandlung (PR #61, gemergt als `aabe398`; D13–D16 akzeptiert) |
 | 12.11.2026 | 5c | Authentifizierung: `AuthService` (Zugangsdaten/Kontostatus, Session-Revalidierung inkl. `session_epoch`); `login_user` und `revalidate_session` als Web-Adapter; Sicherheitsverhalten unverändert; Testbefunde S35 (Ergänzung) und F4 (PR #62, gemergt als `71fec49`) |
 | 13.11.2026 | 5d | Restkopplungen: Logging-Helfer mit expliziten Parametern (Web-Adapter `inc/web/security_log.php`), Update-Prüfung als `UpdateCheckService` mit `UpdateFeed`/`CurlUpdateFeed`; S36 unverändert; Befund F5 (PR #63, gemergt als `c0965d2`) |
-| 13.11.2026 | 6 | Abschlussprüfung: Ergebnis (Abschnitt 0), 3.8 mit Prüfvorgehen und Zuordnung, K1 Zonenstatus in `ZoneReadService`, B1–B3 entfernt, Korrektur `DyndnsApiReject`, Befundliste vollständig (S28, S39, I1, I2, F6; Teilstatus S34/S37), Abschnitt 7 MCP-Eignung (Draft-PR) |
-| 13.11.2026 | 6 | K2 (Systemstatus: `summary` und `problems` aus `DiagnosticReadService`) und K3 (`ServerReadService::getServerStatusOverview`) ausgelagert, `inc/web/diagnostics_view.php` entfallen, D17 (nur Log); Abschlussvermerk ohne Einschränkung (Draft-PR #64) |
+| 13.11.2026 | 6 | Abschlussprüfung: Ergebnis (Abschnitt 0), 3.8 mit Prüfvorgehen und Zuordnung, K1 Zonenstatus in `ZoneReadService`, B1–B3 entfernt, Korrektur `DyndnsApiReject`, Befundliste vollständig (S28, S39, I1, I2, F6; Teilstatus S34/S37), Abschnitt 7 MCP-Eignung |
+| 13.11.2026 | 6 | K2 (Systemstatus: `summary` und `problems` aus `DiagnosticReadService`) und K3 (`ServerReadService::getServerStatusOverview`) ausgelagert, `inc/web/diagnostics_view.php` entfallen, D17 (nur Log); Abschlussvermerk ohne Einschränkung (PR #64, gemergt als `2a077a2`; D17 akzeptiert) |
+| 13.11.2026 | – | Meilenstein Core-/UI-Trennung abgeschlossen: ns1 auf `2a077a2`, Betriebsprüfung (Zonen, Server, Systemstatus, Dashboard, Login, Monitoring, Serials ns1/ns2) ohne Befund. Nächster Schritt: Security-Hardening Phase 1 (Bestandsaufnahme der Befunde aus Abschnitt 6) |
+| 13.11.2026 | SP1 | Security-Paket 1: S29 (Agent-Token), S30 (DynDNS-Mindestlänge), S31 (Dummy-Hash) behoben (Draft-PR); Paketplan SP1–SP4; `PASSWORD_MIN_LENGTH` = 4 dokumentiert; Befund F7 (serverweite Sperrnamen) |
