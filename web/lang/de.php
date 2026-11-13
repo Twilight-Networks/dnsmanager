@@ -515,6 +515,7 @@ return [
     // === publish_all.php ===
     'publish_all_success'   => 'Alle Zonen erfolgreich veröffentlicht.',
     'publish_all_warning'   => 'Warnung bei Veröffentlichung.',
+    'publish_all_pending_changes' => 'Veröffentlichung abgeschlossen. Während der Veröffentlichung wurden weitere Änderungen vorgenommen (Zonen: %s). Diese Änderungen sind noch ausstehend und benötigen eine weitere Veröffentlichung.',
     'publish_all_error'     => 'Fehler bei Veröffentlichung.',
     'publish_all_exception' => 'Veröffentlichung fehlgeschlagen.',
 
