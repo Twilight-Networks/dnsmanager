@@ -113,9 +113,13 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
         <div class="small mb-2">
             <?= $LANG['logged_in_as'] ?> <br><strong><?= htmlspecialchars($_SESSION['username']) ?></strong>
         </div>
-        <a href="logout.php" class="<?= isActive('logout.php') ?>">
-            🚪 <?= $LANG['menu_logout'] ?>
-        </a>
+        <?php // S35 (SP2-E5): Logout nur per POST mit CSRF-Token; Darstellung wie der bisherige Sidebar-Link ?>
+        <form method="post" action="logout.php" class="m-0 sidebar-logout">
+            <?= csrf_input() ?>
+            <button type="submit">
+                🚪 <?= $LANG['menu_logout'] ?>
+            </button>
+        </form>
     </div>
     <hr>
     <div class="text-center small">
