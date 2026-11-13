@@ -6,7 +6,7 @@
  * - Abruf (CurlUpdateFeed), Auswertung und Versionsvergleich im webunabhängigen UpdateCheckService (Paket 5d).
  * - Diese Seite übersetzt das Ergebnis in Meldungen (aktuell / Update verfügbar / Fehler) und stellt sie dar.
  * - Nur für Administratoren (S36a): requireRole() vor dem Abruf und vor jeder Ausgabe.
- * - Offen bis SP3b (S36b): Links aus der Antwort ohne Schemaprüfung.
+ * - Antwortfelder werden im UpdateCheckService geprüft (S36b): Links nur als absolute HTTPS-URL, sonst entfallen sie.
  */
 
 require_once __DIR__ . '/../common.php';

@@ -26,8 +26,18 @@ try {
     // PDO-Instanz mit Fehlerbehandlung initialisieren
     $pdo = AppBootstrap::createPdo();
 } catch (PDOException $e) {
-    // Verbindung fehlgeschlagen – sicherer Abbruch
-    die("Datenbankverbindung fehlgeschlagen: " . htmlspecialchars($e->getMessage()));
+    // Verbindung fehlgeschlagen – sicherer Abbruch (S37b): Details nur serverseitig protokollieren, ohne Zugangsdaten
+    // (Benutzername in der Treibermeldung maskiert); Antwort generisch, Web HTTP 503, CLI Exit-Code 1.
+    error_log('[DNSMANAGER] Datenbankverbindung fehlgeschlagen: '
+        . preg_replace("/user '[^']*'/", "user '***'", $e->getMessage()));
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, "Datenbankverbindung fehlgeschlagen.\n");
+        exit(1);
+    }
+    if (!headers_sent()) {
+        http_response_code(503);
+    }
+    exit('Datenbankverbindung fehlgeschlagen.');
 }
 $GLOBALS['pdo'] = $pdo;
 ?>

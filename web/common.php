@@ -24,14 +24,19 @@ $_SESSION['lang'] = $lang;
 
 $langFile = __DIR__ . '/lang/' . $lang . '.php';
 
+// Fehlende oder ungültige Sprachdatei: Pfad nur serverseitig protokollieren (S37b), Antwort generisch
 if (!file_exists($langFile)) {
-    die("Language file not found: " . htmlspecialchars($langFile));
+    error_log('[DNSMANAGER] Sprachdatei nicht gefunden: ' . $langFile);
+    http_response_code(500);
+    exit('Interner Konfigurationsfehler.');
 }
 
 $LANG = require $langFile;
 
 if (!isset($LANG) || !is_array($LANG)) {
-    die("Language file invalid or not readable: " . htmlspecialchars($langFile));
+    error_log('[DNSMANAGER] Sprachdatei ungültig oder nicht lesbar: ' . $langFile);
+    http_response_code(500);
+    exit('Interner Konfigurationsfehler.');
 }
 
 // Asset-Verwaltungsklasse einbinden
@@ -41,6 +46,10 @@ require_once __DIR__ . '/inc/asset_registry.php';
 // Wichtig: Verhindert Encoding-Probleme bei Umlauten, Toasts, dynamischen Ausgaben usw.
 if (!headers_sent()) {
     header('Content-Type: text/html; charset=UTF-8');
+    // Sicherheitsheader für alle PHP-Antworten (SP3-E6); bewusst noch keine Content-Security-Policy
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: DENY');
+    header('Referrer-Policy: same-origin');
 }
 
 // PHP-Error-Reporting steuern (abhängig von Entwicklungsmodus)

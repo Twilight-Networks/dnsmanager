@@ -47,7 +47,8 @@ define('NAMED_CHECKZONE', '/usr/bin/named-checkzone'); // Pfad zu named-checkcon
 /** ---------------------------------------
  *  Sicherheitseinstellungen
  * --------------------------------------- */
-define('PASSWORD_MIN_LENGTH', 4);           // Minimale Anzahl Zeichen für Passwörter
+define('PASSWORD_MIN_LENGTH', 12);          // Minimale Anzahl Zeichen für Benutzer- und DynDNS-Passwörter (SP3-E7;
+                                             // gilt für neu gesetzte Passwörter, bestehende bleiben gültig)
 
 /** ---------------------------------------
  *  Session-Timeout
