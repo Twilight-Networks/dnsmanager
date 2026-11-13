@@ -6,10 +6,15 @@
  * Prüf- und Auswertungslogik unverändert aus inc/monitoring.php übernommen (check_server_status,
  * check_zone_conf_status, check_zone_status: Zeitgrenze 5 s, Methoden, Header und Antwortauswertung);
  * der HTTP-Zugriff läuft über den gemeinsamen BindAgentClient. Kein Web-Bootstrap, keine Datenbank.
+ *
+ * S42-E6: serverStatus() ergänzt ein Ergebnis 'ok'/'warning' um die Ablaufwarnung für Agent-Zertifikat und
+ * Agent-CA (AgentCertificateExpiryCheck), sofern konfiguriert. Fehlerergebnisse bleiben unverändert; ohne
+ * Konfiguration ist das Verhalten unverändert.
  */
 
 require_once __DIR__ . '/../app/monitoring/MonitoringBackend.php';
 require_once __DIR__ . '/BindAgentClient.php';
+require_once __DIR__ . '/AgentCertificateExpiryCheck.php';
 
 final class AgentMonitoringBackend implements MonitoringBackend
 {
@@ -17,10 +22,15 @@ final class AgentMonitoringBackend implements MonitoringBackend
     private const TIMEOUT = 5;
 
     private BindAgentClient $agent;
+    private ?AgentCertificateExpiryCheck $certCheck;
 
-    public function __construct(?BindAgentClient $agent = null)
+    /**
+     * @param AgentCertificateExpiryCheck|false|null $certCheck null = aus der Konfiguration, false = keine Prüfung
+     */
+    public function __construct(?BindAgentClient $agent = null, AgentCertificateExpiryCheck|false|null $certCheck = null)
     {
         $this->agent = $agent ?? BindAgentClient::fromConfig();
+        $this->certCheck = $certCheck === null ? AgentCertificateExpiryCheck::fromConfig() : ($certCheck ?: null);
     }
 
     public function zoneConfStatus(array $server): array
@@ -92,6 +102,20 @@ final class AgentMonitoringBackend implements MonitoringBackend
     }
 
     public function serverStatus(array $server): array
+    {
+        $result = $this->agentServerStatus($server);
+
+        // S42-E6: nur 'ok'/'warning' um Zertifikatswarnungen ergänzen, Fehler nie verändern
+        $status = $result['status'] ?? null;
+        if ($this->certCheck !== null && ($status === 'ok' || $status === 'warning')) {
+            $result = AgentCertificateExpiryCheck::apply($result, $this->certCheck->check($server['api_ip'] ?? null));
+        }
+
+        return $result;
+    }
+
+    /** Systemstatus des Agenten (Auswertung unverändert) */
+    private function agentServerStatus(array $server): array
     {
         $r = $this->agent->get($server['api_ip'], '/system/status.php', (string)$server['api_token'], null, self::TIMEOUT);
         $http_code = $r['httpCode'];

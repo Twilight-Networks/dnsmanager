@@ -15,6 +15,7 @@
  * - summary: fachliche Auswertung (bisher in den Seiten):
  *   confError/confWarning   – zone_conf_status eines Servers error bzw. warning
  *   serverError             – server_status eines Servers error
+ *   serverWarning           – server_status eines Servers warning (S42-E6, z. B. Zertifikatsablauf)
  *   zoneError/zoneWarning   – zone_status einer Zone error|not_found bzw. warning
  * - problems: Problemeinträge der Systemstatus-Seite je Bereich server, conf, zone (Paket 6, K2; Regeln siehe
  *   getOverview). Gruppierung der Serverdiagnosen über ServerReadService::getServerDiagnosticChecks().
@@ -38,7 +39,7 @@ final class DiagnosticReadService
 
     /**
      * @return array{serverChecks: array<int, array<string, array{status: string, message: ?string, serverName: ?string}>>,
-     *               zoneChecks: array<int, array>, summary: array{confError: bool, confWarning: bool, serverError: bool,
+     *               zoneChecks: array<int, array>, summary: array{confError: bool, confWarning: bool, serverError: bool, serverWarning: bool,
      *               zoneError: bool, zoneWarning: bool},
      *               problems: array{server: array<int, array{serverName: ?string, status: string, message: ?string}>,
      *                               conf: array<int, array{serverName: ?string, status: ?string, message: ?string}>,
@@ -55,12 +56,13 @@ final class DiagnosticReadService
 
         $zoneChecks = $this->zones->listZoneDiagnostics($actor);
 
-        $summary = ['confError' => false, 'confWarning' => false, 'serverError' => false, 'zoneError' => false, 'zoneWarning' => false];
+        $summary = ['confError' => false, 'confWarning' => false, 'serverError' => false, 'serverWarning' => false, 'zoneError' => false, 'zoneWarning' => false];
         foreach ($serverChecks as $checks) {
             $conf = $checks['zone_conf_status']['status'] ?? null;
             $summary['confError'] = $summary['confError'] || $conf === 'error';
             $summary['confWarning'] = $summary['confWarning'] || $conf === 'warning';
             $summary['serverError'] = $summary['serverError'] || ($checks['server_status']['status'] ?? null) === 'error';
+            $summary['serverWarning'] = $summary['serverWarning'] || ($checks['server_status']['status'] ?? null) === 'warning';
         }
         foreach ($zoneChecks as $z) {
             if ($z['checkType'] !== 'zone_status') {

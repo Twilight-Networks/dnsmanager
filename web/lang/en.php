@@ -358,6 +358,7 @@ return [
     'file_permissions_hint' => 'Run the script <code>fix_perms.sh</code> to automatically correct file permissions.',
 
     'server_errors' => '%d error(s) detected',
+    'server_warnings' => '%d warning(s) detected',
 
     'named_checkconf' => 'named-checkconf',
     'named_checkconf_ok' => 'no issues',
