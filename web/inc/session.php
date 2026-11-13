@@ -34,7 +34,11 @@ if (!defined('BASE_URL')) {
 // Session-bezogene Sicherheitseinstellungen setzen (vor session_start!)
 ini_set('session.use_strict_mode', '1');
 ini_set('session.cookie_httponly', '1');
-ini_set('session.cookie_secure', isset($_SERVER['HTTPS']));
+// S40 (S40-E2): Secure verbindlich, unabhängig von $_SERVER['HTTPS'] – das Session-Cookie wird nie über
+// unverschlüsseltes HTTP gesendet. Gilt für alle Pfade, die Session-Cookies setzen oder löschen (session_start,
+// session_regenerate_id, Logout über session_get_cookie_params()). Voraussetzung: Betrieb ausschließlich über HTTPS.
+// Cookie-Name und Path=/ unverändert; kein __Host-Präfix (vorerst).
+ini_set('session.cookie_secure', '1');
 ini_set('session.use_only_cookies', '1');
 // S28 (SP2-E4): SameSite=Lax für das Session-Cookie (vor session_start); gilt für jedes von PHP gesetzte
 // Session-Cookie (Login, Erneuerung, Ablauf, Widerruf). Pfad, Domain und Secure bleiben unverändert (SP2-E8).
