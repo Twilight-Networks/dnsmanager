@@ -43,13 +43,15 @@ if ($zoneData === false) {
 // === Dateipfade vorbereiten ===
 $zoneDir = $config['zone_data_dir'];
 try {
-    // Eindeutiger Temp-Name pro Request, damit parallele Requests sich nicht überschreiben
-    $tmpPath = "/tmp/db.$safeName." . bin2hex(random_bytes(8)) . ".tmp";
+    // Eindeutiger Temp-Name pro Request, damit parallele Requests sich nicht überschreiben. Im Zielverzeichnis
+    // (gleiches Dateisystem), damit die spätere Übernahme per rename() atomar ist (S34b, SP4-E2); als Punktdatei
+    // weder Zonendatei für BIND noch Ziel von zone_cleanup.
+    $tmpPath = rtrim($zoneDir, '/') . "/.db.$safeName." . bin2hex(random_bytes(8)) . ".tmp";
 } catch (Throwable $e) {
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erzeugen des temporären Dateinamens']);
 }
 $finalPath = "$zoneDir/db.$safeName";
-$lockPath = '/tmp/dnsmanager_zone_sync.lock';
+$lockPath = agentLockPath($config);
 
 // === Temporäre Datei schreiben ===
 if (!writeTextFile($tmpPath, $zoneData)) {

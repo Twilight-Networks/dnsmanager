@@ -63,7 +63,7 @@ $zonesConfPath = $config['zones_conf_file'];
 
 // === Gemeinsamen Agent-Lock erwerben (identisch zu zone_sync.php/conf_sync.php, blockierend) ===
 // Scan, zones.conf-Ersatz, Löschungen und Reload erfolgen vollständig unter diesem Lock.
-$lockPath = '/tmp/dnsmanager_zone_sync.lock';
+$lockPath = agentLockPath($config);
 $lockHandle = @fopen($lockPath, 'c');
 if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
     if (is_resource($lockHandle)) {

@@ -9,7 +9,26 @@
  * Verwendet in:
  * - conf_sync.php
  * - zone_sync.php
+ * - zone_cleanup.php
+ * - system/control.php (nur agentLockPath)
  */
+
+/**
+ * Pfad der gemeinsamen Agent-Sperrdatei (S34b, SP4-E1).
+ *
+ * zone_sync, conf_sync, zone_cleanup und system/control serialisieren Änderungen an verwalteten BIND-Dateien und
+ * den BIND-Reload über ein exklusives flock() auf diese Datei. Sie liegt im agenteneigenen Zonenverzeichnis
+ * (zone_data_dir, Eigentümer des Agenten, nicht allgemein beschreibbar) statt unter einem festen /tmp-Pfad, der
+ * von anderen lokalen Benutzern vorab angelegt werden könnte. Als Punktdatei wird sie weder von BIND noch von
+ * zone_cleanup (entfernt nur gepaarte db.<zone>-Dateien verwaister .conf-Dateien) berührt.
+ *
+ * @param array $config Agent-Konfiguration (api_config.php)
+ *
+ * @return string Absoluter Pfad der Sperrdatei
+ */
+function agentLockPath(array $config): string {
+    return rtrim((string)$config['zone_data_dir'], '/') . '/.dnsmanager-agent.lock';
+}
 
 /**
  * Stellt sicher, dass ein Verzeichnis existiert.

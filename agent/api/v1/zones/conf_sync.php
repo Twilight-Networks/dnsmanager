@@ -47,7 +47,7 @@ $zonesConfPath = $config['zones_conf_file'];
 // === Gemeinsamen Agent-Lock erwerben (identisch zu zone_sync.php, blockierend) ===
 // Serialisiert zone_sync und conf_sync gegenseitig: alle Änderungen an verwalteten BIND-Dateien
 // und der BIND-Reload erfolgen unter diesem Lock. Erst nach reloadBind() freigeben.
-$lockPath = '/tmp/dnsmanager_zone_sync.lock';
+$lockPath = agentLockPath($config);
 $lockHandle = @fopen($lockPath, 'c');
 if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
     if (is_resource($lockHandle)) {
