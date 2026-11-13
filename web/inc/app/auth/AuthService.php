@@ -42,14 +42,14 @@ final class AuthService
      * Prüft Zugangsdaten und Kontostatus.
      *
      * Meldungen:
-     * - auth.login.success (userId, username, role, sessionEpoch): Anmeldung zulässig; sessionEpoch als
-     *   Zeichenkette (wie bisher in der Session gespeichert)
+     * - auth.login.success (userId, username, role, sessionEpoch): Anmeldung zulässig; username in der
+     *   Schreibweise der Datenbank (F4), sessionEpoch als Zeichenkette (wie bisher in der Session gespeichert)
      * - auth.login.inactive (username): Passwort korrekt, Konto deaktiviert
      * - auth.login.failed (username): unbekannter Benutzer oder falsches Passwort (auch bei deaktiviertem Konto)
      */
     public function authenticate(string $username, string $password): ServiceResult
     {
-        $stmt = $this->pdo->prepare("SELECT id, password_hash, role, active, session_epoch FROM users WHERE username = ?");
+        $stmt = $this->pdo->prepare("SELECT id, username, password_hash, role, active, session_epoch FROM users WHERE username = ?");
         $stmt->execute([$username]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         $stmt->closeCursor();
@@ -63,7 +63,9 @@ final class AuthService
         if ($passwordOk && (int)$user['active'] === 1) {
             return new ServiceResult(true, [new ServiceMessage('success', 'auth.login.success', [
                 'userId'       => $user['id'],
-                'username'     => $username,
+                // F4: kanonische Schreibweise aus der Datenbank (Abfrage über die Kollation ist
+                // groß-/kleinschreibungsunabhängig); validateSession() vergleicht danach weiterhin exakt.
+                'username'     => (string)$user['username'],
                 'role'         => $user['role'],
                 'sessionEpoch' => (string)$user['session_epoch'],
             ])]);

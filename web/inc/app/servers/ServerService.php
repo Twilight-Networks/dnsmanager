@@ -182,20 +182,36 @@ final class ServerService
             unset($update_data['api_token']);
         }
 
-        // Änderungserkennung: unveränderte Ausdrücke aus actions/server_update.php (inkl. Typvergleich);
-        // bei unverändertem Token (S29) zählt der Token nicht als Änderung.
+        // Änderungserkennung (F1): typunabhängiger Vergleich. Die Flags is_local/active liefert PDO je nach Treiber
+        // als Zeichenkette ('1') oder Integer (1); Zeichenketten werden als Zeichenkette verglichen, NULL bleibt von
+        // jedem Wert verschieden. Bei unverändertem Token (S29) zählt der Token nicht als Änderung.
         $server_data_changed = (
-            $existing['name']    !== $update_data['name'] ||
-            $existing['dns_ip4'] !== $update_data['dns_ip4'] ||
-            $existing['dns_ip6'] !== $update_data['dns_ip6']
+            !self::sameText($existing['name'], $update_data['name']) ||
+            !self::sameText($existing['dns_ip4'], $update_data['dns_ip4']) ||
+            !self::sameText($existing['dns_ip6'], $update_data['dns_ip6'])
         );
         $nonCriticalChanged =
-            $existing['active'] !== $update_data['active'] ||
-            $existing['is_local'] !== $update_data['is_local'] ||
-            $existing['api_ip'] !== $update_data['api_ip'] ||
-            (!$keepToken && $existing['api_token'] !== $update_data['api_token']);
+            (int)$existing['active'] !== $update_data['active'] ||
+            (int)$existing['is_local'] !== $update_data['is_local'] ||
+            !self::sameText($existing['api_ip'], $update_data['api_ip']) ||
+            (!$keepToken && !self::sameText($existing['api_token'], $update_data['api_token']));
 
-        if (!$server_data_changed && !$nonCriticalChanged) {
+        // Unveränderter Token eines Remote-Servers ohne gültigen gespeicherten Token: nicht als „unverändert“
+        // melden, sondern wie bisher unter der Zeilensperre mit api_token_required ablehnen (S29).
+        $storedTokenInvalid = $keepToken && !$input->isLocal && strlen((string)$existing['api_token']) < 32;
+
+        if (!$server_data_changed && !$nonCriticalChanged && !$storedTokenInvalid) {
+            // F1: Auch ohne Änderung erhält nur ein laut Datenbank aktiver Administrator eine Erfolgsmeldung
+            // (gleiche Prüfung wie im Schreibpfad; ohne Schreibzugriff genügt eine Momentaufnahme).
+            try {
+                $dbRole = $this->dbRole($actor->userId);
+            } catch (Throwable $e) {
+                return self::fail('error', 'server.update.failed', ['detail' => $e->getMessage()] + $ctx);
+            }
+            if ($dbRole !== 'admin') {
+                return self::fail('audit', 'server.update.access_denied', ['actorId' => $actor->userId, 'reason' => 'db_role'] + $ctx);
+            }
+
             return new ServiceResult(true, [new ServiceMessage('success', 'server.update.unchanged', $ctx)]);
         }
 
@@ -510,6 +526,16 @@ final class ServerService
         $stmt->closeCursor();
 
         return $ids;
+    }
+
+    /** F1: Gleichheit zweier Datenbank-/Eingabewerte als Zeichenkette; NULL ist nur NULL gleich. */
+    private static function sameText(mixed $a, mixed $b): bool
+    {
+        if ($a === null || $b === null) {
+            return $a === $b;
+        }
+
+        return (string)$a === (string)$b;
     }
 
     /** DB-Rolle des Akteurs unter geteilter Zeilensperre (null = nicht vorhanden oder deaktiviert; wie ZoneService) */
