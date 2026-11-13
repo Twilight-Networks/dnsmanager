@@ -344,15 +344,15 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 
 | Service | Methoden | Prüfung in der Schreibtransaktion |
 |---|---|---|
-| `UserService` | create, update, delete, changePassword, disable/enable | Akteur- und Zielzeilen `users … FOR UPDATE` (`lockUsers`), Admin-Zählung gesperrt |
-| `ZoneService` | create, update, delete | `users … LOCK IN SHARE MODE`, `user_zones` (S, zoneadmin), `zones`/`zone_servers` `FOR UPDATE`; zusätzlich Topologie-Sperre |
-| `RecordService` | create, update, delete, AutoPTR | `ZoneAccess::lockZoneWritePermissions()`: `users` und `user_zones` `LOCK IN SHARE MODE` je Zone |
-| `ServerService` | create, update, delete | `users … LOCK IN SHARE MODE` (`dbRole`), Serverzeile `FOR UPDATE`; Topologie-Sperre |
-| `DyndnsAccountService` | create, update, changePassword, delete | `users … LOCK IN SHARE MODE` (`isDbAdmin`), Kontozeile `FOR UPDATE` |
-| `DyndnsUpdateService` | update (DynDNS-API) | kein Benutzerkonto: Zugangsdaten des DynDNS-Kontos je Anfrage, Kontozeile `FOR UPDATE` |
-| `PublishService` | publishAll | `ActorAccess::isActive()` als Momentaufnahme unmittelbar vor `GET_LOCK(…, 0)`; verteilt nur bereits berechtigt gespeicherte Daten |
-| `ServerService` | reloadBind | `ActorAccess::isActive()` als Momentaufnahme; idempotenter Reload ohne Datenänderung |
-| `MonitoringService` | run | Systemoperation (Cron bzw. Systemstatus-Seite nach `requireRole(['admin'])` und Revalidierung); schreibt nur Diagnosen |
+| `UserService` | `createUser`, `updateUser`, `deleteUser`, `changePassword`, `setActive` | Akteur- und Zielzeilen `users … FOR UPDATE` (`lockUsers`), Admin-Zählung gesperrt |
+| `ZoneService` | `createZone`, `updateZone`, `deleteZone` | `users … LOCK IN SHARE MODE`, `user_zones` (S, zoneadmin), `zones`/`zone_servers` `FOR UPDATE`; zusätzlich Topologie-Sperre |
+| `RecordService` | `createRecord` (inkl. AutoPTR), `updateRecord`, `deleteRecords` | `ZoneAccess::lockZoneWritePermissions()`: `users` und `user_zones` `LOCK IN SHARE MODE` je Zone |
+| `ServerService` | `createServer`, `updateServer`, `deleteServer` | `users … LOCK IN SHARE MODE` (`dbRole`), Serverzeile `FOR UPDATE`; Topologie-Sperre |
+| `DyndnsAccountService` | `createAccount`, `updateAccount`, `changePassword`, `deleteAccount` | `users … LOCK IN SHARE MODE` (`isDbAdmin`), Kontozeile `FOR UPDATE` |
+| `DyndnsUpdateService` | `update` (DynDNS-API) | kein Benutzerkonto: Zugangsdaten des DynDNS-Kontos je Anfrage, Kontozeile `FOR UPDATE` |
+| `PublishService` | `publishAll` (`publishZone`: interne Systemoperation, Berechtigung beim Aufrufer) | `ActorAccess::isActive()` als Momentaufnahme unmittelbar vor `GET_LOCK(…, 0)`; verteilt nur bereits berechtigt gespeicherte Daten |
+| `ServerService` | `reloadBind` | `ActorAccess::isActive()` als Momentaufnahme; idempotenter Reload ohne Datenänderung |
+| `MonitoringService` | `run` | Systemoperation (Cron bzw. Systemstatus-Seite nach `requireRole(['admin'])` und Revalidierung); schreibt nur Diagnosen |
 
 Verbleibendes Restrisiko: Eine bereits laufende Anfrage endet nach einem Rechteentzug noch – lesend mit dem Stand ihres Beginns, Publish bzw. Reload mit bereits berechtigt gespeicherten Daten. Die nächste Anfrage wird durch die globale Session-Revalidierung abgewiesen.
 
