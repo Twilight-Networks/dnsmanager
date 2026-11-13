@@ -7,6 +7,8 @@
  * - Fehlerbehandlung für PHP-Fehler (Error Handler, Shutdown Handler)
  * - Logging nach definiertem Log-Level (debug, info, warning, error)
  * - Ausgabe wahlweise an Apache-Error-Log oder Syslog
+ * - Ohne Session- oder Request-Bezug (auch für CLI-Skripte und Services nutzbar); Benutzer und Quell-IP
+ *   übergibt der Aufrufer (Web: inc/web/security_log.php)
  */
 
 // Logging-System Basisfunktionen (appLog, mapErrorToLogLevel, set_error_handler, shutdown_handler)
@@ -137,21 +139,22 @@ register_shutdown_function(function (): void {
     }
 });
 
-// Spezifische Anwendungs-Logging-Funktionen
+// Spezifische Anwendungs-Logging-Funktionen (Paket 5d: transportunabhängig – Benutzer und Quell-IP werden
+// ausdrücklich übergeben; die Web-Varianten logAccessDenied()/logFailedLogin() mit Session- und
+// Request-Bezug liegen in inc/web/security_log.php)
 
 /**
  * Protokolliert einen verweigerten Zugriff über die zentrale Logging-Architektur.
  *
- * @param string $context Kurze Angabe der Quelle (z.B. 'requireRole', 'login').
- * @param string $reason Detaillierte Fehlerbeschreibung.
+ * @param string $context   Kurze Angabe der Quelle (z.B. 'requireRole', 'login').
+ * @param string $username  Benutzername des Aufrufers ('unknown', wenn nicht bekannt).
+ * @param string $ipAddress Quell-IP des Aufrufers ('unknown', wenn nicht bekannt).
+ * @param string $reason    Detaillierte Fehlerbeschreibung.
  *
  * @return void
  */
-function logAccessDenied(string $context, string $reason): void
+function logAccessDeniedEvent(string $context, string $username, string $ipAddress, string $reason): void
 {
-    $username = $_SESSION['username'] ?? 'unknown';
-    $ipAddress = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-
     $message = sprintf(
         'event=access_denied context=%s user=%s ip=%s reason="%s"',
         $context,
@@ -166,14 +169,13 @@ function logAccessDenied(string $context, string $reason): void
 /**
  * Protokolliert einen fehlgeschlagenen Loginversuch über die zentrale Logging-Architektur.
  *
- * @param string $username Der eingegebene Benutzername.
+ * @param string $username  Der eingegebene Benutzername.
+ * @param string $ipAddress Quell-IP des Loginversuchs ('unknown', wenn nicht bekannt).
  *
  * @return void
  */
-function logFailedLogin(string $username): void
+function logLoginFailureEvent(string $username, string $ipAddress): void
 {
-    $ipAddress = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-
     $message = sprintf(
         'event=login_failure user=%s ip=%s',
         $username,
