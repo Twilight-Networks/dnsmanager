@@ -5,8 +5,8 @@ Stand: 13.11.2026, Basis `main` = `c0965d2` (nach Paket 5d), ergänzt um Paket 6
 
 ## 0. Ergebnis (Paket 6)
 
-- **Die Core-/UI-Trennung ist abgeschlossen**, mit Ausnahme der in 3.8 genannten kleinen Restpunkte K2/K3 (Statusauswertung der Diagnosen in
-  `pages/system_health.php` und `pages/servers.php`, bei Paket 6 gefunden, Entscheidung ausstehend).
+- **Die Core-/UI-Trennung ist abgeschlossen.** Mit Paket 6 sind die letzten Kopplungen K1–K3 (Statusauswertungen der Diagnosen in
+  `pages/zones.php`, `pages/system_health.php`, `pages/servers.php`) in den Core verlagert und die ungenutzten Helfer B1–B3 entfernt (3.8).
   - Alle fachlichen Operationen sind über webunabhängige Services in `web/inc/app/` erreichbar (Abschnitt 2).
   - Actions, Seiten, Templates, API und Skripte enthalten keine SQL-, Transaktions-, Shell-, cURL- oder Agent-Aufrufe.
   - Core und Infrastruktur hängen nicht von Session, HTTP, `$LANG`, Web-Bootstrap oder `global`/`$GLOBALS` ab.
@@ -51,11 +51,11 @@ Stand: 13.11.2026, Basis `main` = `c0965d2` (nach Paket 5d), ergänzt um Paket 6
 | Zonen | ✅ | `ZoneService` (anlegen, ändern inkl. Serverzuweisung, löschen; `TopologyLock`; Bearbeitungsstand S21), `ZoneReadService` (Liste, Detail, zuweisbare Server, Zonendiagnosen, Statusauswertung der Zonenübersicht), `ZoneAccess` | – (Statusauswertung seit Paket 6 im Core, K1) |
 | Records | ✅ **mit Paket 3** | `RecordService` (anlegen, ändern, löschen inkl. AutoPTR, DynDNS-Schutz), `RecordReadService` (Liste, Verwaltungsansicht mit Schutzkennzeichen), `RecordContentBuilder`, `RecordContentParser` | `RecordService` nutzt `glue_check.php`-Lesefunktionen |
 | Publish (alle Zonen) | ✅ / 🔧 | `PublishService` (Advisory-Lock, Tri-State `bind_dirty`/`changed`), `PublishBackend` | Generator/Distributor hinter `LegacyBindPublishBackend` (siehe 3.4) |
-| **Server** | ✅ **mit Paket 1** | `ServerService` (anlegen, ändern inkl. Topologie-Lock, NS/Glue-Neuaufbau und `bind_dirty`, löschen, BIND-Reload), `ServerReadService` (Liste, Bearbeitungsdaten, Serverdiagnosen), `ServerControlBackend` + `LegacyAgentServerControlBackend` | `pages/servers.php`: Gesamtbewertung der Serverdiagnosen (K3, siehe 3.8) |
+| **Server** | ✅ **mit Paket 1** | `ServerService` (anlegen, ändern inkl. Topologie-Lock, NS/Glue-Neuaufbau und `bind_dirty`, löschen, BIND-Reload), `ServerReadService` (Liste, Bearbeitungsdaten, Serverdiagnosen inkl. Gruppierung und Statusauswertung), `ServerControlBackend` + `LegacyAgentServerControlBackend` | – (Auswertung der Serverdiagnosen seit Paket 6 im Core, K3) |
 | DynDNS-Konten | ✅ **mit Paket 2** | `DyndnsAccountService`, `DyndnsReadService` (auf Basis `dyndns_guard.php`) | – |
 | DynDNS-Update-API | ✅ **mit Paket 2/4b** | `DyndnsUpdateService` (Commit vor Publish, Retry ausstehender Publishes), Veröffentlichung über `PublishService::publishZone()` | – |
 | Monitoring/Diagnose | ✅ **mit 5b** | `MonitoringService` (Lauf mit Laufsperre, Speichern, Orphan-Bereinigung, Benachrichtigung, Log-Retention), `MonitoringBackend` + `AgentMonitoringBackend`, `MonitoringNotifier` + `PhpMailerNotifier` | CLI-Skripte und Systemstatus-Seite als Adapter (`inc/monitoring_runner.php`) |
-| Dashboard/Layout/System-Health/Update-Prüfung | ✅ **mit 5a/5b/5d** | `SystemStatusReadService`, `DiagnosticReadService`, `SystemCheckService` (Systemprüfungen ohne Sprachtexte), `UpdateCheckService` + `CurlUpdateFeed` | `pages/system_health.php`: Statusauswertung der Diagnosen statt `summary` (K2, siehe 3.8) |
+| Dashboard/Layout/System-Health/Update-Prüfung | ✅ **mit 5a/5b/5d** | `SystemStatusReadService`, `DiagnosticReadService`, `SystemCheckService` (Systemprüfungen ohne Sprachtexte), `UpdateCheckService` + `CurlUpdateFeed` | – (Problemeinträge der Systemstatus-Seite seit Paket 6 im Core, K2) |
 | Authentifizierung | ✅ **mit 5c** | `AuthService` (`authenticate`: Zugangsdaten und Kontostatus; `validateSession`: Revalidierung inkl. `session_epoch` und Schema) | `inc/auth.php` und `inc/web/session_guard.php` als Web-Adapter (Session, Revoke, Redirect, 503, Logs) |
 
 ## 3. Verbleibende Kopplungen (Inventar)
@@ -163,7 +163,7 @@ Die Wiederholung verkleinert das Zeitfenster, schließt es aber nicht garantiert
 **Erledigt mit 5a:**
 - `templates/layout.php`: Publish-Status über `SystemStatusReadService::getPublishStatus()`, Fehleranzeige über `DiagnosticReadService::getOverview()[summary]`; keine direkte SQL-Abfrage mehr.
 - `pages/dashboard.php`: Kennzahlen über `SystemStatusReadService::getDashboardCounts()`, Diagnose-Auswertung über `DiagnosticReadService`, Zonenliste des zoneadmin über `ZoneReadService::listZones()` (vollständig, nach Name sortiert); keine direkte SQL-Abfrage mehr.
-- `pages/system_health.php`: Diagnosen über `DiagnosticReadService` (Darstellungsstruktur über `inc/web/diagnostics_view.php`).
+- `pages/system_health.php`: Diagnosen über `DiagnosticReadService` (die Darstellungsstruktur `inc/web/diagnostics_view.php` ist mit Paket 6, K2, entfallen).
 - `getDiagnosticResults()` ist entfernt (S38): Diagnosen werden nur noch berechtigt gelesen (Server/Zonen-Read-Services, Bedingung in derselben Abfrage).
 
 **Erledigt mit 5b:**
@@ -211,7 +211,7 @@ Endpunkte, auf die sich die Web-App verlässt:
 
 Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; das Web bindet ihn über Adapter an.
 
-### 3.8 Paket 6 – Abschlussprüfung (Branch `docs/architecture-final`, Draft-PR)
+### 3.8 Paket 6 – Abschlussprüfung (Branch `docs/architecture-final`, Draft-PR #64)
 
 **Vorgehen (prüfbar wiederholbar):**
 - Suche in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` und den Einstiegsdateien nach `->prepare|query|exec|beginTransaction|commit|rollBack(`, SQL-Schlüsselwörtern, `exec`/`shell_exec`/`proc_open`/`curl_init` und `global`/`$GLOBALS`.
@@ -234,15 +234,18 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 
 **Erledigt mit Paket 6:**
 - **K1:** Statusauswertung der Zonenübersicht aus `pages/zones.php` in `ZoneReadService::getZoneStatusOverview()` (maßgeblicher Diagnose-Eintrag je Zone, Gesamtbewertung, Problemeinträge; gleiche Berechtigung und Reihenfolge wie `listZoneDiagnostics()`) und `ZoneReadService::zoneDisplayStatus()` (Anzeigestatus inkl. ausstehendem Publish). Regeln unverändert: erster Eintrag gilt, Ersetzen nur `ok` → nicht `ok` bzw. `warning` → `error`; `error`/`not_found` → Fehler, `warning` → Warnung, sonst bei ausstehendem Publish `changed`. Die Seite übersetzt nur noch in die bisherige Darstellung.
+- **K2:** Die Systemstatus-Seite bewertet nicht mehr selbst. Die Kennzeichen (Fehler/Warnung je Konfiguration, Server, Zonen) kommen aus der vorhandenen `DiagnosticReadService::getOverview()['summary']`; die Problemeinträge liefert `getOverview()['problems']` getrennt nach `server` (Prüfart `server_status`), `conf` (`zone_conf_status`) und `zone` (`zone_status`). Regeln unverändert: `server` nur Server mit `server_status` ungleich `ok`; `conf` alle Server, deren `zone_conf_status` nicht `ok` ist – auch Server ohne diese Prüfart; `zone` alle Zonendiagnosen ungleich `ok` (andere Prüfart: Status null). `inc/web/diagnostics_view.php` ist entfallen.
+- **K3:** Die Serverübersicht bewertet nicht mehr selbst: `ServerReadService::getServerStatusOverview()` liefert den Status je Server (`server_status`), Fehler-/Warnungskennzeichen und die Problemeinträge (je Server `server_status`, dann `zone_conf_status`; fehlende Prüfarten entfallen). Die Gruppierung je Server und Prüfart (`getServerDiagnosticChecks()`, ein späterer Eintrag derselben Prüfart überschreibt) gibt es nur noch einmal; `DiagnosticReadService` nutzt sie mit.
+- **Darstellung:** Die Seiten `zones.php`, `system_health.php` und `servers.php` übersetzen nur noch den vom Core ermittelten Zustand in Symbole, HTML und Sprachtexte. Die je Seite unterschiedlichen, bisherigen Regeln (z. B. Zonendiagnose anderer Prüfart: in der Zonenübersicht kein Problemeintrag, im Systemstatus ein Eintrag; Serverbezeichnung ohne Namen `unbekannt` bzw. `(unbekannt)`) sind bewusst unverändert und nicht vereinheitlicht.
 - **B1–B3:** entfernt `dyndnsLangKey()`, `DyndnsActionError` (`dyndns_guard.php`) und `validatePassword()` (`helpers.php`), jeweils nachweislich ungenutzt. `DyndnsApiReject` bleibt (verwendet).
+
+**Bewusste Abweichung (nur Log):** D17 – Die Seiten schreiben weniger PHP-Hinweise ins Log. Bisher wurden Schlüssel und Meldung jedes Diagnoseeintrags ausgewertet, auch unauffälliger; dabei entstanden Warnungen „Undefined array key“ (fehlende Prüfart) und Deprecation-Hinweise `htmlspecialchars(null)` (Meldung NULL). Jetzt werden nur noch Problemeinträge formatiert. HTML, Status und Reihenfolge sind unverändert (t65 K07, t66 H01–H04).
 
 **Bewusst belassen (keine Kopplung):**
 - `RecordReadService::listRecords()` und `UserReadService::getUser()` haben derzeit keinen Web-Aufrufer; sie sind berechtigte, paginierte bzw. einzelne Lesezugriffe für weitere Kanäle (MCP) und werden bei deren Anbindung erneut getestet.
 - `pages/records.php` ordnet Diagnose-Status nur Symbolen zu (Darstellung).
 
-**Offen – zur Entscheidung (bei Paket 6 gefunden, nicht umgesetzt):**
-- **K2:** `pages/system_health.php` bewertet Konfigurations-, Zonen- und Serverdiagnosen selbst (Fehler-/Warnungskennzeichen, Auswahl der Problemeinträge), obwohl `DiagnosticReadService::getOverview()` die fachliche `summary` bereits liefert. Vorschlag: Auswahl der Problemeinträge in `DiagnosticReadService`, Kennzeichen aus `summary`; Regeln und Darstellung unverändert, gezielter Golden-Vergleich.
-- **K3:** `pages/servers.php` bewertet die Serverdiagnosen für die Statusbox selbst (Fehler/Warnung, Problemeinträge). Vorschlag: analog K1 in `ServerReadService`.
+**Verbleibende Architektur-Restarbeiten:** keine.
 
 ## 4. Wiederverwendbare Bausteine
 
@@ -252,7 +255,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 - **Records:** `glue_check.php` (`isGlueRecord`, `isNsRecordReferencedByGlue` rein; `isProtectedNsRecord` liest), `ttl_defaults.php`, `soa_serial.php`, `dkim_helpers.php`, `AutoPtr`.
 - **Schnittstellen:** `ZoneBuildBackend`, `PublishBackend`, `ServerControlBackend`, `MonitoringBackend`, `MonitoringNotifier`, `UpdateFeed` mit ihren Adaptern.
 - **Logging** (transportunabhängig): `appLog`, `logAccessDeniedEvent`, `logLoginFailureEvent` (`inc/logging.php`).
-- **Zonenstatus:** `ZoneReadService::getZoneStatusOverview()`, `ZoneReadService::zoneDisplayStatus()` (Paket 6).
+- **Diagnose-Auswertung (Paket 6):** `ZoneReadService::getZoneStatusOverview()`, `ZoneReadService::zoneDisplayStatus()`, `ServerReadService::getServerDiagnosticChecks()`, `ServerReadService::getServerStatusOverview()`, `DiagnosticReadService::getOverview()` (`summary`, `problems`).
 
 ## 5. Verbindliche Reihenfolge der Arbeitspakete
 
@@ -263,7 +266,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **erledigt** (PR #57) |
 | **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **erledigt** (4a PR #58, 4b PR #59) |
 | **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60), **5b erledigt** (PR #61); **5c erledigt** (PR #62); **5d erledigt** (PR #63) |
-| **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | **Draft-PR** (K1, B1–B3, Inventar im Zielzustand); K2/K3 zur Entscheidung |
+| **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | **Draft-PR #64** (K1–K3, B1–B3, Inventar im Zielzustand) |
 
 **Begründete Anpassungen gegenüber der vorgegebenen Reihenfolge:**
 1. **Paket 1 enthält die Serverdiagnosen**, die `pages/servers.php` anzeigt. Die allgemeinen Diagnose-Lesezugriffe für Dashboard, Layout und Records bleiben in Paket 3 bzw. 5.
@@ -337,4 +340,5 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService`; Review-Korrektur Runner-Fehlerbehandlung (PR #61, gemergt als `aabe398`; D13–D16 akzeptiert) |
 | 12.11.2026 | 5c | Authentifizierung: `AuthService` (Zugangsdaten/Kontostatus, Session-Revalidierung inkl. `session_epoch`); `login_user` und `revalidate_session` als Web-Adapter; Sicherheitsverhalten unverändert; Testbefunde S35 (Ergänzung) und F4 (PR #62, gemergt als `71fec49`) |
 | 13.11.2026 | 5d | Restkopplungen: Logging-Helfer mit expliziten Parametern (Web-Adapter `inc/web/security_log.php`), Update-Prüfung als `UpdateCheckService` mit `UpdateFeed`/`CurlUpdateFeed`; S36 unverändert; Befund F5 (PR #63, gemergt als `c0965d2`) |
-| 13.11.2026 | 6 | Abschlussprüfung: Ergebnis (Abschnitt 0), 3.8 mit Prüfvorgehen und Zuordnung, K1 Zonenstatus in `ZoneReadService`, B1–B3 entfernt, Korrektur `DyndnsApiReject`, K2/K3 zur Entscheidung, Befundliste vollständig (S28, S39, I1, I2, F6; Teilstatus S34/S37), Abschnitt 7 MCP-Eignung (Draft-PR) |
+| 13.11.2026 | 6 | Abschlussprüfung: Ergebnis (Abschnitt 0), 3.8 mit Prüfvorgehen und Zuordnung, K1 Zonenstatus in `ZoneReadService`, B1–B3 entfernt, Korrektur `DyndnsApiReject`, Befundliste vollständig (S28, S39, I1, I2, F6; Teilstatus S34/S37), Abschnitt 7 MCP-Eignung (Draft-PR) |
+| 13.11.2026 | 6 | K2 (Systemstatus: `summary` und `problems` aus `DiagnosticReadService`) und K3 (`ServerReadService::getServerStatusOverview`) ausgelagert, `inc/web/diagnostics_view.php` entfallen, D17 (nur Log); Abschlussvermerk ohne Einschränkung (Draft-PR #64) |
