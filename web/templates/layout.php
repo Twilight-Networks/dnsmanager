@@ -121,12 +121,14 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
             </button>
         </form>
     </div>
+    <?php if (($_SESSION['role'] ?? null) === 'admin'): ?>
     <hr>
     <div class="text-center small">
         <a href="pages/update.php" class="text-muted text-decoration-none">
             🔄 <?= $LANG['menu_check_updates'] ?>
         </a>
     </div>
+    <?php endif; ?>
 </div> <!-- Ende Sidebar -->
 
 

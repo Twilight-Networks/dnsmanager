@@ -29,13 +29,11 @@
 
 define('IN_APP', true);
 require_once __DIR__ . '/../common.php';
-include __DIR__ . '/../templates/layout.php';
 
-// Zugriff: Nur Admin
-if ($_SESSION['role'] !== 'admin') {
-    http_response_code(403);
-    exit('Zugriff verweigert.');
-}
+// Zugriff: Nur Admin (vor jeder Layout-Ausgabe; HTTP 403 und access_denied-Log, S39)
+requireRole(['admin']);
+
+include __DIR__ . '/../templates/layout.php';
 
 // GET-Parameter
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
