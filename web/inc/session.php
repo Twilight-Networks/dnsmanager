@@ -28,7 +28,10 @@ require_once __DIR__ . '/../config/ui_config.php';
 
 // Abbruch, falls die grundlegende Konstante nicht definiert ist
 if (!defined('BASE_URL')) {
-    die('Fehler: BASE_URL ist nicht definiert. Bitte ui_config.php prüfen.');
+    // Konfigurationshinweis nur serverseitig (S37b), Antwort generisch
+    error_log('[DNSMANAGER] Konfigurationsfehler: BASE_URL ist nicht definiert (ui_config.php prüfen).');
+    http_response_code(500);
+    exit('Interner Konfigurationsfehler.');
 }
 
 // Session-bezogene Sicherheitseinstellungen setzen (vor session_start!)
