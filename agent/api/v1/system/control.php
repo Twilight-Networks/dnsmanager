@@ -8,6 +8,7 @@ require_once __DIR__ . '/../../../inc/init.php';
 require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
+require_once __DIR__ . '/../../../inc/file_utils.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -21,7 +22,7 @@ $action = $input['action'] ?? null;
 
 if ($action === 'reload-bind') {
     // Gemeinsamer Agent-Lock (wie zone_sync/conf_sync/zone_cleanup): Preflight und Reload unter demselben Lock
-    $lockPath = '/tmp/dnsmanager_zone_sync.lock';
+    $lockPath = agentLockPath($config);
     $lockHandle = @fopen($lockPath, 'c');
     if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
         if (is_resource($lockHandle)) {
