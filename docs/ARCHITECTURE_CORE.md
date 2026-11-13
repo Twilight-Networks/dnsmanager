@@ -1,9 +1,9 @@
 # DNS Manager – Core-/UI-Trennung: Architektur-Inventar und Restarbeiten
 
-Stand: 13.11.2026, Basis `main` = `c0965d2` (nach Paket 5d), ergänzt um Paket 6 (Abschlussprüfung). Dieses Dokument ist die zentrale
-Übersicht für den Meilenstein „vollständige Trennung der Fachlogik von der Weboberfläche“.
+Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
+„vollständige Trennung der Fachlogik von der Weboberfläche“. **Der Meilenstein ist abgeschlossen** (PR #64, Betriebsprüfung auf ns1 am 13.11.2026).
 
-## 0. Ergebnis (Paket 6)
+## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
 - **Die Core-/UI-Trennung ist abgeschlossen.** Mit Paket 6 sind die letzten Kopplungen K1–K3 (Statusauswertungen der Diagnosen in
   `pages/zones.php`, `pages/system_health.php`, `pages/servers.php`) in den Core verlagert und die ungenutzten Helfer B1–B3 entfernt (3.8).
@@ -211,7 +211,7 @@ Endpunkte, auf die sich die Web-App verlässt:
 
 Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; das Web bindet ihn über Adapter an.
 
-### 3.8 Paket 6 – Abschlussprüfung (Branch `docs/architecture-final`, Draft-PR #64)
+### 3.8 Paket 6 – Abschlussprüfung (erledigt, PR #64, `main` `2a077a2`)
 
 **Vorgehen (prüfbar wiederholbar):**
 - Suche in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` und den Einstiegsdateien nach `->prepare|query|exec|beginTransaction|commit|rollBack(`, SQL-Schlüsselwörtern, `exec`/`shell_exec`/`proc_open`/`curl_init` und `global`/`$GLOBALS`.
@@ -266,7 +266,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 | **3 Records/Zonen-Reste** | `pages/records.php` auf `RecordReadService`/`ZoneReadService` (inkl. Schutzflags, Diagnosen gefiltert); Rest-SQL in `record_update.php`; Logik aus `record_edit_form.php` in den Read-Service; `buildRecordContent` mit Fehlercodes | **erledigt** (PR #57) |
 | **4 BIND/Publish-Infrastruktur** | Generator und Distributoren mit expliziter PDO (ohne `$GLOBALS`); einheitlicher Agent-Client; NS/Glue-Neuaufbau und Rebuild aus `helpers.php` in den Core (unter Zonensperre); `publish_single` in den Service-Pfad; `distribute_zone_file` ohne versteckte Generierung | **erledigt** (4a PR #58, 4b PR #59) |
 | **5 Monitoring/Dashboard/Auth/Rest** | `MonitoringService` + Benachrichtigungs-Adapter (CLI und System-Health rufen den Service, kein `exec`); `DiagnosticsReadService` und `StatusReadService` (Layout, Dashboard, System-Health); `AuthService::verifyCredentials()` mit `login_user` als Session-Adapter; `logAccessDenied`/`logFailedLogin` mit expliziten Parametern; Update-Seite | **5a erledigt** (PR #60), **5b erledigt** (PR #61); **5c erledigt** (PR #62); **5d erledigt** (PR #63) |
-| **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | **Draft-PR #64** (K1–K3, B1–B3, Inventar im Zielzustand) |
+| **6 Abschlussprüfung** | Automatischer Nachweis: keine SQL-, Transaktions-, Agent- oder Shell-Aufrufe in `actions/`, `pages/`, `templates/`, `api/`, `scripts/` außer Bootstrap; jede Fachoperation über einen Service erreichbar; Inventar ohne ❌/🟡 | **erledigt** (PR #64; K1–K3, B1–B3, Inventar im Zielzustand) |
 
 **Begründete Anpassungen gegenüber der vorgegebenen Reihenfolge:**
 1. **Paket 1 enthält die Serverdiagnosen**, die `pages/servers.php` anzeigt. Die allgemeinen Diagnose-Lesezugriffe für Dashboard, Layout und Records bleiben in Paket 3 bzw. 5.
@@ -340,5 +340,6 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | 12.11.2026 | 5b | Monitoring und Systemprüfungen: `MonitoringService` mit Laufsperre, Agent-/Mail-Adapter, CLI als Adapter, S37 (`exec`) behoben, `SystemCheckService`; Review-Korrektur Runner-Fehlerbehandlung (PR #61, gemergt als `aabe398`; D13–D16 akzeptiert) |
 | 12.11.2026 | 5c | Authentifizierung: `AuthService` (Zugangsdaten/Kontostatus, Session-Revalidierung inkl. `session_epoch`); `login_user` und `revalidate_session` als Web-Adapter; Sicherheitsverhalten unverändert; Testbefunde S35 (Ergänzung) und F4 (PR #62, gemergt als `71fec49`) |
 | 13.11.2026 | 5d | Restkopplungen: Logging-Helfer mit expliziten Parametern (Web-Adapter `inc/web/security_log.php`), Update-Prüfung als `UpdateCheckService` mit `UpdateFeed`/`CurlUpdateFeed`; S36 unverändert; Befund F5 (PR #63, gemergt als `c0965d2`) |
-| 13.11.2026 | 6 | Abschlussprüfung: Ergebnis (Abschnitt 0), 3.8 mit Prüfvorgehen und Zuordnung, K1 Zonenstatus in `ZoneReadService`, B1–B3 entfernt, Korrektur `DyndnsApiReject`, Befundliste vollständig (S28, S39, I1, I2, F6; Teilstatus S34/S37), Abschnitt 7 MCP-Eignung (Draft-PR) |
-| 13.11.2026 | 6 | K2 (Systemstatus: `summary` und `problems` aus `DiagnosticReadService`) und K3 (`ServerReadService::getServerStatusOverview`) ausgelagert, `inc/web/diagnostics_view.php` entfallen, D17 (nur Log); Abschlussvermerk ohne Einschränkung (Draft-PR #64) |
+| 13.11.2026 | 6 | Abschlussprüfung: Ergebnis (Abschnitt 0), 3.8 mit Prüfvorgehen und Zuordnung, K1 Zonenstatus in `ZoneReadService`, B1–B3 entfernt, Korrektur `DyndnsApiReject`, Befundliste vollständig (S28, S39, I1, I2, F6; Teilstatus S34/S37), Abschnitt 7 MCP-Eignung |
+| 13.11.2026 | 6 | K2 (Systemstatus: `summary` und `problems` aus `DiagnosticReadService`) und K3 (`ServerReadService::getServerStatusOverview`) ausgelagert, `inc/web/diagnostics_view.php` entfallen, D17 (nur Log); Abschlussvermerk ohne Einschränkung (PR #64, gemergt als `2a077a2`; D17 akzeptiert) |
+| 13.11.2026 | – | Meilenstein Core-/UI-Trennung abgeschlossen: ns1 auf `2a077a2`, Betriebsprüfung (Zonen, Server, Systemstatus, Dashboard, Login, Monitoring, Serials ns1/ns2) ohne Befund. Nächster Schritt: Security-Hardening Phase 1 (Bestandsaufnahme der Befunde aus Abschnitt 6) |
