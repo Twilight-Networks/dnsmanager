@@ -3,238 +3,359 @@
 Stand: 13.11.2026 · Befund S42 (siehe `docs/ARCHITECTURE_CORE.md`, Abschnitt 6).
 
 **Status:**
-- **Phase 1 (dieser Stand):** Code-Option `AGENT_TLS_CA_FILE` in `BindAgentClient` umgesetzt und isoliert getestet.
-- Es gibt noch keine produktive CA und keine produktiven Zertifikate. Auf ns1 ist die TLS-Prüfung weiterhin abgeschaltet.
-- **Phase 2** braucht eine eigene Freigabe. Dazu gehören:
-  - die Verwahrung des CA-Schlüssels;
-  - die Ausstellung der Zertifikate;
-  - die Umstellung auf ns1/ns2;
-  - die Ablaufüberwachung.
-
-Diese Anleitung beschreibt den freigabefähigen Ablauf, führt ihn aber nicht aus.
+- **Phase 1 – erledigt:** PR #68, `main` `b17d946`. Code-Option `AGENT_TLS_CA_FILE` in `BindAgentClient`, isoliert getestet (Abschnitt 11).
+- **Phase 2 – vorbereitet, nicht freigegeben:** CA-Schlüsselverwahrung, Ausstellung, Umstellung ns1/ns2, Ablaufüberwachung.
+- Bis zur Freigabe gilt:
+  - keine produktive CA erzeugen;
+  - keine Zertifikate austauschen;
+  - die TLS-Prüfung bleibt auf ns1 abgeschaltet.
+- S42 bleibt offen, bis Phase 2 produktiv abgenommen ist.
 
 ## 1. Entscheidungen
+
+**Getroffen:**
 
 | Nr. | Inhalt |
 |---|---|
 | S42-E1 | Variante A: interne CA mit IP-SANs. Die IP-Adressierung (`servers.api_ip`) und die Datenbankstruktur bleiben unverändert. |
-| S42-E2 | Eigene CA nur für die Agenten:<br>– CA ca. 5 Jahre, Serverzertifikate je 1 Jahr;<br>– Erneuerung spätestens 30 Tage vor Ablauf;<br>– je Server ein eigener privater Schlüssel;<br>– SANs = tatsächlich genutzte Agent-IPs plus passende DNS-Namen.<br>Der private CA-Schlüssel liegt **nicht** auf ns1 oder ns2. Verwahrung und produktive Ausstellung werden gesondert freigegeben. |
-| S42-E3 | Phase 1: optionale, ausschließliche CA-Vertrauensstellung im Code (dieser Stand). |
-| S42-E4 | Abnahme nach der späteren Umstellung in dieser Reihenfolge:<br>1. lesende Agent-Aufrufe und Monitoring;<br>2. Publish nur auf einer ausdrücklich freigegebenen, unkritischen Testzone.<br>Die Auswirkung auf den Browserzugriff ist zu beachten (Abschnitt 8). |
+| S42-E2 | Eigene CA nur für die Agenten:<br>– CA ca. 5 Jahre, Serverzertifikate je 1 Jahr;<br>– Erneuerung spätestens 30 Tage vor Ablauf;<br>– je Server ein eigener privater Schlüssel;<br>– SANs = tatsächlich genutzte Agent-IPs plus passende DNS-Namen.<br>Der CA-Schlüssel liegt nicht auf ns1/ns2. |
+| S42-E3 | Phase 1: optionale, ausschließliche CA-Vertrauensstellung im Code (erledigt). |
+| S42-E4 | Abnahme in dieser Reihenfolge:<br>1. lesende Agent-Aufrufe und der reguläre Monitoring-Cron;<br>2. Publish nur auf einer ausdrücklich freigegebenen Testzone.<br>Die Auswirkung auf den Browserzugriff ist zu beachten. |
 
-## 2. Ist-Zustand (13.11.2026, ns1/ns2)
+**Für Phase 2 vorgeschlagen (Freigabe offen):**
+
+| Nr. | Vorschlag | Begründung |
+|---|---|---|
+| S42-E5 | **Agent-CA und Arbeitsplatz-Vertrauen trennen:**<br>– Das Agent-Zertifikat wird nur über eigene, IP-gebundene VirtualHosts ausgeliefert: ns1 `127.0.0.1:443`, ns2 `192.168.53.125:443`.<br>– Die Oberfläche auf `192.168.53.122:443` behält vorerst ihr bisheriges Zertifikat. Ihr Zertifikat kommt später mit S40 Teil C.<br>– Die Agent-CA wird **nicht** auf Arbeitsplätzen importiert. | Abschnitt 8. Kein Browser-Effekt in Phase 2. Eine kompromittierte Agent-CA hätte keine Wirkung auf Arbeitsplätze. Möglich, weil Apache auf ns1 getrennt auf `127.0.0.1:443` und `192.168.53.122:443` lauscht und ns1 seinen eigenen Agenten über `127.0.0.1` aufruft. Rückweg: Site deaktivieren. |
+| S42-E6 | **Ablaufüberwachung ist Voraussetzung für die Aktivierung**, nicht Nacharbeit. | Wegen Fail-Closed führt ein abgelaufenes Zertifikat zum Ausfall von Publish, Reload und Monitoring. |
+| S42-E7 | **CA mit `nameConstraints`** auf genau die Agent-Ziele beschränken: `IP:127.0.0.1/32`, `IP:192.168.53.125/32`, `DNS:ns1`, `DNS:ns2`, `DNS:.example.test`. Schlüssel RSA 3072. | Ein missbrauchter CA-Schlüssel kann dann keine Zertifikate für andere Ziele ausstellen. Wird von OpenSSL clientseitig durchgesetzt. Ein Fehler wird in der Vorprüfung (Schritt D) sichtbar. |
+| S42-E8 | **Verwahrung des CA-Schlüssels:**<br>– verschlüsselte Datei auf zwei getrennten Offline-Datenträgern;<br>– Passphrase im Passwortmanager (Zugriff Thomas plus Vertretung);<br>– Ausstellung auf einem bestimmten Admin-Rechner, Schlüssel nur dort temporär entschlüsselt, danach entfernt.<br>Konkreter Ort und Rechner: von Thomas festzulegen. | Vorgabe aus E2. Ohne zweite Sicherung wäre eine Erneuerung nur mit neuer CA möglich. |
+
+## 2. Ist-Zustand (13.11.2026, nach Update auf `b17d946`)
 
 **Agent-Adressen** (`servers.api_ip`):
 - ns1 ruft seinen eigenen Agenten über `127.0.0.1` auf.
 - ns2 wird von ns1 über `192.168.53.125` aufgerufen.
-- URL: `https://{api_ip}/dnsmanager-agent/api/v1/…`.
+- URL: `https://{api_ip}/dnsmanager-agent/api/v1/…` (`REMOTE_API_BASE`).
 
-**Apache:** Beide Hosts haben je einen HTTPS-VirtualHost `default-ssl.conf` (`*:443`) mit dem *snakeoil*-Zertifikat:
-- `/etc/ssl/certs/ssl-cert-snakeoil.pem`;
+**Apache lauscht:**
+- ns1 auf `127.0.0.1:443` und `192.168.53.122:443`;
+- ns2 auf `127.0.0.1:443` und `192.168.53.125:443`.
+
+Beide Hosts haben je einen VirtualHost `default-ssl.conf` (`*:443`, `DocumentRoot /var/www/html`) mit dem snakeoil-Zertifikat:
 - selbstsigniert;
 - SAN nur `DNS:ns1` bzw. `DNS:ns2`.
 
-Auf ns1 liefert derselbe VirtualHost die **Weboberfläche, die DynDNS-API und den Agenten** aus.
+Auf ns1 liefert dieser VirtualHost heute Oberfläche, DynDNS-API und Agent aus.
 
-**Anwendung** (`/etc/dnsmanager/ui_config.php` auf ns1):
+**Anwendung** (`/etc/dnsmanager/ui_config.php`, root:www-data 0640):
 - `CURL_SSL_VERIFYPEER = false`, `CURL_SSL_VERIFYHOST = 0`;
 - `AGENT_TLS_CA_FILE` ist nicht gesetzt.
 
 **Wer ruft die Agenten auf** (ns1, jeweils als `www-data`):
 - Apache/PHP: Publish, BIND-Reload, Diagnosen;
-- Cron `monitoring_run-cli.php` alle 5 Minuten.
+- Cron `monitoring_run-cli.php` alle 5 Minuten. `diagnostics.checked_at` wird in **UTC** geschrieben.
 
-**Warum eine eigene CA-Datei allein nicht reicht:** Das snakeoil-Zertifikat von ns1 liegt im System-Zertifikatsverzeichnis `/etc/ssl/certs`. Bei eingeschalteter Prüfung würde libcurl es deshalb ohne weitere Maßnahmen als vertrauenswürdig ansehen.
+**Umgebung:** kein `open_basedir`, NTP auf ns1 und ns2 synchron.
+
+**Warum eine eigene CA-Datei allein nicht reicht:** Das snakeoil-Zertifikat von ns1 liegt im System-Zertifikatsverzeichnis. libcurl würde ihm ohne `CURLOPT_CAPATH = null` vertrauen.
 
 ## 3. Verhalten der Code-Option
 
 | Konfiguration | Verhalten |
 |---|---|
-| `AGENT_TLS_CA_FILE` nicht gesetzt | wie bisher (Prüfung gemäß `CURL_SSL_VERIFYPEER`/`-HOST`, bei eingeschalteter Prüfung gegen den systemweiten CA-Bestand) |
-| `CURL_SSL_VERIFYPEER = false` (mit oder ohne CA-Datei) | wie bisher: keine Prüfung, die CA-Datei wird nicht verwendet |
-| `CURL_SSL_VERIFYPEER = true`, `CURL_SSL_VERIFYHOST = 2`, gültige CA-Datei | Vertrauen **ausschließlich** in die CA-Datei:<br>– `CURLOPT_CAINFO` = CA-Datei;<br>– `CURLOPT_CAPATH` = null, d. h. das systemweite Verzeichnis ist abgeschaltet;<br>– Prüfung von Kette, Laufzeit und IP-/DNS-SAN durch libcurl/OpenSSL. |
-| Prüfung an, aber CA-Datei fehlt, ist unlesbar, leer, ohne PEM-Zertifikat oder ein Verzeichnis, **oder** `CURL_SSL_VERIFYHOST ≠ 2` | **kein Verbindungsaufbau** (Fail-Closed). Der Aufruf liefert einen Fehler (`curlError`), den Publish, Reload und Monitoring wie jeden Verbindungsfehler anzeigen.<br>Es gibt nie einen Rückfall auf eine ungeprüfte Verbindung. |
-| CA-Datei mit mehreren Zertifikaten | Alle enthaltenen CAs sind vertrauenswürdig. Für den CA-Wechsel: alte + neue CA. |
+| `AGENT_TLS_CA_FILE` nicht gesetzt | wie bisher |
+| `CURL_SSL_VERIFYPEER = false` | wie bisher: keine Prüfung, die CA-Datei wird nicht verwendet |
+| `VERIFYPEER = true`, `VERIFYHOST = 2`, gültige CA-Datei | Vertrauen **ausschließlich** in die CA-Datei:<br>– `CURLOPT_CAINFO` = CA-Datei, `CURLOPT_CAPATH = null`;<br>– Prüfung von Kette, Laufzeit, Verwendungszweck und IP-/DNS-SAN durch OpenSSL. |
+| Prüfung an, CA-Konfiguration ungültig | **kein Verbindungsaufbau** (Fail-Closed, Abschnitt 4) |
+| CA-Datei mit mehreren CAs | alle enthaltenen CAs sind vertrauenswürdig (CA-Wechsel) |
 
-Fehlermeldungen enthalten den Pfad der CA-Datei, aber nie den Bearer-Token.
+## 4. Fehlerklassen: Konfigurationsfehler vs. Zertifikatsfehler
 
-## 4. CA erstellen (Phase 2, freigabepflichtig)
+Alle Fehler erscheinen als `curlError`. Die Aufrufer zeigen sie wie jeden Verbindungsfehler an:
+- Monitoring: Diagnose `error`, Meldung „Verbindungsfehler: …“;
+- BIND-Reload: Fehlermeldung;
+- Publish: Fehler je Server.
 
-**Wo:** auf einem dafür bestimmten Admin-Rechner bzw. einem Offline-Medium – **nicht** auf ns1/ns2.
+Der Bearer-Token ist nie Teil der Meldung.
 
-**Schlüssel:**
-- verschlüsselt (AES-256);
-- Passphrase im Passwortmanager;
-- mindestens zwei getrennte Offline-Sicherungen;
-- Wiederherstellung einmal probeweise prüfen.
+**A – Konfigurationsfehler vor dem Verbindungsaufbau.** Es geht keine Anfrage an den Agenten, und der HTTP-Code ist 0.
 
-```bash
-# CA-Schlüssel (verschlüsselt) und CA-Zertifikat, Laufzeit ca. 5 Jahre
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -aes-256-cbc -out dnsmanager-agent-ca.key
-openssl req -x509 -new -key dnsmanager-agent-ca.key -sha256 -days 1826 \
-  -subj "/O=Twilight-Networks/CN=DNS-Manager Agent CA 2026" \
-  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
-  -addext "keyUsage=critical,keyCertSign,cRLSign" \
-  -addext "subjectKeyIdentifier=hash" \
-  -out dnsmanager-agent-ca.pem
-openssl x509 -in dnsmanager-agent-ca.pem -noout -subject -enddate -fingerprint -sha256
-```
-
-Fingerprint und Ablaufdatum dokumentieren. Nur `dnsmanager-agent-ca.pem` (öffentlich) wird verteilt.
-
-## 5. Serverzertifikate ausstellen (je Host, Phase 2)
-
-Der **private Schlüssel wird auf dem jeweiligen Server erzeugt** und verlässt ihn nicht. Zum CA-Rechner wird nur der CSR übertragen.
-
-**SANs:**
-
-| Host | SAN | Begründung |
+| Meldung (Beginn) | Ursache | Behebung |
 |---|---|---|
-| ns1 | `IP:127.0.0.1, IP:192.168.53.122, DNS:ns1, DNS:ns1.example.test` | `127.0.0.1` ist die tatsächliche Agent-Adresse von ns1. Die LAN-IP und die Namen dienen der Weboberfläche und Diagnose. |
-| ns2 | `IP:192.168.53.125, DNS:ns2, DNS:ns2.example.test` | Agent-Adresse aus Sicht von ns1 |
+| `Agent-TLS-Konfiguration ungültig: CURL_SSL_VERIFYHOST muss bei AGENT_TLS_CA_FILE 2 sein` | `VERIFYHOST` ist 0 oder 1 | `define('CURL_SSL_VERIFYHOST', 2);` |
+| `… CA-Datei <Pfad> nicht vorhanden oder nicht lesbar` | Pfad falsch, Datei fehlt, ist ein Verzeichnis, oder Rechte erlauben `www-data` kein Lesen | Datei/Rechte prüfen (root:www-data 0640) |
+| `… CA-Datei <Pfad> enthält kein PEM-Zertifikat` | Datei leer, DER statt PEM, falsche Datei (z. B. Schlüssel) | PEM-CA-Zertifikat ablegen |
+| `error adding trust anchors from file: <Pfad>` (von libcurl) | PEM-Rahmen vorhanden, Inhalt aber beschädigt; oder die Datei ist nach der Prüfung verschwunden | Datei neu ablegen, `openssl x509 -in … -noout` prüfen |
 
-**Auf dem Server** (Beispiel ns1), als root:
+**B – Zertifikatsfehler während der TLS-Verifikation.** Die Verbindung wird aufgebaut, OpenSSL lehnt das Serverzertifikat ab, und es geht keine HTTP-Anfrage an den Agenten.
+
+| Meldung (Beispiel) | Bedeutung | Typische Ursache |
+|---|---|---|
+| `SSL certificate OpenSSL verify result: unable to get local issuer certificate (20)` | Aussteller nicht in der CA-Datei | Server liefert noch snakeoil oder ein Zertifikat einer anderen CA; falsche CA-Datei; nach CA-Wechsel alte CA entfernt, bevor die Server umgestellt waren |
+| `… self-signed certificate (18)` | selbstsigniertes Zertifikat | Server liefert noch snakeoil; falscher VirtualHost greift |
+| `… certificate has expired (10)` / `certificate is not yet valid (9)` | Laufzeit | Erneuerung versäumt / Uhrzeit falsch |
+| `SSL: no alternative certificate subject name matches target ipv4 address '…'` | SAN passt nicht zur Agent-Adresse | `servers.api_ip` geändert oder SAN falsch ausgestellt |
+| `… permitted subtree violation (47)` | Name verletzt die `nameConstraints` der CA (nur bei E7) | SAN außerhalb der zugelassenen Ziele. Passt zugleich der SAN nicht zur Zieladresse, meldet libcurl gegebenenfalls zuerst den SAN-Fehler. |
+| `… unsupported certificate purpose (26)` | falscher Verwendungszweck | `extendedKeyUsage=serverAuth` fehlt |
+
+**C – Fehler nach erfolgreicher TLS-Prüfung** (wie bisher): HTTP 401/403 wegen Token oder IP-Freigabeliste, 5xx usw. Sie belegen, dass die TLS-Prüfung bestanden wurde.
+
+## 5. Umsetzungsrisiken
+
+| Nr. | Risiko | Gegenmaßnahme |
+|---|---|---|
+| R1 | Zertifikat läuft ab → wegen Fail-Closed Ausfall von Publish, Reload und Monitoring | E6: Überwachung vor Aktivierung; Erneuerung ≥ 30 Tage vorher; Kalendereintrag |
+| R2 | Verlust des CA-Schlüssels → keine Erneuerung möglich | E8: zwei Offline-Sicherungen; Wiederherstellung einmal prüfen; sonst Neuaufbau mit Übergangsbündel |
+| R3 | Kompromittierung des CA-Schlüssels | Offline-Verwahrung (E8); `nameConstraints` (E7); kein Import auf Arbeitsplätzen (E5) |
+| R4 | Browser sehen auf ns1 plötzlich ein anderes Zertifikat | E5: Agent-Zertifikat nur auf `127.0.0.1:443`; Oberfläche unverändert |
+| R5 | Falscher VirtualHost greift (z. B. `*:443` statt der IP-Site) | Vorprüfung D3 je Zieladresse mit `openssl s_client`; `apache2ctl -S` |
+| R6 | CA-Datei für `www-data` nicht lesbar oder beschädigt | Vorprüfung D2 als `www-data`; Fehlerklasse A ist sofort eindeutig sichtbar |
+| R7 | `servers.api_ip` wird später geändert → SAN passt nicht mehr | Hinweis in Abschnitt 9: Adressänderung erfordert ein neues Zertifikat |
+| R8 | Uhrzeitabweichung → „not yet valid“/„expired“ | NTP-Prüfung in D1 (derzeit synchron) |
+| R9 | Apache-Reload während eines Publish/Cron-Laufs | Reload außerhalb der Minuten :x0/:x5; kein laufender Publish; `apache2ctl configtest` vorher |
+| R10 | Tippfehler in `ui_config.php` → PHP-Fehler in Oberfläche und Cron | Sicherung, `php -l` nach der Änderung, Rechte root:www-data 0640 beibehalten |
+| R11 | Privater Server-Schlüssel gelangt nach außen | Schlüssel wird auf dem Server erzeugt, nur der CSR verlässt den Host; 0600 root |
+| R12 | Agent-CA landet im Systemspeicher (`/usr/local/share/ca-certificates`) | **Nicht** dort ablegen. Die Anwendung nutzt ausschließlich `/etc/dnsmanager/agent-ca.pem`. |
+| R13 | `openssl x509 -checkend` prüft bei Bündeln nur das erste Zertifikat | Überwachungsskript prüft jedes Zertifikat einzeln (Abschnitt 9) |
+
+## 6. Schrittfolge Phase 2 (nach Freigabe E5–E8)
+
+**Trockenlauf** (13.11.2026, ns1, Wegwerf-CA mit 3 Tagen Laufzeit in `/tmp`, danach gelöscht; keine Änderung an Apache, `/etc` oder `ui_config.php`). Ohne Befund geprüft:
+- A–C: CA mit `nameConstraints`, verschlüsselter Schlüssel, Ausstellung;
+- `openssl verify` mit `-verify_ip`;
+- Zertifikat außerhalb der `nameConstraints` → „permitted subtree violation (47)“;
+- D2: CA-Datei 0640 root:www-data, für `www-data` lesbar;
+- D3: Schlüssel passt; Gegenprobe mit fremdem Schlüssel erkannt;
+- D5: `s_client` → `Verification: OK`;
+- D6: PHP/libcurl als `www-data` mit installiertem Code `b17d946` → HTTP 200, leerer `curlError`;
+- Überwachungsskript: warnt bei kurzer Laufzeit, bei nicht erreichbarem Ziel und für jede CA im Bündel.
+
+Nicht trockengelaufen (Apache-/Konfigurationsänderung): D4, E, F, G.
+
+Platzhalter:
+- `<CA>` = Admin-Rechner für die Ausstellung (E8);
+- `<NS>` = ns1 bzw. ns2;
+- `<AGENT_IP>` = `127.0.0.1` (ns1) bzw. `192.168.53.125` (ns2).
+
+**A – CA erstellen** (auf `<CA>`, einmalig):
+```bash
+cat > ca.cnf <<'EOF'
+[req]
+distinguished_name = dn
+x509_extensions = v3_ca
+prompt = no
+[dn]
+O = Twilight-Networks
+CN = DNS-Manager Agent CA 2026
+[v3_ca]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+nameConstraints = critical,permitted;IP:127.0.0.1/255.255.255.255,permitted;IP:192.168.53.125/255.255.255.255,permitted;DNS:ns1,permitted;DNS:ns2,permitted;DNS:.example.test
+EOF
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -aes-256-cbc -out dnsmanager-agent-ca.key   # fragt die Passphrase ab
+openssl req -x509 -new -config ca.cnf -key dnsmanager-agent-ca.key -sha256 -days 1826 -out dnsmanager-agent-ca.pem
+openssl x509 -in dnsmanager-agent-ca.pem -noout -text | grep -A2 -E "Basic Constraints|Name Constraints|Not After"
+openssl x509 -in dnsmanager-agent-ca.pem -noout -fingerprint -sha256
+```
+Danach:
+- Schlüssel auf beide Offline-Datenträger sichern (E8).
+- Fingerprint und Ablaufdatum dokumentieren.
+
+Ohne E7 entfällt die Zeile `nameConstraints`.
+
+**B – Schlüssel und CSR je Server** (auf `<NS>`, als root):
 ```bash
 install -d -m 750 -o root -g root /etc/ssl/dnsmanager
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /etc/ssl/dnsmanager/agent.key
-chmod 600 /etc/ssl/dnsmanager/agent.key
-openssl req -new -key /etc/ssl/dnsmanager/agent.key -subj "/O=Twilight-Networks/CN=ns1" -out /root/ns1-agent.csr
+( umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /etc/ssl/dnsmanager/agent.key )
+openssl req -new -key /etc/ssl/dnsmanager/agent.key -subj "/O=Twilight-Networks/CN=$(hostname)" -out /root/$(hostname)-agent.csr
 ```
+Nur der CSR wird zum `<CA>` übertragen.
 
-**Auf dem CA-Rechner:**
+**C – Ausstellen** (auf `<CA>`).
+
+SANs mit E5:
+
+| Host | SAN |
+|---|---|
+| ns1 | `IP:127.0.0.1,DNS:ns1,DNS:ns1.example.test` |
+| ns2 | `IP:192.168.53.125,DNS:ns2,DNS:ns2.example.test` |
+
+Ohne E5 (gemeinsamer VirtualHost auf ns1) zusätzlich `IP:192.168.53.122` für ns1. Das widerspricht aber E7 bzw. muss dort ergänzt werden.
+
 ```bash
-cat > ns1.ext <<'EOF'
-basicConstraints=critical,CA:FALSE
-keyUsage=critical,digitalSignature,keyEncipherment
-extendedKeyUsage=serverAuth
-subjectAltName=IP:127.0.0.1,IP:192.168.53.122,DNS:ns1,DNS:ns1.example.test
-authorityKeyIdentifier=keyid
-EOF
-openssl x509 -req -in ns1-agent.csr -CA dnsmanager-agent-ca.pem -CAkey dnsmanager-agent-ca.key \
-  -CAserial dnsmanager-agent-ca.srl -CAcreateserial -sha256 -days 365 -extfile ns1.ext -out ns1-agent.pem
-openssl x509 -in ns1-agent.pem -noout -subject -ext subjectAltName -enddate
-openssl verify -CAfile dnsmanager-agent-ca.pem ns1-agent.pem
+H=ns1; IP=127.0.0.1; SAN="IP:$IP,DNS:ns1,DNS:ns1.example.test"     # ns2: H=ns2; IP=192.168.53.125; SAN="IP:$IP,DNS:ns2,DNS:ns2.example.test"
+printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=%s\nauthorityKeyIdentifier=keyid\n' "$SAN" > $H.ext
+openssl x509 -req -in $H-agent.csr -CA dnsmanager-agent-ca.pem -CAkey dnsmanager-agent-ca.key \
+  -CAserial dnsmanager-agent-ca.srl -CAcreateserial -sha256 -days 365 -extfile $H.ext -out $H-agent.pem
+openssl verify -CAfile dnsmanager-agent-ca.pem -no-CApath -no-CAstore -purpose sslserver -verify_ip $IP $H-agent.pem
 ```
+Danach entschlüsselte Kopien des CA-Schlüssels vom `<CA>` entfernen.
 
-Für ns2 gilt dasselbe mit dem ns2-SAN aus der Tabelle oben.
+**D – Vorprüfungen vor jeder Umschaltung.** Die Prüfung ist nicht bestanden, wenn eine einzige Prüfung fehlschlägt.
 
-## 6. Installation und Umstellung (Phase 2, Reihenfolge)
-
-**Vorbereitung:**
-- Snapshot-/Backup-Stand klären.
-- Sichern:
-  - `/etc/apache2/sites-available/default-ssl.conf` (ns1, ns2);
-  - `/etc/dnsmanager/ui_config.php` (ns1).
-- Laufenden Commit festhalten.
-- Admin-Browser vorbereiten (Abschnitt 8).
-
-1. **Zertifikat auf ns2 einbauen.**
-   - `ns2-agent.pem` nach `/etc/ssl/dnsmanager/agent.crt` (0644).
-   - In `default-ssl.conf` eintragen:
-     - `SSLCertificateFile /etc/ssl/dnsmanager/agent.crt`
-     - `SSLCertificateKeyFile /etc/ssl/dnsmanager/agent.key`
-   - `apache2ctl configtest`, dann `systemctl reload apache2`.
-   - Ohne Wirkung auf die Anwendung, solange deren Prüfung noch aus ist.
-2. **Zertifikat auf ns1 einbauen** (wie Schritt 1).
-   - Ab hier sehen Browser auf der ns1-Oberfläche das neue Zertifikat (Abschnitt 8).
-3. **CA-Datei auf ns1 ablegen:**
+1. **Uhrzeit:** `timedatectl | grep synchronized` auf ns1 und ns2 → `yes`.
+2. **Dateien auf ns1** (CA-Datei, als root und als `www-data`):
    ```bash
    install -m 640 -o root -g www-data dnsmanager-agent-ca.pem /etc/dnsmanager/agent-ca.pem
+   stat -c '%a %U:%G' /etc/dnsmanager/agent-ca.pem                    # 640 root:www-data
+   sudo -u www-data openssl x509 -in /etc/dnsmanager/agent-ca.pem -noout -subject -enddate -fingerprint -sha256
+   grep -c 'BEGIN CERTIFICATE' /etc/dnsmanager/agent-ca.pem            # 1 (beim CA-Wechsel 2)
    ```
-4. **Vorab-Prüfung von ns1 aus**, ausschließlich mit der Agent-CA und ohne Systemverzeichnis:
+3. **Zertifikat, Schlüssel und Kette je Server:**
+   ```bash
+   install -m 644 -o root -g root <NS>-agent.pem /etc/ssl/dnsmanager/agent.crt
+   stat -c '%a %U:%G %n' /etc/ssl/dnsmanager /etc/ssl/dnsmanager/*     # 750 / 600 key / 644 crt
+   [ "$(openssl x509 -in /etc/ssl/dnsmanager/agent.crt -noout -pubkey | sha256sum)" = \
+     "$(openssl pkey -in /etc/ssl/dnsmanager/agent.key -pubout | sha256sum)" ] && echo "Schlüssel passt"
+   openssl verify -CAfile dnsmanager-agent-ca.pem /etc/ssl/dnsmanager/agent.crt
+   openssl x509 -in /etc/ssl/dnsmanager/agent.crt -noout -ext subjectAltName,extendedKeyUsage -dates
+   ```
+   Für das Agent-Zertifikat wird keine Zwischenkette benötigt, weil es direkt von der CA ausgestellt ist (`pathlen:0`). `SSLCertificateFile` enthält nur das Serverzertifikat.
+4. **Agent-VirtualHost (E5)** je Server, zunächst nur anlegen und testen. Die neue Site `/etc/apache2/sites-available/dnsmanager-agent-tls.conf`:
+   ```apache
+   <VirtualHost <AGENT_IP>:443>
+       ServerName <NS>
+       DocumentRoot /var/www/html
+       ErrorLog ${APACHE_LOG_DIR}/error.log
+       CustomLog ${APACHE_LOG_DIR}/access.log combined
+       SSLEngine on
+       SSLCertificateFile    /etc/ssl/dnsmanager/agent.crt
+       SSLCertificateKeyFile /etc/ssl/dnsmanager/agent.key
+   </VirtualHost>
+   ```
+   Dann:
+   ```bash
+   a2ensite dnsmanager-agent-tls && apache2ctl configtest && apache2ctl -S 2>&1 | grep -E '443|dnsmanager'
+   systemctl reload apache2      # außerhalb der Minuten :x0/:x5, kein laufender Publish
+   ```
+   Der speziellere IP-VirtualHost hat für `<AGENT_IP>` Vorrang vor `default-ssl.conf` (`*:443`). Die Oberfläche auf `192.168.53.122:443` behält das bisherige Zertifikat. Solange `VERIFYPEER = false` ist, hat das keine Wirkung auf die Anwendung.
+5. **TLS-Prüfung von ns1 aus**, ausschließlich mit der Agent-CA (OpenSSL):
    ```bash
    for t in 127.0.0.1 192.168.53.125; do
      echo | openssl s_client -connect $t:443 -CAfile /etc/dnsmanager/agent-ca.pem -no-CApath -no-CAstore \
        -verify_ip $t -verify_return_error -brief 2>&1 | grep -E 'Verification|verify error'
    done
-   sudo -u www-data test -r /etc/dnsmanager/agent-ca.pem && echo lesbar
+   echo | openssl s_client -connect 192.168.53.122:443 2>/dev/null | openssl x509 -noout -issuer   # Oberfläche: unverändert
    ```
-   Erwartet: `Verification: OK` für beide Ziele.
-5. **Anwendung umstellen** in `/etc/dnsmanager/ui_config.php`:
+   Erwartet: `Verification: OK` für beide Agent-Ziele. Die Oberfläche zeigt weiterhin den bisherigen Aussteller.
+6. **Prüfung mit dem tatsächlichen Anwendungs-Stack** (PHP/libcurl als `www-data`, ohne Token):
+   ```bash
+   sudo -u www-data php -r 'require "/usr/share/dnsmanager/web/inc/deploy/BindAgentClient.php";
+     foreach (["127.0.0.1", "192.168.53.125"] as $ip) {
+       $r = (new BindAgentClient("/dnsmanager-agent/api/v1", true, 2, "/etc/dnsmanager/agent-ca.pem"))->get($ip, "/system/status.php", "", 5, 10);
+       printf("%s HTTP %d curlError=[%s]\n", $ip, $r["httpCode"], $r["curlError"]); }'
+   ```
+   Erwartet: leerer `curlError` und HTTP 401 „Fehlender Authorization-Header“ (Fehlerklasse C: TLS bestanden, Token absichtlich leer). So antworten beide Agenten heute ohne Token, geprüft am 13.11.2026. Ein nicht leerer `curlError` bedeutet Abbruch; die Ursache steht in Abschnitt 4.
+7. **Ablaufüberwachung aktiv** (E6, Abschnitt 9) und einmal manuell ausgeführt.
+
+**E – Aktivierung** (ns1).
+1. Sichern:
+   ```bash
+   cp -p /etc/dnsmanager/ui_config.php /root/<x>-update/ui_config.php.vor-s42
+   ```
+2. In `ui_config.php` setzen:
    ```php
    define('CURL_SSL_VERIFYPEER', true);
    define('CURL_SSL_VERIFYHOST', 2);
    define('AGENT_TLS_CA_FILE', '/etc/dnsmanager/agent-ca.pem');
    ```
-6. **Abnahme lesend (E4):**
-   - Server-Status/Diagnosen in der Oberfläche für ns1 und ns2;
-   - den nächsten Cron-Lauf des Monitorings abwarten;
-   - Monitoring-Ergebnisse und PHP-/Apache-Fehlerprotokoll auf TLS-Fehler prüfen.
-7. **Schreibende Abnahme (E4):**
-   - BIND-Reload eines Servers;
-   - danach Publish **nur** auf einer ausdrücklich freigegebenen, unkritischen Testzone;
-   - Serial und Antwort auf ns1/ns2 prüfen.
+3. `php -l /etc/dnsmanager/ui_config.php` ausführen und prüfen, dass die Rechte unverändert root:www-data 0640 sind.
+
+**F – Abnahme lesend (E4).**
+1. Server-Status und Diagnosen in der Oberfläche für ns1 und ns2.
+2. Den nächsten regulären Monitoring-Cron abwarten (kein manueller Lauf, F7). Danach gilt:
+   - `diagnostics` für beide Server mit `checked_at` (UTC) nach der Umstellung `ok`;
+   - keine neuen `diagnostic_log`-Wechsel auf `error`;
+   - Agent-Zugriffslog auf ns1/ns2 mit HTTP 200.
+3. PHP-/Apache-Fehlerprotokoll ohne TLS-Meldungen.
+
+**G – Abnahme schreibend (E4).**
+1. BIND-Reload je Server über die Oberfläche.
+2. Publish **nur** auf einer von Thomas ausdrücklich freigegebenen Testzone.
+3. Serial und Antworten auf ns1/ns2 prüfen (`dig @192.168.53.122` / `@192.168.53.125`).
 
 ## 7. Rückweg
 
-**Anwendung** (sofort wirksam, ohne Neustart): in `ui_config.php` zurück auf
-```php
-define('CURL_SSL_VERIFYPEER', false);
-define('CURL_SSL_VERIFYHOST', 0);
-```
-Dazu `AGENT_TLS_CA_FILE` auskommentieren oder die Datei aus der Sicherung zurückspielen.
-- Die Fail-Closed-Logik greift dann nicht mehr. Agent-Aufrufe laufen wie vorher ohne Prüfung.
+Je nach Lage wird nur die passende Stufe ausgeführt:
 
-**Apache:** `default-ssl.conf` aus der Sicherung zurückspielen (snakeoil), `apache2ctl configtest`, `systemctl reload apache2`.
-- Nur nötig, wenn das neue Zertifikat selbst Probleme macht, z. B. bei Browsern oder DynDNS-Clients.
+1. **Anwendung** (sofort, ohne Neustart): `ui_config.php` aus der Sicherung zurückspielen, d. h. wieder `VERIFYPEER = false`, `VERIFYHOST = 0`, ohne `AGENT_TLS_CA_FILE`. Danach `php -l`.
+   - Agent-Aufrufe laufen wie vor der Umstellung.
+   - Die CA-Datei kann liegen bleiben.
+2. **Apache (E5):**
+   ```bash
+   a2dissite dnsmanager-agent-tls && apache2ctl configtest && systemctl reload apache2
+   ```
+   Danach liefert wieder `default-ssl.conf` (snakeoil). `default-ssl.conf` wird in Phase 2 nicht verändert.
+3. **Code:** kein Rücksetzen nötig. Ohne `AGENT_TLS_CA_FILE` verhält sich der Code wie vor PR #68.
 
-**Woran ein Fehler zu erkennen ist:**
-- Bei falscher Konfiguration schlagen alle Agent-Aufrufe sichtbar fehl:
-  - Monitoring-Status „Verbindungsfehler: Agent-TLS-Konfiguration ungültig …“ bzw. OpenSSL-Prüffehler;
-  - Publish-/Reload-Fehlermeldung.
-- Es entsteht kein stiller unsicherer Zustand.
+**Reihenfolge bei einer Störung nach Schritt E:** zuerst Stufe 1, damit Publish und Monitoring sofort wieder funktionieren. Dann die Ursache anhand der Fehlerklasse (Abschnitt 4) klären. Stufe 2 nur, wenn das Zertifikat selbst ersetzt werden muss.
 
-**Code:** Ein Zurücksetzen auf einen Commit ohne die Option ist nicht nötig. Ohne `AGENT_TLS_CA_FILE` verhält sich der Code wie vorher.
+Bei falscher Konfiguration entsteht kein stiller unsicherer Zustand. Fehler sind sofort in Monitoring, Publish und Reload sichtbar.
 
-## 8. Auswirkungen auf Browser und DynDNS-Clients
+## 8. Browser, Arbeitsplätze und DynDNS-Clients – Bewertung der Trennung
 
-Auf ns1 nutzen Weboberfläche und DynDNS-API denselben VirtualHost wie der Agent.
+**Variante getrennt (E5, empfohlen):**
+- Nur ns1 (die Anwendung) vertraut der Agent-CA.
+- Das Agent-Zertifikat wird ausschließlich auf den Agent-Adressen ausgeliefert: `127.0.0.1` auf ns1, `192.168.53.125` auf ns2.
+- Browser und DynDNS-Clients auf `https://192.168.53.122/` sehen unverändert das bisherige Zertifikat. Phase 2 hat damit keinen Browser-Effekt.
+- Die Agent-CA wird nirgends sonst importiert. Ein Missbrauch ihres Schlüssels bedroht nur die Agent-Verbindungen, mit E7 zusätzlich nur die zugelassenen Ziele.
+- Das Zertifikat der Oberfläche wird unabhängig in S40 Teil C gelöst (Unternehmens-PKI oder öffentliche CA per ACME DNS-01). Dafür gibt es eigene Freigaben; HSTS erst danach.
+- Kosten: eine zusätzliche, kleine Apache-Site je Host.
 
-**Browser:**
-- Nach Schritt 2 erhalten Browser das von der Agent-CA ausgestellte Zertifikat.
-- Ohne importierte CA zeigen sie weiterhin eine Warnung (wie heute bei snakeoil).
-- Mit importierter CA ist der Zugriff über `https://192.168.53.122/` bzw. `https://ns1.example.test/` warnungsfrei, weil IP- und DNS-SAN vorhanden sind.
+**Variante gemeinsam:**
+- Der VirtualHost `default-ssl.conf` auf ns1 bekommt das Agent-Zertifikat mit zusätzlichem SAN `IP:192.168.53.122`.
+- Alle Admin-Arbeitsplätze müssen die Agent-CA als Stammzertifizierungsstelle importieren, sonst sehen sie weiterhin eine Warnung.
+- Damit vertrauen Arbeitsplätze einer CA, deren Schlüssel nur für Maschinenvertrauen gedacht war. Ohne `nameConstraints` gilt dieses Vertrauen für beliebige Namen.
+- Der Zertifikatswechsel wirkt sofort im Browser, und DynDNS-Clients brauchen die Agent-CA.
 
-**CA-Import:**
-- Nur auf den Admin-Arbeitsplätzen, unter Windows in „Vertrauenswürdige Stammzertifizierungsstellen“ des Benutzers bzw. per Gruppenrichtlinie.
-- Damit vertrauen diese Rechner allem, was die Agent-CA ausstellt. Deshalb ist eine strikte Verwahrung des CA-Schlüssels nötig.
-- Optional kann die CA mit `nameConstraints` auf die genannten IPs/Namen beschränkt werden. Das ist bei der Freigabe von Phase 2 zu entscheiden.
-
-**HSTS:** weiterhin **nicht** aktivieren (S40 Teil C). Browser wenden HSTS nicht auf IP-Adressen an.
-
-**DynDNS-Clients** (derzeit keine aktiven externen Clients erkennbar):
-- Künftige Clients brauchen die Agent-CA oder eine andere vertrauenswürdige Zertifikatskette.
-- Alternativ kann die Oberfläche später ein eigenes, z. B. öffentlich ausgestelltes Zertifikat erhalten (S40 Teil C). Dann gilt das Agent-Zertifikat nur für den Agentenpfad.
-- Das erfordert einen eigenen VirtualHost bzw. Namen und ist nicht Teil von S42.
+**Empfehlung:** getrennt (E5). HSTS bleibt in beiden Varianten deaktiviert, bis S40 Teil C abgeschlossen ist.
 
 ## 9. Erneuerung, CA-Wechsel und Überwachung
 
-**Serverzertifikate** (1 Jahr): spätestens **30 Tage vor Ablauf** neu ausstellen.
-- Dabei möglichst einen neuen Schlüssel erzeugen (Abschnitt 5).
-- Danach Apache reload. An der Anwendung ist nichts zu ändern.
+**Serverzertifikate** (365 Tage): spätestens 30 Tage vor Ablauf erneuern.
+- Schritte B (neuer Schlüssel empfohlen), C, D3–D6, dann `systemctl reload apache2`. An der Anwendung ist nichts zu ändern.
+- Eine Änderung von `servers.api_ip` erfordert ebenfalls ein neues Zertifikat mit passendem SAN, **vor** der Adressänderung.
 
 **CA-Wechsel** (spätestens im 5. Jahr; isoliert getestet, Fall C07):
-1. neue CA erstellen;
-2. `agent-ca.pem` auf ns1 = alte + neue CA (Übergangsbündel);
-3. Serverzertifikate aus der neuen CA ausstellen und einbauen;
-4. danach die alte CA aus `agent-ca.pem` entfernen.
+1. neue CA (A);
+2. `agent-ca.pem` = alte + neue CA, danach D2;
+3. Serverzertifikate aus der neuen CA (B, C, D3–D6);
+4. alte CA aus `agent-ca.pem` entfernen, erneut D2 und D6.
 
-**Ablaufüberwachung** (Phase 2, noch nicht umgesetzt):
-- täglich auf ns1 prüfen, ob die Zertifikate beider Agent-Endpunkte und die CA in weniger als 30 Tagen ablaufen;
-- Ausgabe per Log/Mail.
-
-Beispiel:
+**Ablaufüberwachung** (E6) als tägliches Skript auf ns1, z. B. `/etc/cron.daily/dnsmanager-agent-tls-check` (root 0755). Meldungen gehen per `logger` nach `auth.log`/Journal. Eine Mail-Weiterleitung ist gesondert festzulegen.
 ```bash
+#!/bin/bash
+# Warnt, wenn ein Agent-Zertifikat oder eine Agent-CA in weniger als 30 Tagen abläuft oder nicht prüfbar ist.
+LIMIT=$((30*86400)); CA=/etc/dnsmanager/agent-ca.pem
+warn() { logger -p auth.warning -t dnsmanager-tls "$1"; }
 for t in 127.0.0.1 192.168.53.125; do
-  echo | openssl s_client -connect $t:443 2>/dev/null | openssl x509 -noout -checkend $((30*86400)) >/dev/null \
-    || logger -p auth.warning "dnsmanager: Agent-Zertifikat $t läuft in weniger als 30 Tagen ab"
+  c=$(echo | timeout 10 openssl s_client -connect $t:443 2>/dev/null | openssl x509 2>/dev/null)
+  [ -z "$c" ] && { warn "Agent $t: kein Zertifikat abrufbar"; continue; }
+  echo "$c" | openssl x509 -noout -checkend $LIMIT >/dev/null || warn "Agent $t: Zertifikat läuft in weniger als 30 Tagen ab ($(echo "$c" | openssl x509 -noout -enddate))"
 done
-openssl x509 -in /etc/dnsmanager/agent-ca.pem -noout -checkend $((30*86400)) >/dev/null \
-  || logger -p auth.warning "dnsmanager: Agent-CA läuft in weniger als 30 Tagen ab"
+# jede CA im Bündel einzeln prüfen
+d=$(mktemp -d)
+awk -v d="$d" '/BEGIN CERTIFICATE/{n++} n{print > (d "/ca" n ".pem")}' "$CA"
+ls "$d"/ca*.pem >/dev/null 2>&1 || warn "Agent-CA-Datei $CA enthält kein Zertifikat"
+for f in "$d"/ca*.pem; do
+  [ -e "$f" ] || continue
+  openssl x509 -in "$f" -noout -checkend $LIMIT >/dev/null || warn "Agent-CA läuft in weniger als 30 Tagen ab: $(openssl x509 -in "$f" -noout -subject -enddate | tr '\n' ' ')"
+done
+rm -rf "$d"
 ```
-Bei einem Bündel prüft `openssl x509` nur das erste Zertifikat. Für den Übergang jede CA einzeln prüfen.
+Das Skript braucht keine Geheimnisse und beeinflusst keine Locks. Es ist vor der Aktivierung einmal manuell auszuführen und mit einem Testzertifikat kurzer Laufzeit auf Auslösung zu prüfen.
 
-## 10. Nachweis Phase 1 (isolierter Test t70, ns1, 13.11.2026)
+## 10. Was Phase 2 nicht ändert
+
+- Datenbankstruktur und `servers.api_ip`;
+- Agent-Code und Agent-Token;
+- `default-ssl.conf`;
+- Firewall und Fail2Ban;
+- HSTS.
+
+## 11. Nachweis Phase 1 (isolierter Test t70, ns1, 13.11.2026)
 
 **Umgebung:**
 - PHP 8.5.4, libcurl 8.18.0, OpenSSL 3.5.5, Ubuntu;
@@ -243,7 +364,7 @@ Bei einem Bündel prüft `openssl x509` nur das erste Zertifikat. Für den Über
 - lokale TLS-Testserver auf `127.0.0.1`/`127.0.1.1`, Aufrufe als `www-data`;
 - keine Agenten, keine DNS-Verteilung, keine Datenbank, keine Monitoring-Locks.
 
-**Ergebnisse** (alle bestanden):
+**Ergebnisse** (alle bestanden, 34/34):
 
 | Fall | Erwartung | Ergebnis |
 |---|---|---|
@@ -253,16 +374,20 @@ Bei einem Bündel prüft `openssl x509` nur das erste Zertifikat. Für den Über
 | C04 | fremde CA → Ablehnung | „unable to get local issuer certificate (20)“ |
 | C05 | selbstsigniert → Ablehnung | „self-signed certificate (18)“ |
 | C06 | snakeoil (systemweit vertraut, Name `ns1` passend) → Ablehnung | „self-signed certificate (18)“ |
-| C06K | Kontrolle: CA-Datei = snakeoil → Erfolg | Erfolg. Die Ablehnung in C06 liegt also an der Vertrauensstellung, nicht am Namen. |
+| C06K | Kontrolle: CA-Datei = snakeoil → Erfolg | Erfolg. Die Ablehnung in C06 liegt also an der Vertrauensstellung. |
 | C07A/B, C07N, C07K | Bündel alt+neu → beide gültig; nur neue CA → neue gültig; nur alte CA → neue abgelehnt | wie erwartet |
-| C08–C12, C14 | CA-Datei fehlt / unlesbar (root 0600) / leer / ohne PEM / Verzeichnis / PEM-ähnlich ungültig → Ablehnung | Ablehnung. Bei C08–C12 nachweislich keine Anfrage am Server. |
+| C08–C12, C14 | CA-Datei fehlt / unlesbar / leer / ohne PEM / Verzeichnis / PEM-ähnlich ungültig → Ablehnung | Ablehnung. Bei C08–C13B nachweislich keine Anfrage am Server. |
 | C13 / C13B | `VERIFYHOST` 0 bzw. 1 mit CA-Datei → Ablehnung | Ablehnung ohne Verbindungsaufbau |
-| C15 / C15B | Prüfung aus (+ CA-Datei bzw. fehlende Datei) → bisheriger Modus | Verbindung wie bisher |
-| D (18 Fälle) | ohne CA-Einstellung: Basis und PR identisch (Prüfung aus / an mit Host 2 / an mit Host 0 × 6 Ziele) | identisch |
+| C15 / C15B | Prüfung aus → bisheriger Modus | Verbindung wie bisher |
+| D (18 Fälle) | ohne CA-Einstellung: Basis und PR identisch | identisch |
 | fromConfig | mit `AGENT_TLS_CA_FILE`: Agent-CA ja, snakeoil/fremd nein. Ohne: Basis und PR identisch. | wie erwartet |
-| S01–S06 | Service-Ebene (`LegacyAgentServerControlBackend`, `AgentMonitoringBackend`): Erfolg nur mit gültiger CA, sonst Fehlerstatus | wie erwartet |
+| S01–S06 | Service-Ebene (`LegacyAgentServerControlBackend`, `AgentMonitoringBackend`): Erfolg nur mit gültiger CA | wie erwartet |
 | Token | kein Token in Fehlermeldungen, Ergebnissen oder Ausgaben | 0 Treffer |
-| Mutation 1 | ohne `CAPATH = null` wird snakeoil angenommen | angenommen → Test erkennt die Mutation; `CAPATH = null` ist nötig |
-| Mutation 2 | ohne Fail-Closed-Prüfung wird bei `VERIFYHOST 0` ein falscher SAN angenommen | angenommen → Test erkennt die Mutation |
+| Mutation 1 | ohne `CAPATH = null` wird snakeoil angenommen | angenommen → `CAPATH = null` ist nötig |
+| Mutation 2 | ohne Fail-Closed-Prüfung wird bei `VERIFYHOST 0` ein falscher SAN angenommen | angenommen → Prüfung ist nötig |
 
-**Aufräumen:** Testserver beendet, Testverzeichnis gelöscht, `/tmp` weiterhin 1777.
+**Nach dem Merge (13.11.2026):**
+- ns1 auf `b17d946` aktualisiert, Konfiguration unverändert.
+- Reguläre Monitoring-Läufe 15:25 und 15:30: 12/12 Diagnosen `ok`.
+- Agenten ns1/ns2 HTTP 200.
+- Keine PHP- oder Apache-Fehler.
