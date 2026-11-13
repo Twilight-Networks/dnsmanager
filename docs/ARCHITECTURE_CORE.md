@@ -1,6 +1,6 @@
 # DNS Manager – Core-/UI-Trennung: Architektur-Inventar und Restarbeiten
 
-Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
+Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6); **Core-Abschluss** mit `main` = `7cdd9a8`, produktiv auf ns1/ns2 (Abschnitt 0.1). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
 „vollständige Trennung der Fachlogik von der Weboberfläche“. **Der Meilenstein ist abgeschlossen** (PR #64, Betriebsprüfung auf ns1 am 13.11.2026).
 
 ## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
@@ -13,6 +13,97 @@ Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6). Dieses Dokument ist 
 - **MCP:** Die Core-Schnittstellen sind für eine spätere MCP-Anbindung geeignet. Die Anbindung benötigt aber weiterhin einen
   **eigenen, sicheren Transport- und Autorisierungsadapter** (Abschnitt 7). Diese Arbeit ist nicht Teil des Meilensteins.
 - **Sicherheits- und Funktionsbefunde** sind vollständig in Abschnitt 6 aufgeführt und von den Architekturarbeiten getrennt.
+
+### 0.1 Core-Abschluss und Produktivabnahme (13.11.2026)
+
+**Die geplante Core-Architekturtrennung einschließlich der Sicherheitspakete SP1–SP4 und der Funktionskorrekturen F1, F3, F4 ist abgeschlossen und produktiv abgenommen** (Bestätigung durch Thomas und das unabhängige Review am 13.11.2026).
+
+**Produktivstand ns1 und ns2:** Commit `7cdd9a83bd673cb787d812a087c8d89947ba18be`, Tree `c73850b61903589885400a9bf96c544e2390efdc`. Beide Hosts haben ihn als detached Checkout, Arbeitsbaum sauber.
+
+| Host | vorher | jetzt |
+|---|---|---|
+| ns1 (Oberfläche, Datenbank, Agent) | `407c6ae` | `7cdd9a8` |
+| ns2 (nur Agent) | `57bfdfe` (Branch `main`; der lokale Branch bleibt unverändert) | `7cdd9a8` |
+
+**Übernahme (Plan B → W → A → R):**
+- **Sicherung:** vorher Proxmox-Snapshots beider VMs (Thomas); dazu Sicherung auf den Hosts.
+- **Wartungsfenster:** 21:46–21:50, etwa 4 Minuten.
+  - Monitoring-Cron pausiert.
+  - Publish-Lock in eigener, überwachter Datenbankverbindung durchgehend gehalten.
+  - Oberfläche und Agenten per Apache-Sperre abgewiesen.
+- **Leerlauf nachgewiesen:** Alle vor der Sperre aktiven Apache-Kindprozesse hatten sich beendet. Danach wurde der alte Agent-Lock nur lesend geöffnet (nicht angelegt) und exklusiv gehalten.
+- **Code-Wechsel unter diesem Lock;** dann Neustart von Apache, zuerst ns2, danach ns1. Mit dem neuen PrivateTmp ist der alte Lock-Pfad entfallen. Ab der ersten Agent-Schreiboperation wird `/etc/bind/zones/.dnsmanager-agent.lock` (www-data, 0644) verwendet.
+- **Konfiguration:** keine Schema-Migration; Konfiguration unverändert bis auf ns2: `bind_named_checkzone` vom Test-Wrapper `dnsmanager-named-checkzone-delay` (Überbleibsel der Race-Tests vom 16.10.) auf `/usr/bin/named-checkzone` zurückgestellt (E2).
+
+**Abnahme A0–A13:** alle bestanden.
+
+| ID | Prüfung |
+|---|---|
+| A0 | installierter Stand (Commit, Tree, sauberer Arbeitsbaum) |
+| A1 | Sicherheitsheader |
+| A2 | Login und Fehlanmeldung |
+| A3 | F4: Login mit abweichender Groß-/Kleinschreibung bleibt gültig |
+| A4 | Rollenprüfung zoneadmin |
+| A5 | Widerruf nach Deaktivierung |
+| A6/A6b | DynDNS-Anlage und API-Update; Verteilung auf beide Server über den neuen Lock-Pfad; keine Temp-Reste |
+| A7 | F3: unbekannte DynDNS-ID |
+| A8 | Publish All |
+| A9 | F1: Server unverändert speichern |
+| A10 | Agent-TLS |
+| A11 | Monitoring |
+| A12 | Update-Seite |
+| A13 | Logs ohne PHP-Warnungen oder -Fehler |
+
+**A10 – Agent-TLS:**
+- OpenSSL mit `-verify_ip` gegen 127.0.0.1 und 192.168.53.125: `Verify return code: 0`.
+- Die tatsächlichen Agent-Aufrufe der Anwendung über PHP/cURL (`zone_sync`, `conf_sync`, `zone_cleanup`) sind auf beiden Hosts mit Status 200 protokolliert.
+- `ui_config.php` ist unverändert: TLS-Prüfung aktiv.
+
+**A11 – Monitoring:** 12/12 `ok`; die regulären Cron-Läufe nach dem Fenster sind erfolgreich.
+
+**Korrigierte Testerwartungen (keine Regressionen):**
+- **A4:** `pages/users.php` ist für zoneadmin bestimmungsgemäß erreichbar (HTTP 200).
+  - `UserReadService` beschränkt die Sichtbarkeit auf den eigenen Datensatz.
+  - Die Anzeige ausschließlich des eigenen Datensatzes ist im Web-Test nicht separat nachgewiesen; die Beschränkung ist im Core-Code geprüft.
+  - Server-, DynDNS- und Update-Seite antworten erwartungsgemäß mit 403.
+- **A6:** Die Testzone `zone.example.test` war nicht für DynDNS freigegeben (`allow_dyndns = 0`). `DYNDNS_ZONE_NOT_ALLOWED` war korrektes Verhalten (unvollständige Testvorbereitung).
+  - Mit Freigabe wurde die Zone vorübergehend über die Oberfläche freigegeben, A6/A6b wurden vollständig wiederholt.
+  - Im Rückbau wurde die Freigabe wieder auf `allow_dyndns = 0` gesetzt.
+
+**Rückbau R:**
+- Temporäre Testdaten über die Oberfläche entfernt:
+  - TXT `abn-test`;
+  - DynDNS-Konto `abn_dyn` samt A-Record;
+  - danach Publish All und DynDNS-Freigabe der Testzone wieder deaktiviert.
+- Temporäre Konten `abn_admin`/`abn_zone`, Hilfsskripte und Zugangsdaten gelöscht.
+- **Endstand:**
+  - `users`, `user_zones`, `dyndns_accounts`, `servers`, `zone_servers`, `records`, `system_status` zeilengenau identisch mit der Sicherung.
+  - Keine Zone ausstehend, `bind_dirty = 0`.
+  - Bestehende Konten (`admin`, `zoneadmin`, `dyndnstest`, `n1race`) und `example.test` unverändert.
+  - Beide DNS-Server konsistent.
+
+**Akzeptierte Abweichung:** Die SOA-Serial von `zone.example.test` ist durch die Abnahme dauerhaft von `2026111302` auf `2026111305` gestiegen. Das ist die einzige Abweichung in `zones` und in den Zonendateien gegenüber der Sicherung. Die übrigen Zonen bleiben bei `2026102001`.
+
+**Bekannter Betriebsbefund:** Apache meldet bei jedem Start bzw. Reload auf ns1 und ns2 `AH01909` („server certificate does NOT include an ID which matches the server name“, `127.0.1.1:443`).
+- Die Meldung bestand bereits vor der Übernahme und betrifft nicht die Agent-TLS-Sites.
+- Wird mit dem Zertifikatsthema der Oberfläche (S40) betrachtet.
+
+**Sicherung:** `/root/core-abnahme-20261113/` auf ns1 und ns2 (Verzeichnis 0700) **vorerst aufbewahren**; Löschung nur auf ausdrückliche Anweisung. Inhalt:
+- Git-Stand vorher/nachher;
+- Datenbank-Dump (ns1);
+- `/etc/dnsmanager`, `/etc/bind`, `/etc/apache2`, Sudoers- und Cron-Datei;
+- Zonen-Prüfsummen, SOA-Serials und Rechte;
+- auf ns2 zusätzlich die frühere `api_config.php` und der Test-Wrapper.
+
+Für einen Rollback dient dieselbe Sperr-/Leerlauf-Prozedur mit `407c6ae` (ns1) bzw. `57bfdfe` (ns2), alternativ die Proxmox-Snapshots.
+
+**Verbleibende Befunde (unverändert, Abschnitt 6):**
+- Offen bzw. teilweise: **S40** (Zertifikat/HSTS der Oberfläche), **S41** (Fail2Ban, zurückgestellt).
+- Für die UI-Modernisierung vorgesehen: F2, F5, F8.
+- Dokumentiert: F6, F7.
+- Akzeptiertes In-Flight-Restrisiko: I1, I2 (entschieden).
+
+Keine neuen Core-Baustellen; als Nächstes folgt die UI-Modernisierung.
 
 **Legende:**
 - ✅ entkoppelt
@@ -280,9 +371,9 @@ Architektur-Restarbeiten** und werden in einer gesonderten Sicherheits- bzw. Fun
 werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis S28, Projektübergabe) ist nur S28 offen; die übrigen sind mit früheren PRs behoben.
 
 **Übersicht nach Status:**
-- **Offen:** S34 (Agent-Teil), **S40** (teilweise, priorisiert), **S41** (zurückgestellt), F2, F5–F8.
-- **Teilweise behoben:** S34 (Generator/Distributor behoben, Agent offen), S40 (HTTP auf ns1 abgeschaltet; Secure-Cookie mit PR #67, `main` `ce3b245`; Zertifikat/HSTS offen).
-- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a); **mit Security-Paket SP1 (PR #65, `main` `bc8b607`):** S29, S30, S31; **mit SP2 (PR #66, `main` `4f37f08`):** S28, S35; **S42** (technisch abgeschlossen 13.11.2026: PR #68, #70; Umstellung ns1/ns2, siehe `docs/AGENT_TLS.md`); **mit SP3a (PR #73, `main` `a6339d9`):** S39; **mit SP3b (PR #74, `main` `2f7a9eb`):** S36 (Teil b, damit vollständig), S37 (Teil b, damit vollständig); zusätzlich Sicherheitsheader `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` für alle PHP-Antworten (noch keine CSP); **mit SP4b:** I1 (entschieden: Hinweis bei ausstehenden Zonen), I2 (geprüft, Restrisiko akzeptiert); **mit dem Core-Abschluss-PR:** F1, F3, F4.
+- **Offen:** **S40** (teilweise, priorisiert), **S41** (zurückgestellt), F2, F5–F8.
+- **Teilweise behoben:** S40 (HTTP auf ns1 abgeschaltet; Secure-Cookie mit PR #67, `main` `ce3b245`; Zertifikat/HSTS offen).
+- **Behoben:** S32 (4b), S33 (4a), S38 (Paket 3/5a); **mit Security-Paket SP1 (PR #65, `main` `bc8b607`):** S29, S30, S31; **mit SP2 (PR #66, `main` `4f37f08`):** S28, S35; **S42** (technisch abgeschlossen 13.11.2026: PR #68, #70; Umstellung ns1/ns2, siehe `docs/AGENT_TLS.md`); **mit SP3a (PR #73, `main` `a6339d9`):** S39; **mit SP3b (PR #74, `main` `2f7a9eb`):** S36 (Teil b, damit vollständig), S37 (Teil b, damit vollständig); zusätzlich Sicherheitsheader `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` für alle PHP-Antworten (noch keine CSP); **mit SP4b:** I1 (entschieden: Hinweis bei ausstehenden Zonen), I2 (geprüft, Restrisiko akzeptiert); **mit dem Core-Abschluss-PR:** F1, F3, F4; **S34** vollständig (Teil a mit 4a, Teil b mit SP4a; produktiv seit 13.11.2026).
 
 **Betriebsbefund Schutzmechanismen (Stand 13.11.2026, rein lesend erhoben, nichts geändert):**
 - **Fail2Ban:** ns1 installiert (1.1.0), aber `disabled`/`inactive`; der installierte Filter `filter.d/dnsmanager.conf` ist veraltet (0 Treffer, siehe S41), ein `dnsmanager`-Jail ist **nicht** eingerichtet (nur `defaults-debian.conf` mit `banaction = nftables` und aktivem `sshd`-Jail bei Start). ns2: nicht installiert. Die Fail2Ban-Konfiguration des Repositorys (`fail2ban/`) ist damit auf keiner VM wirksam. Die Protokollkette wäre vorhanden: `LOG_TARGET = syslog`, rsyslog aktiv, Sicherheitsereignisse über `LOG_AUTH` in `/var/log/auth.log`.
@@ -320,7 +411,7 @@ werden nur nach gesonderter Freigabe vorgezogen. Aus der früheren S-Reihe (bis 
 | S31 | Benutzer-Enumeration über die Antwortzeit (kein `password_verify` bei unbekanntem Benutzer). **Behoben mit SP1:** Prüfung gegen festen Dummy-Hash (bcrypt, Kosten 12, `DummyPasswordHash`); gemessen auf ns1: unbekannt ≈ bekannt-falsch ≈ 240 ms (vorher < 1 ms gegenüber 240 ms). Keine vollständige Timing-Gleichheit zugesagt. | `AuthService::authenticate`, `DyndnsUpdateService` |
 | S32 | DynDNS-Einzelpublish verteilt vor dem Commit unter Zeilensperre, ohne Publish-Advisory-Lock; `changed = 0` (nur bei vollständigem Erfolg) ohne Rücksicht auf `changed = 2`; gemeinsame `/tmp/dnsmanager_conf_{ip}`-Pfade mit Publish All. **Bewertung (12.11.2026): mittel/niedrig, nicht unmittelbar kritisch** – keine Rechteausweitung, keine Offenlegung, keine Injektion; Auslösung nur mit gültigen DynDNS-Zugangsdaten. Auswirkungen: (1) bei Fehler nach erfolgreicher Verteilung (Rollback) Abweichung DB ↔ BIND inkl. zurückgesetzter SOA-Serial, bis zum nächsten Publish; (2) Zonenzeile bis zu ~30 s je Server gesperrt (Verfügbarkeit); (3) gleichzeitiger Lauf mit Publish All kann `/tmp/dnsmanager_conf_{ip}` gegenseitig leeren → Fehler bzw. erneuter Publish nötig, kein falscher Inhalt (Dateiname je Zone). Behebung in Paket 4. **Behoben mit 4b** (Commit vor Publish, `publishZone()` unter Advisory-Lock, Tri-State). | `inc/deploy/publish_single.php`, `bind_file_distributor.php` |
 | S33 | Zonenname geht ohne zusätzliche Prüfung in die BIND-`.conf` und in den Dateinamen (keine Abwehr wie S17) | `bind_file_generator.php` (`writeZoneConfFile`) – **behoben mit 4a** (`zone_name_is_safe`) |
-| S34 | Feste bzw. vorhersagbare `/tmp`-Pfade (`named-checkzone-error.log`, `dnsmanager_conf_{ip}`, Agent-Lock) | **Teil a (Generator/Distributor): behoben mit 4a** (`BindWorkDir`). **Teil b (Agent-Lock und -Temporärdateien): umgesetzt mit SP4a (PR #75, `main` `324636e`; Deployment auf ns1/ns2 ausstehend):** gemeinsame Sperrdatei `<zone_data_dir>/.dnsmanager-agent.lock` (`agentLockPath()`) für zone_sync, conf_sync, zone_cleanup und system/control statt `/tmp/dnsmanager_zone_sync.lock`; temporäre Zonendatei `<zone_data_dir>/.db.<zone>.<zufall>.tmp` im Zielverzeichnis, damit `rename()` atomar ist (vorher /tmp auf tmpfs → Zonenverzeichnis auf ext4, Kopie statt atomarer Umbenennung). Auf ns1/ns2 war der alte Pfad durch Apache `PrivateTmp=yes` abgeschirmt. |
+| S34 | Feste bzw. vorhersagbare `/tmp`-Pfade (`named-checkzone-error.log`, `dnsmanager_conf_{ip}`, Agent-Lock) | **Teil a (Generator/Distributor): behoben mit 4a** (`BindWorkDir`). **Teil b (Agent-Lock und -Temporärdateien): behoben mit SP4a (PR #75, `main` `324636e`; auf ns1/ns2 produktiv seit 13.11.2026, Core-Abschluss 0.1):** gemeinsame Sperrdatei `<zone_data_dir>/.dnsmanager-agent.lock` (`agentLockPath()`) für zone_sync, conf_sync, zone_cleanup und system/control statt `/tmp/dnsmanager_zone_sync.lock`; temporäre Zonendatei `<zone_data_dir>/.db.<zone>.<zufall>.tmp` im Zielverzeichnis, damit `rename()` atomar ist (vorher /tmp auf tmpfs → Zonenverzeichnis auf ext4, Kopie statt atomarer Umbenennung). Auf ns1/ns2 war der alte Pfad durch Apache `PrivateTmp=yes` abgeschirmt. |
 | S35 | Logout per GET ohne CSRF; Login überspringt die CSRF-Prüfung bei fehlendem Token (praktisch unerreichbar). **Behoben mit SP2:** Logout nur per POST mit gültigem CSRF-Token (GET → 405 mit `Allow: POST`, ohne Session-Zugriff; fehlendes/falsches Token bei Anmeldung → 403 ohne Abmeldung; ohne Anmeldung → Login); Sidebar-Formular statt Link; jeder Login-POST benötigt ein gültiges Token. | `logout.php`, `login.php`, `templates/layout.php` |
 | S36 | `pages/update.php`: keine Rollenprüfung; `href` aus fremder JSON-Antwort ohne Schemaprüfung. **Teil a (Rollenprüfung) behoben mit SP3a:** nur für Admins (vor dem Abruf der Quelle), Seitenleisten-Link nur für Admins. **Teil b (Antwortprüfung) behoben mit SP3b:** `UpdateCheckService` akzeptiert `version` nur als gültige Zeichenkette (sonst ungültige Antwort), `release_date` nur als kurze Zeichenkette (sonst „unbekannt“), Links nur als absolute HTTPS-URL ohne Zugangsdaten (sonst entfällt der Link); vorher führten Felder vom falschen Typ zu PHP-Fatal-Errors (HTTP 500). | `pages/update.php`, `UpdateCheckService` (mit 5d unverändert übernommen) |
 | S37 | `system_health.php` startet das Monitoring per `exec` im Webprozess; `db.php` gibt den DB-Fehlertext per `die()` aus | **Teil a (`exec` in `pages/system_health.php`): behoben mit 5b** (Monitoring im Webprozess über `MonitoringService`). **Teil b behoben mit SP3b:** `inc/db.php` antwortet generisch („Datenbankverbindung fehlgeschlagen.“, Web HTTP 503, CLI Exit-Code 1 statt 0), Details serverseitig nur als feste Meldung mit Fehlercode per `error_log` (kein Exception-Text); ebenso Sprachdatei- und `BASE_URL`-Fehler ohne Pfad bzw. Konfigurationshinweis (HTTP 500). |
@@ -418,3 +509,5 @@ Verbleibendes Restrisiko: Eine bereits laufende Anfrage endet nach einem Rechtee
 | 13.11.2026 | SP4b | I1: Hinweis statt pauschaler Erfolgsmeldung bei während des Publish geänderten Zonen (t76, 4/4); I2: schreibende Services geprüft (Tabelle), Restrisiko akzeptiert |
 | 13.11.2026 | SP4b | PR #76 gemergt (`54bf720`); kein Deployment. Reihenfolge: Abschluss-PR nur für F1, F3, F4; danach kontrollierte Produktivübernahme und Core-Abnahme (SP3, SP4, F1/F3/F4); F2, F5, F8 zur UI-Modernisierung; F6, F7 bleiben dokumentiert |
 | 13.11.2026 | Core-Abschluss | F1 (Änderungserkennung Server, Rollenprüfung im Pfad „unverändert“), F3 (DynDNS-Passwort: Existenzprüfung unter Sperre), F4 (kanonischer Benutzername in der Session); isolierte Tests t77 (Service 32/32 unter REPEATABLE READ und READ COMMITTED, Web-Golden 10/10) |
+| 13.11.2026 | Core-Abschluss | PR #77 gemergt (`7cdd9a8`, Tree `c73850b`); kein Deployment bis zur Freigabe der Produktivübernahme |
+| 13.11.2026 | Core-Abschluss | Produktivübernahme `7cdd9a8` (Tree `c73850b`) auf ns1 und ns2; Abnahme A0–A13 bestanden (A4/A6 korrigierte Testerwartungen), Rückbau R vollständig; Serial `zone.example.test` 2026111305 akzeptiert; AH01909 als bekannter Betriebsbefund; Sicherung `/root/core-abnahme-20261113/` vorerst aufbewahrt; S34 vollständig behoben. Core-Architekturtrennung inkl. SP1–SP4 und F1/F3/F4 abgeschlossen (0.1) |
