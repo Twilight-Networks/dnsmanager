@@ -196,11 +196,7 @@ final class ServerService
             !self::sameText($existing['api_ip'], $update_data['api_ip']) ||
             (!$keepToken && !self::sameText($existing['api_token'], $update_data['api_token']));
 
-        // Unveränderter Token eines Remote-Servers ohne gültigen gespeicherten Token: nicht als „unverändert“
-        // melden, sondern wie bisher unter der Zeilensperre mit api_token_required ablehnen (S29).
-        $storedTokenInvalid = $keepToken && !$input->isLocal && strlen((string)$existing['api_token']) < 32;
-
-        if (!$server_data_changed && !$nonCriticalChanged && !$storedTokenInvalid) {
+        if (!$server_data_changed && !$nonCriticalChanged) {
             // F1: Auch ohne Änderung erhält nur ein laut Datenbank aktiver Administrator eine Erfolgsmeldung
             // (gleiche Prüfung wie im Schreibpfad; ohne Schreibzugriff genügt eine Momentaufnahme).
             try {
