@@ -95,6 +95,12 @@ if [ "$MODE" = serve ]; then
   php $H/serve_sessions.php || { echo "ABBRUCH: Sessions"; exit 1; }
   install -m 644 -o root -g root $H/serve_router.php $T/serve_router.php   # für www-data lesbar (Harness liegt ggf. unter /root)
   install -d -m 755 -o root -g root $T/ui && install -m 644 -o root -g root $H/showcase/* $T/ui/   # U3: Testseiten unter /__ui/
+  if [ "${UIG_RECORDS_MATRIX:-0}" = 1 ]; then
+    # U4-Core: Fälle und Erfassungsskript der Record-Matrix unter /__ui/, Ablage der Erfassung in $T/upload
+    install -m 644 -o root -g root $H/records/capture.js $T/ui/capture.js
+    php $H/records/matrix.php --cases-json > $T/ui/cases.json && chmod 644 $T/ui/cases.json
+    install -d -m 700 -o www-data -g www-data $T/upload
+  fi
   # Ports 1860x: normale Darstellung; 1861x: ohne JavaScript (Router entfernt <script>, UIG_NOJS=1)
   declare -A PORT=([admin]=18601 [zoneadmin]=18602 [anon]=18603)
   for role in admin zoneadmin anon; do
@@ -102,7 +108,7 @@ if [ "$MODE" = serve ]; then
     for nojs in 0 1; do
       port=$(( ${PORT[$role]} + nojs * 10 ))
       ss -ltn | grep -q " 127.0.0.1:$port " && { echo "ABBRUCH: Port $port belegt"; exit 3; }
-      sudo -u www-data env -i PATH=/usr/bin:/bin UIG_SID="$sid" UIG_NOJS=$nojs php -d session.save_path=$T/sess -d error_log=$T/app.log -d log_errors=1 -d display_errors=0 \
+      sudo -u www-data env -i PATH=/usr/bin:/bin UIG_SID="$sid" UIG_NOJS=$nojs UIG_UPLOAD="${UIG_RECORDS_MATRIX:-0}" php -d session.save_path=$T/sess -d error_log=$T/app.log -d log_errors=1 -d display_errors=0 \
         -S 127.0.0.1:$port $T/serve_router.php > /dev/null 2>&1 & echo $! >> $T/pids
     done
   done
