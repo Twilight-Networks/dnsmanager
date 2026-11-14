@@ -11,10 +11,13 @@
  *          sichtbar andere Felder ausfüllt (z. B. Name statt des per JS eingeblendeten Präfixfelds).
  */
 
-$long400 = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA' . str_repeat('q7Xb', 89);      // 400 Zeichen Base64
-$k253 = str_repeat('A', 253);                                                          // p= + 253 = 255 Zeichen
-$k254 = str_repeat('B', 254);                                                          // p= + 254 = 256 Zeichen
-$ed44 = '11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=';
+// Echte öffentliche Schlüssel (mit openssl erzeugt; öffentliche Schlüssel sind keine Geheimnisse) und Grenzfälle
+$k1024 = 'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDWjarb4FVCK/CDnuO3pyTdcxTjRYfTy0Fux9ZUBNBbhLi4+Nl7Nl3okhdxXEsXxzN3aJlKL1eCH6zhltoRxGUeBY4kzI4tBs4aDhOvqcijVpkE5QJbf+flaq9r/R6Q/QmXCK2jDpHODIsS7BV9kloKPEVx4A9X/k7mcdnZrICycQIDAQAB';
+$k2048 = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtWYPzKp8o8pmgHw/BbwkXfIAwcbPO5cHPAmRDKTXp00m4OIEhSFFhxEzIuFlQ1Q+D2oTwBvVWSo4O/ftasTumqDy6cJ+NKcUIZiwteGUNVwwtj0LeoyTtYYEjjoPJ6aRZH8K5rYuiG+XQkN0Ct+7FPSThOUIMlw9wT9dXyQ5jagawN74IEeDEx3y4x9js/5TTucp+yyxihlH3g/XHnFraQa24BxkZFa86QieyY4e70mwXlVceAgUSMI1VYnqUq5nowcfosahddzZBs97IQGw/oj2V8oBR10HyoKJt2puc3z7ehRBof8S5dpKrQXZl5MPaIsnHwZssvq3F6hhwhLiGQIDAQAB';
+$k4096 = 'MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA5GICGYdXSXCRFe62Od/mPYem1hVlbRIfRtt78n0TlxF4bGDiYhRSKz3H9vDcxmyUrXktakSfNhyxIDl4oa047nvTTjQhytpr/ZX5J2Ep3+5SHaKLI5eNdRVet9jMgmwwiuwMsLRmUSdMSyTi/DDnRxgoZz7dltIpwoesRyVuEyQ7XIleBtDz+3odInoPeEGu5HMhog/Q6SBBmu+Yj66LwWNc8emAiKRqAPYdKiuk3u2URnZHD93yV0MP/M3iNF/WW8/JpWT2qSaa44bXL9NYLbUpOYvRrsZZF+qd458SdaodJaaBLSm+9MpeFkg0t0T5mpY4EpXLdhp+zUMl3VZ8/Qas7VOoVYiDZy84CnUmNc60JHzERc13492p/dF28hLHvK+IiHbPWAvlHqSJTNtvWRlCFZFMpRaynqh9YvKoYImyYFM/tpP4k8tgnjdaeHkVtUmndtkaC48xUCRQVtFUVtmNhdkofcgWSUuBPrts4BFHNS7utTL/2ri7jY/mGL4rCHrejF0U++uckj3mqX8Xzx8NnVg9XMUyl7zT/0NitO6JSXoKOX3eVJz/uhLShUoFxPYHY2lpLERlwOeUh+h0W6Mk2Wlt316qMixGgsgcD3O5G1/PBZ4z/kc46eQmmH9jglu8eta4ym5exg6Qv3ju5+bMgAYSTVZlLhb5DXj+zUUCAwEAAQ==';   // mit Padding ==
+$ked = 'i512/KfbacAnNRit53WGTABLWfzQr+PgMopN5RIxdHQ=';   // Ed25519, mit Padding =
+$k252 = str_repeat('AAAA', 63);   // p= + 252 = 254 Zeichen: eine Zeichenkette
+$k256 = str_repeat('AAAA', 64);   // p= + 256 = 258 Zeichen: 255 + 3
 
 $add = fn(string $type, array $ops, ?array $nojs = null, int $zone = 1): array => [
     'mode' => 'add', 'zone' => $zone, 'page' => "pages/records.php?zone_id=$zone&add_new=1", 'form' => 'recordForm',
@@ -43,10 +46,11 @@ return [
                             [['#input_name', 'm3', 'name'], ['#input_mx_priority', '40', 'mx_priority'], ['#input_content', 'mx.other.test.', 'content'], ['#mx_target_mode', 'u0.test.', 'mx_target_mode']]),
     'add_txt'           => $add('TXT', [['#input_name', 't1', 'name'], ['#input_content', '"hello world"', 'content']]),
     'add_spf'           => $add('SPF', [['#input_name', 'spf2', 'name'], ['#input_content', '"v=spf1 -all"', 'content']]),
-    'add_dkim_rsa'      => $add('DKIM', [['#dkim_selector', 's1', null], ['#dkim_key_type', 'rsa', null], ['#dkim_hash_algos', 'sha256', null], ['#dkim_key', $long400, null]]),
-    'add_dkim_ed'       => $add('DKIM', [['#dkim_selector', 's2', null], ['#dkim_subdomain', 'mail', 'dkim_subdomain'], ['#dkim_key_type', 'ed25519', null], ['#dkim_flags', 'y', null], ['#dkim_key', $ed44, null]]),
-    'add_dkim_253'      => $add('DKIM', [['#dkim_selector', 's3', null], ['#dkim_key', $k253, null]]),
-    'add_dkim_254'      => $add('DKIM', [['#dkim_selector', 's4', null], ['#dkim_key', $k254, null]]),
+    'add_dkim_rsa'      => $add('DKIM', [['#dkim_selector', 's1', null], ['#dkim_key_type', 'rsa', null], ['#dkim_hash_algos', 'sha256', null], ['#dkim_key', $k2048, null]]),
+    'add_dkim_ed'       => $add('DKIM', [['#dkim_selector', 's2', null], ['#dkim_subdomain', 'mail', 'dkim_subdomain'], ['#dkim_key_type', 'ed25519', null], ['#dkim_flags', 'y', null], ['#dkim_key', $ked, null]]),
+    'add_dkim_252'      => $add('DKIM', [['#dkim_selector', 's3', null], ['#dkim_key', $k252, null]]),
+    'add_dkim_256'      => $add('DKIM', [['#dkim_selector', 's4', null], ['#dkim_key', $k256, null]]),
+    'add_dkim_4096'     => $add('DKIM', [['#dkim_selector', 's5', null], ['#dkim_hash_algos', 'sha256', null], ['#dkim_key', $k4096, null]]),
     'add_srv_zone'      => $add('SRV', [['#input_name', 'sip', 'name'], ['#srv_protocol', '_udp', 'srv_protocol'], ['#input_srv_priority', '10', 'srv_priority'], ['#srv_weight', '5', 'srv_weight'],
                             ['#srv_port', '5060', 'srv_port'], ['#srv_target', 'sip', 'srv_target'], ['#srv_target_mode', 'u0.test.', 'srv_target_mode']]),
     'add_srv_abs'       => $add('SRV', [['#input_name', '_xmpp', 'name'], ['#srv_protocol', '_tcp', 'srv_protocol'], ['#input_srv_priority', '0', 'srv_priority'], ['#srv_weight', '0', 'srv_weight'],
@@ -93,7 +97,7 @@ return [
     'chg_caa_prefix' => $edit(107, [['#edit_input_name_prefix', 'api', 'edit_name_prefix']]),
     'chg_caa'        => $edit(106, [['#edit_input_content', '0 issue "example.net"', 'content']]),
     'chg_uri'        => $edit(108, [['#edit_uri_target', 'ftp://ftp.u0.test/neu', 'uri_target']]),
-    'chg_dkim_key'   => $edit(110, [['[name=dkim_key]', $long400, 'dkim_key']]),
+    'chg_dkim_key'   => $edit(110, [['[name=dkim_key]', $k1024, 'dkim_key']]),
     'chg_dkim_hash'  => $edit(109, [['[name=dkim_hash_algos]', 'sha1:sha256', 'dkim_hash_algos']]),
     'chg_ptr'        => $edit(115, [['#edit_input_content', 'mx.u0.test.', 'content']], null, 3),
 ];
