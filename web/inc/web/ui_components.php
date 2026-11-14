@@ -174,8 +174,8 @@ function ui_select_row(string $group, string $value, string $label): string
 /**
  * Lösch-Schaltfläche mit Bestätigung, auch ohne JavaScript (U0-B9).
  *
- * Ohne JavaScript: <details> – der erste Klick öffnet die Rückfrage, erst „Endgültig löschen“ sendet das Formular.
- * Mit JavaScript: components.js öffnet beim Klick auf die Schaltfläche das bestehende Bestätigungs-Modal
+ * Ohne JavaScript (Rückfall): <details> – der erste Klick öffnet die Rückfrage, erst „Endgültig löschen“ sendet das Formular.
+ * Mit JavaScript (Komfort): components.js öffnet beim Klick auf die Schaltfläche das bestehende Bestätigungs-Modal
  * (global.js, form.confirm-delete). Das umgebende Formular, seine Felder und sein Ziel bleiben unverändert.
  *
  * @param array{prompt?: string, confirm?: string, size?: string} $opts
