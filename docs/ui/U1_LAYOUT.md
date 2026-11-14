@@ -1,86 +1,84 @@
-# UI-Modernisierung U1 – Layout-Gerüst
+# UI-Modernisierung U1 – Design-Fundament A+
 
-Stand: 14.11.2026. Umsetzung gemäß Freigabe auf Basis von `main` `5796221` und
-[`docs/UI_GUIDELINES.md`](../UI_GUIDELINES.md).
+Stand: 14.11.2026. Umsetzung der freigegebenen Designvorlage **A+** (Variante A als Grundlage, ergänzt um Elemente aus B)
+gemäß Integrationsplan, Entscheidung D1: PR #80 wird zu „U1 – Design-Fundament A+“ überarbeitet.
 
 **Umfang:**
-- Viewport und responsives Grundlayout;
-- Navigation mit Desktop-Seitenleiste und mobiler Alternative;
-- lokale Bootstrap Icons;
-- heller/dunkler Farbmodus mit Systemvorgabe;
-- einheitliches Login-Layout.
+- Design-Tokens für hell und dunkel;
+- Seitenleiste, Kopfleisten und Original-Branding;
+- Grundstile der verwendeten Bootstrap-Komponenten;
+- Login-Seite.
 
-Seiteninhalte und Fachfunktionen sind unverändert.
+**Funktion und Inhalte der Fachseiten sind unverändert.** Editor-Muster, Live-DIFF, Bausteine und Seitenumbauten folgen
+in U3–U5. Regeln: [`docs/UI_GUIDELINES.md`](../UI_GUIDELINES.md).
 
-## 1. Änderungen
+## 1. Branding
+
+| Datei (unverändert, `web/assets/branding/`) | Einsatz |
+|---|---|
+| `TWLnet_Logo_neg.png` | Seitenleiste und Anmeldung im **Dunkelmodus** |
+| `TWLnet_Logo_CMYK.png` | Seitenleiste und Anmeldung im **Hellmodus** |
+| `TWLnet_Logo_Quadrat_neg.png` | mobile Kopfleiste, dunkel |
+| `TWLnet_Logo_Quadrat_CMYK.png` | mobile Kopfleiste, hell |
+
+**Dateien:**
+- Kopien der Originale aus `Twlnet\Twlnet-Logos\Logo\`, per SHA-256 identisch.
+- Seitenverhältnis bleibt erhalten: Es wird nur Breite bzw. Höhe gesetzt.
+- Es gibt keine Hinterlegung, Umfärbung oder Nachzeichnung.
+
+**Umschaltung je Farbmodus:**
+- Beide Varianten sind im Markup vorhanden; CSS blendet je Farbmodus eine aus (`.logo-on-light` / `.logo-on-dark`).
+- Mit JS folgt die Anzeige `data-bs-theme`, ohne JS der Systemvorgabe.
+- Interaktiv geprüft: dunkel → `_neg`, hell → `_CMYK`.
+
+**Weitere Merkmale:**
+- Markenakzent **`#3FA535`**, aus den Logos verifiziert.
+- Das Logo in der Seitenleiste verlinkt wie bisher die Zeile „by Twilight-Networks“ auf `https://www.twilight-networks.com`. Das Linkziel ist unverändert.
+
+## 2. Änderungen
 
 | Datei | Änderung |
 |---|---|
-| `web/templates/layout.php` | **Kopf:** `viewport`, `theme.js` (blockierend im Kopf), `theme-auto.css`, `<html class="no-js">`.<br>**Seitenleiste** als Bootstrap `offcanvas-lg`: ab lg fest wie bisher; darunter Kopfleiste mit Menü-Schaltfläche und Offcanvas.<br>**Navigation:** Symbole statt Emojis; Skip-Link „Zum Inhalt springen“; `<main id="main">`; Farbmodus-Umschalter (nur mit JS).<br>**Unverändert:** Publish- und Logout-Formulare (Ziel, Felder, CSRF) und alle Linkziele. |
-| `web/templates/layout_footer.php` | schließt `<main>` statt `<div class="content">` |
-| `web/login.php` | `viewport`, Farbmodus, gemeinsame Stylesheets, `lang` der aktiven Sprache statt fest `de`, Klassen statt Inline-Styles, `<label for>`/`id` und `autocomplete`, Schaltfläche in der CI-Farbe. Formular (Methode, Ziel, Felder, CSRF) und Hinweistexte unverändert. |
-| `web/assets/css/custom.css` | **Farbvariablen** (`--dm-*`) für hell, dunkel und dunkel ohne JS (Media Query) statt fester Farben; die Werte des hellen Modus entsprechen den bisherigen.<br>**Layout:** responsiv, Offcanvas-Anpassungen, Darstellung ohne JS (`.no-js`), Anmeldeseite.<br>**Dunkelmodus:** angepasste `.table-light`-Köpfe. |
-| `web/assets/css/theme-auto.css` (neu) | Dark-Regeln von Bootstrap 5.3.3 für `html:not([data-bs-theme])` unter `prefers-color-scheme: dark`. Das ist die Systemvorgabe ohne JavaScript, erzeugt aus `bootstrap.min.css`. |
-| `web/assets/js/theme.js` (neu) | Tauscht `no-js` gegen `js`. Setzt `data-bs-theme` aus gespeicherter Wahl (`localStorage`) oder Systemvorgabe und folgt Änderungen der Systemvorgabe. Umschalter über `data-theme-set`, mit `aria-pressed`. Extern, ohne Inline-Code und ohne `eval`. |
-| `web/assets/icons/bootstrap-icons-sprite.svg` (neu) | Reduziertes SVG-Sprite (14 Symbole, 9 KB) aus `bootstrap-icons@1.11.3`. Das npm-Paket wurde gegen seine sha512-Prüfsumme geprüft; die Symbole sind unverändert übernommen. |
-| `LICENSES/bootstrap-icons.LICENSE.txt` (neu) | MIT-Lizenz von Bootstrap Icons |
-| `web/inc/helpers.php` | Darstellungshelfer `ui_icon()`: Symbol mit `aria-hidden`, die Bedeutung trägt immer sichtbarer Text bzw. `aria-label` |
-| `web/lang/de.php`, `en.php`, `es.php` | 7 neue Schlüssel: `menu_open`, `main_navigation`, `skip_to_content`, `theme_label`, `theme_light`, `theme_dark`, `theme_auto` |
-| `tests/ui/*` | Screenshot-Werkzeug:<br>- Server ohne JavaScript (Router entfernt `<script>`);<br>- Optionen `-ColorScheme dark`, `-NoJs`, `-Only`;<br>- mobil mit 492 CSS-Pixeln (Mindestbreite von Edge headless). |
+| `web/assets/css/custom.css` | Neu aufgebaut als Design-System A+:<br>(1) Tokens hell, dunkel und dunkel ohne JS, abgebildet auf die Bootstrap-Variablen;<br>(2) Grundtypografie, Logo-Umschaltung;<br>(3) Gerüst: Seitenleiste, Navigationsgruppen, Veröffentlichungskasten, Benutzerbereich, Kopfleisten, Arbeitsbereich, No-JS-Darstellung;<br>(4) Grundstile für Schaltflächen, Formulare, Karten, Tabellen (auch `table-light`/`table-warning`), Abzeichen, Hinweise, Modals, Toasts, `text-bg-light`, native Checkboxen;<br>(5) Anmeldeseite;<br>(6) seitenbezogene Breitenklassen unverändert übernommen. |
+| `web/templates/layout.php` | **Seitenleiste:** Original-Logo, Produktzeile mit Version, Navigationsgruppen DNS / Infrastruktur / Verwaltung; „Auf Updates prüfen“ ist in die Gruppe Verwaltung gewandert, Ziel unverändert. Zähler ausstehender Zonen an „Zonen“, Fehlerkennzeichen an „Systemstatus“.<br>**Veröffentlichungskasten:** bestehendes Publish-Formular.<br>**Benutzerbereich:** Avatar-Kürzel, Name, Rolle, bestehendes Logout-Formular; Farbmodus-Umschalter.<br>**Desktop-Kopfleiste:** Pfadangabe, auf der Record-Seite mit Rücklink „Zonen“ (vorhandenes Ziel).<br>**Mobile Kopfleiste:** Quadrat-Logo. |
+| `web/templates/layout_footer.php` | schließt zusätzlich den Arbeitsbereich (`.app-main`) |
+| `web/login.php` | Logo-Paar statt des bisherigen Bildes, Produktzeile, Überschrift „DNS Manager“ nur für Screenreader. Formular und Hinweistexte unverändert. |
+| `web/lang/de.php`, `en.php`, `es.php` | 7 neue Schlüssel: `nav_group_dns`, `nav_group_infrastructure`, `nav_group_admin`, `publish_pending`, `publish_pending_zones`, `publish_pending_hint`, `breadcrumb` |
+| `web/assets/icons/bootstrap-icons-sprite.svg` | 3 weitere Symbole aus `bootstrap-icons@1.11.3`: `grid-1x2`, `activity`, `exclamation-lg` |
+| `web/assets/branding/TWLnet_Logo_*.png` (neu) | vier Original-Logos (siehe 1) |
 
-Nicht geändert:
-- Core-Services, Actions, API, Skripte, Schema, Agent;
-- Seiteninhalte (`web/pages/*`, Formular-Templates);
-- Toasts und Konfiguration.
+Aus der früheren U1-Fassung bleiben unverändert:
+- Viewport, Offcanvas-Navigation auf schmalen Bildschirmen mit No-JS-Darstellung als Block;
+- `theme.js` (Farbmodus, `no-js`/`js`), `theme-auto.css`;
+- `ui_icon()`.
 
-## 2. Verhalten ohne JavaScript
-
-- **Navigation:** Auf schmalen Bildschirmen steht die Seitenleiste als normaler Block über dem Inhalt; die Menü-Schaltfläche ist ausgeblendet. Ab lg bleibt sie unverändert fest.
-- **Farbmodus:** Es gilt die Systemvorgabe über `theme-auto.css` und die `--dm-*`-Variablen; der Umschalter ist ausgeblendet.
-- **Formulare:** Alle Formulare und Links funktionieren unverändert. Nachweis: Die Golden-Basis sendet ohne JavaScript.
+**Bewusst nicht in U1:** eine Statusanzeige in der Kopfleiste. Ein erster Entwurf wertete nur die Diagnose-Übersicht aus und widersprach damit dem Dashboard, das weitere Systemprüfungen einbezieht. Die Anzeige folgt in U5 mit derselben Quelle wie Dashboard und Systemstatus-Seite.
 
 ## 3. Nachweise
 
-**Golden-Vergleich gegen die U0-Basis** `tests/ui/baseline/golden-1e37515.json` (ns1, PHP 8.5.4, MariaDB 11.8.6; Anwendung und Harness `381d1df`):
+**Golden-Vergleich gegen die U0-Basis** `tests/ui/baseline/golden-1e37515.json`:
+- ns1, PHP 8.5.4, MariaDB 11.8.6;
+- Anwendung und Harness `f3953ec`, Ergebnis sha256 `3c1e6878…c0bc10e`.
 
 | | |
 |---|---|
-| Ergebnis | **Exit 0 – keine Vertragsabweichung**: Status, Weiterleitungen, Header, Toasts, Logs, Datenbankzustand, Seitenvertrag (Formulare mit Kodierung, Linkziele) und PHP-Meldungen identisch |
-| identisch | 81 Fälle: alle Actions, Login/Logout, API, alle Weiterleitungen für anonym, alle 403-Antworten, `logout` per GET |
-| nur informativ abweichend | 37 Seitenfälle mit Layout: admin 22, zoneadmin 14, anonyme Login-Seite 1 |
+| Ergebnis | **Exit 0 – keine Vertragsabweichung**. Status, Weiterleitungen, Header, Toasts, Logs, Datenbankzustand, Seitenvertrag (alle Formulare mit Kodierung und Feldern sowie **alle Linkziele**) und PHP-Meldungen sind identisch. |
+| identisch | 81 Fälle: alle Actions, Login/Logout, API, Weiterleitungen, 403-Antworten |
+| nur informativ abweichend | 37 Layout-Seiten (admin 22, zoneadmin 14, Anmeldung 1) |
 | PHP-Meldungen | 15, wie in der Basis (vorbestehend U0-B2/U0-B3), keine neuen |
 
-**Interaktive Prüfung** (eingebauter Browser, 375 × 812 px, Testkopie über SSH-Tunnel):
-- Menü-Schaltfläche öffnet das Offcanvas. Die aktive Seite ist markiert; Publish, Benutzer, Umschalter und Abmelden sind erreichbar.
-- Umschalter „Dunkel“ setzt `data-bs-theme=dark`, speichert `dark` und setzt `aria-pressed` korrekt. „Systemvorgabe“ entfernt die Speicherung.
-- Keine horizontale Verbreiterung der Seite (`scrollWidth` = 375); breite Tabellen scrollen innerhalb des Inhalts.
-- Ohne JavaScript: `<html class="no-js">`, keine Skripte, Navigation statisch sichtbar, Menü-Schaltfläche und Umschalter ausgeblendet.
+**Visuelle Prüfung:** 45 Aufnahmen in [`docs/ui/screenshots/u1/`](screenshots/u1/) (3,2 MB), Edge 157 headless, Desktop 1440 px, mobil 492 px.
+- **dunkel:** alle 26 Seitenansichten (Suffix `-dark`);
+- **hell:** 13 Kernseiten;
+- **ohne JavaScript, dunkel:** 6 Ansichten (Suffix `-dark-nojs`).
 
-## 4. Screenshots
+**Interaktiv** (eingebauter Browser über SSH-Tunnel): Farbmodus-Umschalter setzt `data-bs-theme`, `aria-pressed` und die Speicherung; „Systemvorgabe“ entfernt sie. Die Logos wechseln korrekt zwischen `_neg` und `_CMYK`, auch in der mobilen Kopfleiste.
 
-Ablage: [`docs/ui/screenshots/u1/`](screenshots/u1/), 45 Aufnahmen, 3,1 MB, Anwendung `3dc3f2d`.
-- Web-Code identisch mit dem Head.
-- Der Fix der Skript-Entfernung im Screenshot-Router (`serve_router.php`) wurde während des Laufs in die Testkopie eingespielt und ist inhaltsgleich committet.
-- Edge 157 headless; Desktop 1440 px, mobil 492 px.
+Das Öffnen des Offcanvas-Menüs wurde in diesem Durchgang nicht erneut per Klick geprüft (Browseransicht ausgeblendet). Der Mechanismus (`offcanvas-lg`, Menü-Schaltfläche, No-JS-Block) ist unverändert gegenüber der früheren, interaktiv geprüften Fassung; die No-JS-Darstellung belegen die Aufnahmen.
 
-| Satz | Aufnahmen |
-|---|---|
-| hell, alle Seiten wie U0 | 26 (gleiche Namen wie `screenshots/u0/` – direkter Vergleich) |
-| dunkel (Suffix `-dark`) | Login (Desktop/mobil), Dashboard (Desktop/mobil), Zonen, Records (Desktop/mobil), Record-Anlage, Server, Benutzer, Systemstatus, zoneadmin-Zonen |
-| ohne JavaScript (Suffix `-nojs`) | Login mobil, Dashboard (Desktop/mobil), Zonen mobil, Records mobil, Zonen-Anlage; Dashboard mobil zusätzlich dunkel (`-dark-nojs`) |
+## 4. Offene Punkte für die folgenden Pakete
 
-Beispiele: [Records hell](screenshots/u1/admin-records.png) ·
-[Records dunkel](screenshots/u1/admin-records-dark.png) ·
-[Records mobil](screenshots/u1/admin-records-mobile.png) ·
-[Dashboard mobil ohne JS, dunkel](screenshots/u1/admin-dashboard-mobile-dark-nojs.png) ·
-[Login mobil dunkel](screenshots/u1/anon-login-mobile-dark.png).
-
-## 5. Befunde aus U1
-
-| ID | Befund | Paket |
-|---|---|---|
-| U1-B1 | **Toasts ohne JavaScript unsichtbar** (vorbestehend): Die Session-Toasts werden ohne Klasse `show` ausgegeben und erst von `global.js` eingeblendet. Ohne JavaScript sieht man keine Rückmeldung nach Aktionen. Die Action selbst wirkt; Toast-Inhalt und Session sind unverändert. | U3 (Meldungs-Baustein mit serverseitiger Darstellung) |
-| U1-B2 | Werkzeug: Edge headless rendert mindestens 492 CSS-Pixel breit (schmaler wird nur das Bild beschnitten) und erzeugt mit abgeschaltetem JavaScript keine Screenshots. Gelöst über Breite 492 und den No-JS-Server. Die U0-Mobilaufnahmen sind dadurch auf 390 px beschnitten, zeigen den damaligen Zustand (feste Seitenleiste) aber korrekt. | – |
-
-Die U0-Befunde B1–B9 sind von U1 nicht berührt und bleiben ihren Paketen zugeordnet. U0-B5 (nicht responsiv) ist
-mit U1 behoben; U0-B6 (403 ohne Layout) bleibt für U3.
+- **U1-B1** (vorbestehend): Toasts ohne JavaScript unsichtbar → U3.
+- Verbleibende Emojis in den Seiteninhalten, z. B. Statuszeichen und Symbole in Tabellen → mit den Bausteinen bzw. Seitenumbauten in U3–U5.
+- Dashboard nach Designvorlage (Kennzahlen, Server, Zonen, Warnungen, ausstehende Veröffentlichungen; Record-Anzahl je Zone nach dem gesonderten Core-Lese-PR, D5) → U5.
+- Record-Verwaltung mit Editor und Live-DIFF (D3/D4/D8) → U4.
