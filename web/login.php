@@ -73,26 +73,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 ?>
 
 <!DOCTYPE html>
-<html lang="de">
+<html lang="<?= htmlspecialchars($lang) ?>" class="no-js">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Login - DNS-Manager</title>
+    <?php // U1: gleicher Farbmodus und dieselben Stylesheets wie das Layout (theme.js extern, CSP-tauglich) ?>
+    <script src="assets/js/theme.js?v=<?= filemtime(__DIR__ . '/assets/js/theme.js') ?>"></script>
     <link href="assets/bootstrap/bootstrap.min.css?v=<?= filemtime(__DIR__ . '/assets/bootstrap/bootstrap.min.css') ?>" rel="stylesheet">
+    <link href="assets/css/theme-auto.css?v=<?= filemtime(__DIR__ . '/assets/css/theme-auto.css') ?>" rel="stylesheet">
     <link href="assets/fonts/fonts.css?v=<?= filemtime(__DIR__ . '/assets/fonts/fonts.css') ?>" rel="stylesheet">
+    <link href="assets/css/custom.css?v=<?= filemtime(__DIR__ . '/assets/css/custom.css') ?>" rel="stylesheet">
     <link rel="icon" href="<?= rtrim(BASE_URL, '/') ?>/assets/branding/favicon.ico" type="image/x-icon">
 </head>
-<body class="bg-light">
+<body class="app-login">
 
-<div class="container d-flex align-items-center justify-content-center" style="min-height: 100vh;">
-    <div class="card shadow-sm p-4 text-center" style="width: 100%; max-width: 500px;">
+<main class="container app-login-main">
+    <div class="card p-4 text-center app-login-card">
 
-        <!-- Logo -->
-        <div style="text-align: center;">
-            <img src="<?= rtrim(BASE_URL, '/') ?>/assets/branding/twlnet_logo.png" alt="Twilight-Networks Logo" style="width: 375px; height: auto; margin-bottom: 1rem;">
+        <!-- Original-Logo je Farbmodus (hell: CMYK, dunkel: Negativ; Dateien unverändert) -->
+        <div class="text-center">
+            <img src="<?= rtrim(BASE_URL, '/') ?>/assets/branding/TWLnet_Logo_CMYK.png" alt="Twilight Networks" class="app-login-logo logo-on-light">
+            <img src="<?= rtrim(BASE_URL, '/') ?>/assets/branding/TWLnet_Logo_neg.png" alt="Twilight Networks" class="app-login-logo logo-on-dark">
         </div>
 
         <!-- Überschrift -->
-        <h3 class="mb-4">DNS-Manager</h3>
+        <h1 class="visually-hidden">DNS Manager</h1>
+        <div class="app-login-product" aria-hidden="true">DNS Manager</div>
 
         <!-- Hinweis: Erfolgreich abgemeldet -->
         <?php if ($logoutSuccess): ?>
@@ -113,26 +120,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
 
         <!-- Login-Formular -->
-        <div class="mx-auto" style="width: 100%; max-width: 300px;">
+        <div class="mx-auto app-login-form">
             <form method="post">
                 <?= csrf_input() ?>
 
                 <div class="mb-3 text-start">
-                    <label class="form-label"><?= $LANG['username'] ?></label>
-                    <input type="text" name="username" class="form-control" required autofocus>
+                    <label class="form-label" for="login_username"><?= $LANG['username'] ?></label>
+                    <input type="text" id="login_username" name="username" class="form-control" autocomplete="username" required autofocus>
                 </div>
                 <div class="mb-3 text-start">
-                    <label class="form-label"><?= $LANG['password'] ?></label>
-                    <input type="password" name="password" class="form-control" required>
+                    <label class="form-label" for="login_password"><?= $LANG['password'] ?></label>
+                    <input type="password" id="login_password" name="password" class="form-control" autocomplete="current-password" required>
                 </div>
 
-                <div class="d-grid" style="max-width: 120px; margin: 0 auto;">
-                    <button type="submit" class="btn btn-primary"><?= $LANG['login_button'] ?></button>
+                <div class="d-grid app-login-submit">
+                    <button type="submit" class="btn btn-success"><?= $LANG['login_button'] ?></button>
                 </div>
             </form>
         </div>
     </div>
-</div>
+</main>
 
 </body>
 </html>

@@ -75,14 +75,18 @@ if [ "$MODE" = serve ]; then
   # existiert oder MAX_MINUTES (Standard 30) abgelaufen sind; danach Aufräumen wie üblich.
   php $H/serve_sessions.php || { echo "ABBRUCH: Sessions"; exit 1; }
   install -m 644 -o root -g root $H/serve_router.php $T/serve_router.php   # für www-data lesbar (Harness liegt ggf. unter /root)
+  # Ports 1860x: normale Darstellung; 1861x: ohne JavaScript (Router entfernt <script>, UIG_NOJS=1)
   declare -A PORT=([admin]=18601 [zoneadmin]=18602 [anon]=18603)
   for role in admin zoneadmin anon; do
-    ss -ltn | grep -q " 127.0.0.1:${PORT[$role]} " && { echo "ABBRUCH: Port ${PORT[$role]} belegt"; exit 3; }
     sid=""; [ -f $T/sid_$role ] && sid=$(cat $T/sid_$role)
-    sudo -u www-data env -i PATH=/usr/bin:/bin UIG_SID="$sid" php -d session.save_path=$T/sess -d error_log=$T/app.log -d log_errors=1 -d display_errors=0 \
-      -S 127.0.0.1:${PORT[$role]} $T/serve_router.php > /dev/null 2>&1 & echo $! >> $T/pids
+    for nojs in 0 1; do
+      port=$(( ${PORT[$role]} + nojs * 10 ))
+      ss -ltn | grep -q " 127.0.0.1:$port " && { echo "ABBRUCH: Port $port belegt"; exit 3; }
+      sudo -u www-data env -i PATH=/usr/bin:/bin UIG_SID="$sid" UIG_NOJS=$nojs php -d session.save_path=$T/sess -d error_log=$T/app.log -d log_errors=1 -d display_errors=0 \
+        -S 127.0.0.1:$port $T/serve_router.php > /dev/null 2>&1 & echo $! >> $T/pids
+    done
   done
-  sleep 1; echo "Screenshot-Server: $(ss -ltn | grep -cE ' 127\.0\.0\.1:1860[123] ')/3 (admin 18601, zoneadmin 18602, anonym 18603) – Stopp: touch $T/stop"
+  sleep 1; echo "Screenshot-Server: $(ss -ltn | grep -cE ' 127\.0\.0\.1:186[01][123] ')/6 (admin 18601/18611, zoneadmin 18602/18612, anonym 18603/18613; 1861x ohne JS) – Stopp: touch $T/stop"
   for i in $(seq 1 $(( ${MAX_MINUTES:-30} * 12 ))); do [ -e $T/stop ] && break; sleep 5; done
   PAT='PHP (Fatal error|Warning|Notice|Deprecated|Parse error)|event=php_error'
   echo "PHP-Meldungen im Log: $(grep -cE "$PAT" $T/app.log)"; grep -E "$PAT" $T/app.log | sed -E 's/^\[[^]]+\] //; s/ time="[^"]+"//' | sort | uniq -c | head -10

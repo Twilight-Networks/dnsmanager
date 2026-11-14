@@ -5,14 +5,22 @@
 #        Das Skript öffnet einen SSH-Tunnel, ruft die Seiten je Rolle ab und speichert PNG-Dateien.
 #        Eigenes temporäres Edge-Profil, keine Anmeldedaten im Browser (Sessions setzt der Router serverseitig).
 # Aufruf:  powershell -File tests/ui/screenshots.ps1 -SshTarget root@192.168.53.122 -KeyFile $HOME\.ssh\claude_dnsmanager_test -OutDir docs/ui/screenshots/u0
+#          Optional (ab U1): -ColorScheme dark (Systemvorgabe des Browsers dunkel), -NoJs (JavaScript abgeschaltet),
+#          -Only name1,name2 (nur diese Aufnahmen). Dateiname erhält dann das Suffix -dark bzw. -nojs.
 param(
     [Parameter(Mandatory = $true)][string]$SshTarget,
     [Parameter(Mandatory = $true)][string]$KeyFile,
     [Parameter(Mandatory = $true)][string]$OutDir,
-    [string]$Edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    [string]$Edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    [ValidateSet('light', 'dark')][string]$ColorScheme = 'light',
+    [switch]$NoJs,
+    [string[]]$Only = @()
 )
 $ErrorActionPreference = 'Stop'
+# Bei Aufruf über powershell -File kommt -Only a,b als eine Zeichenkette an
+$Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ -ne '' })
 $ports = @{ admin = 18601; zoneadmin = 18602; anon = 18603 }
+$portsNoJs = @{ admin = 18611; zoneadmin = 18612; anon = 18613 }
 # Name; Rolle; Pfad; Breite; Höhe
 $shots = @(
     @('anon-login-desktop', 'anon', 'login.php', 1440, 900),
@@ -37,21 +45,30 @@ $shots = @(
     @('zoneadmin-zones', 'zoneadmin', 'pages/zones.php', 1440, 1000),
     @('zoneadmin-records', 'zoneadmin', 'pages/records.php?zone_id=1', 1440, 1200),
     @('zoneadmin-users', 'zoneadmin', 'pages/users.php', 1440, 900),
-    @('anon-login-mobile', 'anon', 'login.php', 390, 844),
-    @('admin-dashboard-mobile', 'admin', 'pages/dashboard.php', 390, 844),
-    @('admin-zones-mobile', 'admin', 'pages/zones.php', 390, 844),
-    @('admin-records-mobile', 'admin', 'pages/records.php?zone_id=1', 390, 844)
+    # Mobil: 492 CSS-Pixel = Mindestbreite von Edge headless (schmaler wird nur das Bild beschnitten); gleicher
+    # Bootstrap-Bereich (xs, < 576 px) wie ein 390-px-Telefon
+    @('anon-login-mobile', 'anon', 'login.php', 492, 900),
+    @('admin-dashboard-mobile', 'admin', 'pages/dashboard.php', 492, 900),
+    @('admin-zones-mobile', 'admin', 'pages/zones.php', 492, 900),
+    @('admin-records-mobile', 'admin', 'pages/records.php?zone_id=1', 492, 900)
 )
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $profileDir = Join-Path $env:TEMP ("uig-edge-" + [guid]::NewGuid().ToString('N'))
-$fwd = @(); foreach ($p in $ports.Values) { $fwd += @('-L', "$($p):127.0.0.1:$p") }
+$fwd = @(); foreach ($p in @($ports.Values) + @($portsNoJs.Values)) { $fwd += @('-L', "$($p):127.0.0.1:$p") }
 $tunnel = Start-Process -FilePath ssh -ArgumentList (@('-i', $KeyFile, '-N', '-o', 'ExitOnForwardFailure=yes') + $fwd + @($SshTarget)) -PassThru -WindowStyle Hidden
 try {
     Start-Sleep -Seconds 3
+    # Blink-Einstellungen: bevorzugtes Farbschema (0 = dunkel, 1 = hell) und optional JavaScript aus
+    $blink = 'preferredColorScheme=' + $(if ($ColorScheme -eq 'dark') { '0' } else { '1' })
+    # Ohne JavaScript: Server-Ports 1861x, deren Router alle <script>-Elemente entfernt (Edge headless erzeugt mit
+    # scriptEnabled=false keine Screenshots)
+    $portMap = $(if ($NoJs) { $portsNoJs } else { $ports })
+    $suffix = $(if ($ColorScheme -eq 'dark') { '-dark' } else { '' }) + $(if ($NoJs) { '-nojs' } else { '' })
     foreach ($s in $shots) {
-        $file = Join-Path (Resolve-Path $OutDir) ($s[0] + '.png')
-        $url = "http://127.0.0.1:$($ports[$s[1]])/dnsmanager-ui/$($s[2])"
-        $edgeArgs = @('--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--disable-extensions', "--user-data-dir=`"$profileDir`"",
+        if ($Only.Count -gt 0 -and $Only -notcontains $s[0]) { continue }
+        $file = Join-Path (Resolve-Path $OutDir) ($s[0] + $suffix + '.png')
+        $url = "http://127.0.0.1:$($portMap[$s[1]])/dnsmanager-ui/$($s[2])"
+        $edgeArgs = @('--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--disable-extensions', "--user-data-dir=`"$profileDir`"", "--blink-settings=$blink",
             "--window-size=$($s[3]),$($s[4])", "--screenshot=`"$file`"", $url)
         # Edge schreibt Diagnosezeilen auf stderr; diese werden verworfen (kein Abbruch)
         # Zeitlimit je Aufnahme: Edge headless beendet sich bei manchen Antworten (z. B. reine 403-Textseite) nicht selbst
@@ -61,7 +78,7 @@ try {
                 ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         }
         Start-Sleep -Milliseconds 300
-        if (Test-Path $file) { "{0,-26} {1,8:N0} Byte  {2}" -f $s[0], (Get-Item $file).Length, $s[2] } else { "FEHLT {0}" -f $s[0] }
+        if (Test-Path $file) { "{0,-32} {1,8:N0} Byte  {2}" -f ($s[0] + $suffix), (Get-Item $file).Length, $s[2] } else { "FEHLT {0}" -f ($s[0] + $suffix) }
     }
 }
 finally {
