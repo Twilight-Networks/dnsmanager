@@ -28,6 +28,7 @@ require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/records/RecordInput.php';
 require_once __DIR__ . '/../inc/app/records/RecordService.php';
 require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
+require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 
 // Nur POST-Anfragen zulassen
@@ -49,11 +50,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $raw_type = $_POST['type'] ?? '';
-    $is_dkim = !empty($_POST['is_dkim']); // z. B. aus hidden input
-
-    // Sonderfall: Wenn DKIM als TXT gespeichert wird, aber speziell validiert werden muss
-    // (Validator-Typ wird vor dem Zusammensetzen aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
-    $validator_type = ($raw_type === 'TXT' && $is_dkim) ? 'DKIM' : $raw_type;
 
     // Überprüfen, ob eine DKIM-Datei hochgeladen wurde
     if (isset($_FILES['dkim_file']) && $_FILES['dkim_file']['error'] === UPLOAD_ERR_OK) {
@@ -119,8 +115,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $_POST['ttl'] = getAutoTTL($raw_type);
     }
 
-    // Content zusammensetzen (inkl. spezieller Typ-Logik)
-    $result = RecordContentBuilder::build($raw_type, $_POST);
+    // Content zusammensetzen (U4-Core: einzige serverseitige Zusammensetzung; Zone aus dem Read-Service mit
+    // Berechtigung). Prüftyp (z. B. DKIM, SPF) und DKIM-Kennzeichen liefert der Builder.
+    $zoneForBuild = (new ZoneReadService($pdo, $zoneAccess))->getZone($actor, $zone_id);
+    $result = RecordContentBuilder::build($raw_type, $_POST, ['mode' => 'create', 'zoneName' => (string)($zoneForBuild['name'] ?? '')]);
 
     if (isset($result['errorCode'])) {
         toastError(
@@ -135,6 +133,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $name    = $result['name'];
     $content = $result['content'];
     $ttl     = intval($_POST['ttl']) ?: 3600;
+    $is_dkim = $result['isDkim'];
+    $validator_type = $result['validationType'];
 
     // Fachliche Anlage (inkl. optionalem AutoPTR) im RecordService
     $input      = new RecordInput($type, $name, $content, $ttl, $is_dkim, $validator_type);

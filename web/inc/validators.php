@@ -106,7 +106,9 @@ function validateDnsRecord(string $type, string $name, string $content, ?int $tt
                 $errors[] = 'ERR_DKIM_KEYTYPE';
             }
 
-            if (preg_match('/\bp=([A-Za-z0-9+\/=]{32,})\b/', $joined, $m)) {
+            // Schlüssel bis zum ersten Nicht-Base64-Zeichen (U4-Core: früher „\b“ am Ende, das ein abschließendes
+            // Padding „=“ abschnitt und gültige Schlüssel wie Ed25519 als ungültig ablehnte)
+            if (preg_match('/\bp=([A-Za-z0-9+\/=]{32,})(?![A-Za-z0-9+\/=])/', $joined, $m)) {
                 $key = $m[1];
 
                 // Versuchen, Base64 zu dekodieren

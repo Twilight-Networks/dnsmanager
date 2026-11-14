@@ -4,7 +4,8 @@
  * Zweck: Zerlegt den gespeicherten Inhalt eines DNS-Records in seine fachlichen Bestandteile (Gegenstück zu
  *        RecordContentBuilder), z. B. für Bearbeitungsformulare beliebiger Aufrufkanäle.
  *
- * Logik unverändert aus templates/record_edit_form.php übernommen (MX, SRV, DKIM, NAPTR, URI, CAA/NAPTR-Präfix).
+ * Logik aus templates/record_edit_form.php übernommen (MX, SRV, DKIM, NAPTR, URI, CAA/NAPTR-Präfix). DKIM seit
+ * U4-Core tag-basiert: Das Base64-Padding von p= bleibt erhalten, k/h/t werden nur als eigene Tags erkannt.
  * Rein funktional: keine Datenbank, keine Session, keine Ausgabe.
  */
 
@@ -76,22 +77,28 @@ final class RecordContentParser
                 $dkim_subdomain = $matches[2] ?? '';
             }
 
-            // DKIM-Key aus dem zusammengefügten TXT-Inhalt
-            if (preg_match_all('/"([^"]+)"/', $content, $matches)) {
-                $joined = implode('', $matches[1]);
-                if (preg_match('/\bp=([A-Za-z0-9+\/=]+)\b/', $joined, $m)) {
-                    $dkim_key = $m[1];
+            // DKIM-Tags aus dem zusammengefügten TXT-Inhalt (U4-Core): Zeichenketten verbinden, an „;“ in Tags
+            // name=wert zerlegen. p behält das Base64-Padding (=); k, h und t werden nur als eigene Tags erkannt.
+            $tags = [];
+            if (preg_match_all('/"([^"]*)"/', $content, $matches)) {
+                foreach (explode(';', implode('', $matches[1])) as $part) {
+                    if (preg_match('/^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$/s', $part, $m)) {
+                        $tags[strtolower($m[1])] = $m[2];
+                    }
                 }
             }
-
-            if (preg_match('/\bk=(rsa|ed25519)\b/i', $content, $m)) {
-                $dkim_key_type = strtolower($m[1]);
+            $p = preg_replace('/\s+/', '', (string)($tags['p'] ?? '')) ?? '';
+            if ($p !== '' && preg_match('/^[A-Za-z0-9+\/]+={0,2}$/', $p)) {
+                $dkim_key = $p;
             }
-            if (preg_match('/\bh=([a-z0-9:+\-]+)\b/i', $content, $m)) {
-                $dkim_hash_algos = $m[1];
+            if (isset($tags['k']) && preg_match('/^(rsa|ed25519)$/i', $tags['k'])) {
+                $dkim_key_type = strtolower($tags['k']);
             }
-            if (preg_match('/\bt=([a-z]+)\b/i', $content, $m)) {
-                $dkim_flags = $m[1];
+            if (isset($tags['h']) && preg_match('/^[A-Za-z0-9:+\-]+$/', $tags['h'])) {
+                $dkim_hash_algos = $tags['h'];
+            }
+            if (isset($tags['t']) && preg_match('/^[A-Za-z:]+$/', $tags['t'])) {
+                $dkim_flags = $tags['t'];
             }
         }
 
