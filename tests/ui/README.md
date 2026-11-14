@@ -123,6 +123,25 @@ Im Modus `serve` liefert der Router zusätzlich die Testseiten aus `tests/ui/sho
   Fixture-Records, BIND-Prüfung mit `named-checkzone`) und `dyndns_flag.php` (isDyndns gegen den DynDNS-Schutz,
   REPEATABLE READ und READ COMMITTED).
 
+## Record-Verwaltung (U4-UI)
+
+- **Matrix mit dem einheitlichen Editorformular:** `matrix_cases.php` bildet die Bedienschritte auf die benannten
+  Felder ab (mit und ohne JavaScript dieselben Felder; Anlage ohne JavaScript über `&type=`). Der Formular-Parser in
+  `lib.php` sendet wie ein Browser keine Felder aus `<fieldset disabled>`.
+  - `js_posts_u4ui.json`: JS-Daten aus dem U4-UI-Formular und `record_editor.js`.
+  - Vergleich gegen `main` (U4-Core): `UIG_JS_POSTS=…/js_posts_u4core.json run.sh matrix <main-SHA>` als Basis,
+    Abweichungen in `records/matrix_deviations_u4ui.json` (U4U-A1 bis A3).
+- **`u4ui.php`** (läuft in `run.sh matrix`, sobald die Anwendung `actions/record_preview.php` enthält):
+  - Vorschau-Endpunkt: Methode, CSRF, Rollen, fremde Zonen und Records;
+  - keine Schreibzugriffe;
+  - Vorschau ↔ tatsächlich erzeugte Zonendatei für alle Matrixfälle, dazu ungültige Eingaben;
+  - Roundtrip aller Records;
+  - No-JS-Vorschau;
+  - Zonenauswahl mit mehr als 500 Zonen.
+  - Mit `UIG_BASE_SHA=<main-SHA>` zusätzlich der E3-Bytevergleich der Zonendateien (`u4ui_zonefiles.php`).
+- **Golden:** `run.sh compare <SHA> baseline/golden-1e37515.json baseline/exceptions-u4ui.json`.
+- **Aufnahmen:** `screenshots.ps1 -Only u4-records,…` (Einträge `u4-*`).
+
 ## CSP Report-Only (U2)
 
 `UIG_CSP_REPORT_ONLY=1 MAX_MINUTES=30 bash run.sh serve <App-SHA>` aktiviert `CSP_REPORT_ONLY` **ausschließlich in der

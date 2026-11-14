@@ -10,7 +10,7 @@
  * - Löschen und Auswahl nur, wo der RecordService es zulässt (nicht bei Glue, geschütztem NS, DynDNS).
  *   Einzellöschen mit Bestätigung, Massenlöschung über bulk_ids (record_delete.php, unverändert).
  * - Rechter Editor (edit_id bzw. add_new) mit einheitlichem Formular (templates/record_editor_form.php) und
- *   serverseitiger Vorschau/DIFF. Ohne JavaScript: „Vorschau“ sendet das Formular per POST an diese Seite
+ *   serverseitiger Vorschau/DIFF. Ohne JavaScript sendet „Vorschau“ das Formular per POST an diese Seite
  *   (CSRF-geprüft, dieselbe Vorschaufunktion wie actions/record_preview.php, keine Schreibzugriffe).
  * Zugriff: requireRole(['admin', 'zoneadmin']) und Zonenberechtigung (ZoneAccess); fremde Zonen 403.
  * Aufruf: GET /pages/records.php?zone_id={id}[&edit_id={id}|&add_new=1[&type=X]]; POST mit preview=1 (Vorschau)
