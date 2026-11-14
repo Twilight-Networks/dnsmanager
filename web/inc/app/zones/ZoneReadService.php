@@ -45,11 +45,16 @@ final class ZoneReadService
 
     /**
      * Für den Akteur sichtbare Zonen (Übersicht), sortiert nach Name und ID, jeweils mit den zugeordneten
-     * Servern (id, name, role, active; sortiert nach Servername und ID).
+     * Servern (id, name, role, active; sortiert nach Servername und ID) und der Anzahl gespeicherter Records.
      *
      * Eine einzige Abfrage: Die Zonenseite (Berechtigung, Sortierung, LIMIT/OFFSET) wird als abgeleitete
      * Tabelle auf Zonenebene gebildet; erst danach werden die Server angefügt. Die Pagination bezieht sich
      * damit ausschließlich auf Zonen, Serverlisten werden nie über Seitengrenzen abgeschnitten.
+     *
+     * recordCount (D5): Anzahl aller in der Tabelle records gespeicherten Records der Zone, einschließlich
+     * System-, Glue- und DynDNS-Records (keine Filterung nach Typ, Name oder server_id). Gezählt wird per
+     * skalarer Unterabfrage je Zone der bereits gebildeten Zonenseite, in derselben Anweisung wie Liste und
+     * Berechtigung: keine Zusatzabfrage je Zone (kein N+1) und keine Mehrfachzählung durch die Serverzuordnung.
      *
      * @return array{zones: array<int, array>, limit: int, offset: int, hasMore: bool}
      *
@@ -69,7 +74,8 @@ final class ZoneReadService
         $stmt = $this->pdo->prepare(
             'SELECT zp.id, zp.name, zp.type, zp.ttl, zp.prefix_length, zp.description, zp.changed, zp.allow_dyndns,'
             . ' s.id AS server_id, s.name AS server_name, zs.is_master AS server_is_master,'
-            . ' s.active AS server_active'
+            . ' s.active AS server_active,'
+            . ' (SELECT COUNT(*) FROM records r WHERE r.zone_id = zp.id) AS record_count'
             . ' FROM (SELECT ' . self::ZONE_COLUMNS . ' FROM zones z WHERE ' . $access['sql']
             . ' ORDER BY z.name ASC, z.id ASC LIMIT ? OFFSET ?) zp'
             . ' LEFT JOIN zone_servers zs ON zs.zone_id = zp.id'
@@ -90,6 +96,7 @@ final class ZoneReadService
             $id = (int)$row['id'];
             if (!isset($zones[$id])) {
                 $zones[$id] = self::mapZone($row);
+                $zones[$id]['recordCount'] = (int)$row['record_count'];
                 $zones[$id]['servers'] = [];
             }
             if ($row['server_id'] !== null) {
