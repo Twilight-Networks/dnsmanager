@@ -590,4 +590,21 @@ return [
     'diag_error_php_dev_mode'   => 'PHP_ERR_REPORT steht auf true (Entwicklungsmodus aktiv).',
     'diag_error_log_level'      => 'Ungültiger LOG_LEVEL: %s',
     'diag_error_log_target'     => 'Ungültiger LOG_TARGET: %s',
+
+    // === UI-Bausteine (U3) ===
+    'confirm_delete_prompt' => 'Wirklich löschen?',
+    'confirm_delete_final' => 'Endgültig löschen',
+    'access_denied_title' => 'Zugriff verweigert',
+    'access_denied_text' => 'Deiner Rolle fehlen für diese Seite die erforderlichen Berechtigungen.',
+    'back_to_dashboard' => 'Zum Dashboard',
+    'bulk_selected' => '%d ausgewählt',
+    'select_all' => 'Alle auswählen',
+    'select_row' => 'Auswählen',
+    'diff_chars' => '%d Zeichen',
+    'diff_summary_changed' => 'Geänderte Zeilen: %d',
+    'diff_summary_none' => 'Keine Änderung',
+    'diff_show_full' => 'vollständig anzeigen',
+    'diff_show_less' => 'kürzer anzeigen',
+    'diff_label' => 'Vorschau der Änderung',
+    'saved_not_published' => 'Speichern veröffentlicht noch nicht: Die Änderung gelangt erst mit „Veröffentlichen“ auf die DNS-Server.',
 ];

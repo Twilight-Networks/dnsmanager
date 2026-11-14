@@ -87,6 +87,7 @@ if [ "$MODE" = serve ]; then
   # existiert oder MAX_MINUTES (Standard 30) abgelaufen sind; danach Aufräumen wie üblich.
   php $H/serve_sessions.php || { echo "ABBRUCH: Sessions"; exit 1; }
   install -m 644 -o root -g root $H/serve_router.php $T/serve_router.php   # für www-data lesbar (Harness liegt ggf. unter /root)
+  install -d -m 755 -o root -g root $T/ui && install -m 644 -o root -g root $H/showcase/* $T/ui/   # U3: Testseiten unter /__ui/
   # Ports 1860x: normale Darstellung; 1861x: ohne JavaScript (Router entfernt <script>, UIG_NOJS=1)
   declare -A PORT=([admin]=18601 [zoneadmin]=18602 [anon]=18603)
   for role in admin zoneadmin anon; do

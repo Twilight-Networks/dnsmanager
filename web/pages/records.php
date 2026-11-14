@@ -161,7 +161,7 @@ function render_records_table(array $records, string $title, int $zone_id, ?int 
                 echo csrf_input();
                 echo "<input type='hidden' name='id' value='" . $r['id'] . "'>";
                 echo "<input type='hidden' name='zone_id' value='" . $zone_id . "'>";
-                echo "<button type='submit' class='btn btn-sm btn-outline-danger'>" . $LANG['delete'] . "</button>";
+                echo ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]);
                 echo "</form>";
             }
         }

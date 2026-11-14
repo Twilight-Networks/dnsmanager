@@ -590,4 +590,21 @@ return [
     'diag_error_php_dev_mode'   => 'PHP_ERR_REPORT está activado (modo desarrollo activo).',
     'diag_error_log_level'      => 'LOG_LEVEL inválido: %s',
     'diag_error_log_target'     => 'LOG_TARGET inválido: %s',
+
+    // === UI-Bausteine (U3) ===
+    'confirm_delete_prompt' => '¿Eliminar realmente?',
+    'confirm_delete_final' => 'Eliminar definitivamente',
+    'access_denied_title' => 'Acceso denegado',
+    'access_denied_text' => 'Su rol no tiene los permisos necesarios para esta página.',
+    'back_to_dashboard' => 'Al panel',
+    'bulk_selected' => '%d seleccionados',
+    'select_all' => 'Seleccionar todo',
+    'select_row' => 'Seleccionar',
+    'diff_chars' => '%d caracteres',
+    'diff_summary_changed' => 'Líneas modificadas: %d',
+    'diff_summary_none' => 'Sin cambios',
+    'diff_show_full' => 'mostrar completo',
+    'diff_show_less' => 'mostrar menos',
+    'diff_label' => 'Vista previa del cambio',
+    'saved_not_published' => 'Guardar no publica: el cambio llega a los servidores DNS solo con «Publicar».',
 ];

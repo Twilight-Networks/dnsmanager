@@ -154,7 +154,7 @@ foreach ($dyndnsReadService->listAccounts($actor) as $a) {
                                 <form method="post" action="actions/dyndns_delete.php" class="d-inline confirm-delete">
                                     <?= csrf_input() ?>
                                     <input type="hidden" name="id" value="<?= $acc['id'] ?>">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
+                                    <?= ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]) ?>
                                 </form>
                             </div>
                         </td>

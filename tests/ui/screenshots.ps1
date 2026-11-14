@@ -50,7 +50,13 @@ $shots = @(
     @('anon-login-mobile', 'anon', 'login.php', 492, 900),
     @('admin-dashboard-mobile', 'admin', 'pages/dashboard.php', 492, 900),
     @('admin-zones-mobile', 'admin', 'pages/zones.php', 492, 900),
-    @('admin-records-mobile', 'admin', 'pages/records.php?zone_id=1', 492, 900)
+    @('admin-records-mobile', 'admin', 'pages/records.php?zone_id=1', 492, 900),
+    # U3: Bausteinübersicht (Testseite des Harness), Editor-Rahmen und 403-Seite im Layout
+    @('u3-showcase', 'admin', '__ui/showcase.php', 1440, 2900),
+    @('u3-showcase-editor', 'admin', '__ui/showcase.php?editor=1', 1440, 1000),
+    @('u3-showcase-mobile', 'admin', '__ui/showcase.php', 492, 3600),
+    @('u3-showcase-editor-mobile', 'admin', '__ui/showcase.php?editor=1', 492, 900),
+    @('u3-403-zoneadmin', 'zoneadmin', 'pages/servers.php', 1440, 800)
 )
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $profileDir = Join-Path $env:TEMP ("uig-edge-" + [guid]::NewGuid().ToString('N'))
