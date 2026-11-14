@@ -90,7 +90,7 @@ Stand: 14.11.2026. Ziel gemäß [`docs/UI_GUIDELINES.md`](../UI_GUIDELINES.md), 
 | `web/common.php` | Sendet `Content-Security-Policy-Report-Only` (Zielrichtlinie plus `report-uri <BASE_URL>/csp_report.php`) nur bei aktiver Konfiguration, neben den unveränderten Headern `nosniff`, `DENY` und `same-origin`. |
 | `web/csp_report.php` (neu) | Siehe unten. |
 | `web/config/ui_config-sample.php` | Auskommentierter Eintrag `// define('CSP_REPORT_ONLY', true);` mit Erläuterung. |
-| `tests/ui/run.sh`, `README.md` | `UIG_CSP_REPORT_ONLY=1` aktiviert die Einstellung ausschließlich in der generierten Konfiguration der Testkopie und nur im Modus `serve`; Golden-Läufe lehnen die Option ab. CSP-Logzeilen werden vor dem Aufräumen gesichert, der Ratenstatus entfernt. |
+| `tests/ui/run.sh`, `README.md` | `UIG_CSP_REPORT_ONLY=1` aktiviert die Einstellung ausschließlich in der generierten Konfiguration der Testkopie und nur im Modus `serve`; Golden-Läufe lehnen die Option ab. Der Ratenstatus liegt in einem eigenen Verzeichnis der Testkopie (`CSP_REPORT_STATE_DIR` = `/tmp/dnsmgr-uig/csp-state`) und wird mit ihr entfernt; es gibt kein Löschen im allgemeinen Temp-Verzeichnis (U2-R1). CSP-Logzeilen werden vor dem Aufräumen gesichert. |
 
 **Der Endpunkt `csp_report.php`** lädt nur `config/ui_config.php`, `inc/logging.php` und `inc/web/csp.php`, ohne Datenbank, Authentifizierung oder Session.
 
@@ -104,7 +104,7 @@ Stand: 14.11.2026. Ziel gemäß [`docs/UI_GUIDELINES.md`](../UI_GUIDELINES.md), 
 | ungültiger Bericht | 400, keine Logzeile |
 | gültiger Bericht | 204 |
 
-**Ratenbegrenzung ohne Session:** höchstens 60 Anfragen je Quelladresse und 600 insgesamt je 10 Minuten. Der Zähler liegt in einer gesperrten Statusdatei im temporären Verzeichnis (Fail-Closed). Ungültige Anfragen zählen mit. Die erste Überschreitung je Fenster ergibt eine Logzeile `event=csp_report_rate_limited`.
+**Ratenbegrenzung ohne Session:** höchstens 60 Anfragen je Quelladresse und 600 insgesamt je 10 Minuten. Der Zähler liegt in `rate.json` eines privaten Statusverzeichnisses (Abschnitt 5.7) mit exklusiver Dateisperre. Unsicherer Status oder Schreibfehler: 503 (Fail-Closed). Ungültige Anfragen zählen mit. Die erste Überschreitung je Fenster ergibt eine Logzeile `event=csp_report_rate_limited`.
 
 **Validierung:**
 - Direktive aus einer festen Liste.
@@ -182,6 +182,54 @@ Ausschließlich in der Testkopie wurde in `pages/dashboard.php` vorübergehend e
 Golden-Läufe senden keinen CSP-Header; der Headervertrag ist unverändert.
 
 **Aufräumen ns1:**
-- keine Test-DBs, kein `/tmp/dnsmgr-uig`, kein Ratenstatus, keine Ports;
+- keine Test-DBs, kein `/tmp/dnsmgr-uig`, keine Ports;
 - Publish-Sperre frei;
 - installierte Konfiguration ohne `CSP_REPORT_ONLY`, Checkout `7cdd9a8`.
+
+### 5.7 Korrektur U2-R1: Speicherung der Ratenbegrenzung
+
+Review-Befund zu `e3d7c84`:
+- Die Statusdatei hatte einen vorhersehbaren Namen im allgemeinen Temp-Verzeichnis.
+- Das Cleanup des Harness löschte pauschal `/tmp/dnsmanager-csp-report-*.json`.
+- Schreibfehler blieben unbeachtet.
+
+Korrektur in `1b70aeb`, nur `csp_report.php`, Beispielkonfiguration und Harness; die Zielrichtlinie ist unverändert.
+
+**Statusverzeichnis:**
+- `CSP_REPORT_STATE_DIR` (absoluter Pfad), sonst `<temp>/dnsmanager-csp-<euid>-<Hash des Installationspfads>`.
+- Anlage mit 0700 unter `umask 0077`.
+- Verwendet nur, wenn es per `lstat` ein echtes Verzeichnis ist (kein Symlink), dem Prozessbenutzer gehört und keine Gruppen- oder Fremdrechte hat. Ein vorhandenes unsicheres Verzeichnis wird nicht korrigiert, sondern abgelehnt.
+
+**Statusdatei `rate.json`:**
+- Kein Symlink; Öffnen unter `umask 0077`.
+- Die geöffnete Datei muss die geprüfte sein (gleiches Inode und Gerät), regulär, 0600 ohne Gruppen- oder Fremdrechte, mit genau einem Link und eigenem Benutzer.
+
+**Fail-Closed:**
+- Unsicheres Verzeichnis oder unsichere Datei, Sperr-, Kodier-, Kürz-, Schreib- oder Flush-Fehler → 503; der Bericht wird nicht ausgewertet.
+- Die globale PHP-Fehlerbehandlung protokolliert dabei ggf. die PHP-Meldung, z. B. `Permission denied` oder ENOSPC.
+
+**Harness:**
+- Eigenes Statusverzeichnis `/tmp/dnsmgr-uig/csp-state` (0700, www-data), das mit der Testkopie entfernt wird.
+- Das pauschale Löschen im allgemeinen Temp-Verzeichnis ist entfallen.
+
+**Gezielte Tests** (ns1, `1b70aeb`, php-cgi als www-data gegen Kopien der Testkopie; Stellvertreter-Temp-Verzeichnis 1777 innerhalb der Testkopie):
+
+| Fall | Ergebnis |
+|---|---|
+| R01 | Standardverzeichnis angelegt: Verzeichnis 0700 www-data, `rate.json` regulär 0600 www-data mit 1 Link, Zähler 2 nach zwei Aufrufen (204/204) |
+| R02 | Symlink auf dem vorhersehbaren Verzeichnisnamen → 503, Symlink-Ziel bleibt leer |
+| R03 | Verzeichnis eines anderen Benutzers (0700 bzw. 0777) → 503/503, nichts geschrieben |
+| R04 | eigenes Verzeichnis mit 0750 → 503, keine Datei angelegt, Rechte nicht verändert |
+| R05 | `rate.json` als Symlink → 503, Ziel unverändert |
+| R06 | `rate.json` mit zweitem Hardlink → 503, nicht beschrieben |
+| R07 | `rate.json` mit 0644 → 503; fremder Eigentümer → 503 |
+| R08 | nach Entfernen der unsicheren Datei → 204, neue `rate.json` 0600 |
+| R09 | Schreibfehler: Statusverzeichnis auf vollem tmpfs (`CSP_REPORT_STATE_DIR`) → 503, Status nicht übernommen (0 Byte) |
+| R10 | nach Freigabe des Platzes wieder 204 |
+| R11 | relativer `CSP_REPORT_STATE_DIR` → 503 |
+| R12 | Log: nur die Verstoßzeilen der gültigen Aufrufe und je ein erwarteter PHP-Hinweis aus R07 und R09, sonst nichts |
+| E01–E18, H-1 bis H-4 | Wiederholt mit dem neuen Statusverzeichnis: 22/22, Ratenbegrenzung unverändert (51 × 204, dann 19 × 429, eine Logzeile `rate_limited`). Statusdatei 0600 www-data. |
+| C1 Cleanup isoliert | Vor dem Lauf angelegte Köder im allgemeinen `/tmp` (`dnsmanager-csp-report-koeder.json`, Verzeichnis `dnsmanager-csp-0-koeder`) sind nach dem Beenden unverändert vorhanden. Der Lauf hat keine eigenen Einträge im allgemeinen `/tmp` angelegt; `/tmp/dnsmgr-uig` samt Statusverzeichnis ist entfernt. Köder anschließend von Hand gelöscht. |
+| Regression | Statisch 5/5. Golden gegen die U0-Basis: Exit 0, 0 Vertragsabweichungen. Golden gegen `504c13c`: 118/118 identisch. |
+
+Das gesicherte CSP-Log dieses Laufs (`csp-1b70aeb-…`) enthält 56 Verstoßzeilen. Das sind ausschließlich die synthetischen Berichte der Endpunkt-Tests; es fand kein Browserlauf statt.
