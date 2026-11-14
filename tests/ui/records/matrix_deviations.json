@@ -16,6 +16,9 @@
   "ttl_srv/nojs": "U4C-A5",
   "chg_srv_port/nojs": "U4C-A5",
   "chg_srv_proto/nojs": "U4C-A5",
+  "add_srv_rel_dot/nojs": "U4C-A5",
+  "chg_srv_target_abs/nojs": "U4C-A5",
+  "chg_srv_target_rel/nojs": "U4C-A5",
   "add_uri/nojs": "U4C-A6",
   "add_uri/js": "U4C-A6",
   "ttl_mx_rel/nojs": "U4C-A7",
@@ -27,5 +30,7 @@
   "chg_caa_prefix/js": "U4C-A8",
   "chg_uri/nojs": "U4C-A9",
   "chg_dkim_key/nojs": "U4C-A9",
-  "chg_dkim_hash/nojs": "U4C-A9"
+  "chg_dkim_hash/nojs": "U4C-A9",
+  "add_srv_abs_zone/nojs": "U4C-A5+U4C-A10",
+  "add_srv_abs_zone/js": "U4C-A10"
 }
