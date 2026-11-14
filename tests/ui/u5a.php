@@ -130,8 +130,8 @@ $pairs = formPairs($f, ['zone_prefix' => 'nojs.test', 'soa_mail' => 'hostmaster.
 $r = postPairs('actions/zone_add.php', $pairs, $c);
 $z = $q("SELECT id FROM DB.zones WHERE name = 'nojs.test'")->fetchColumn();
 $row = $z ? zoneRow((int)$z) : false;
-$ok($r['status'] === 302 && $row && $row['type'] === 'forward' && (int)$row['ttl'] === 86400 && $row['soa_ns'] === 'ns1.u0.test.' && assignment((int)$z) === [[1, 1], [2, 0]],
-    'A01', 'No-JS-Anlage Forward: Zone mit Vorgaben, SOA-NS vom Master, Zuweisung ns1 (Master) + ns2: ' . json_encode($row ? [$row['ttl'], $row['soa_ns'], $row['prefix_length']] : null));
+$ok($r['status'] === 302 && $row && $row['type'] === 'forward' && (int)$row['ttl'] === 86400 && $row['soa_ns'] === 'ns1.u0.test.nojs.test.' && assignment((int)$z) === [[1, 1], [2, 0]],
+    'A01', 'No-JS-Anlage Forward: Zone mit Vorgaben, SOA-NS nach ZoneService-Regel (Master außerhalb der Zone + Zonenname), Zuweisung ns1 (Master) + ns2: ' . json_encode($row ? [$row['ttl'], $row['soa_ns'], $row['prefix_length']] : null));
 // Reverse nach Typübernahme
 resetDb();
 $c = session('admin');
