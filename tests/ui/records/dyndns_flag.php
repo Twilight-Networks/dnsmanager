@@ -73,7 +73,7 @@ scenario('Y01', [], [8], 'Fixture: dyn A 192.0.2.99 mit gleicher Account-IP → 
 scenario('Y02', ["UPDATE DB.dyndns_accounts SET current_ipv4 = '192.0.2.98' WHERE id = 1"], [], 'Account-IP weicht ab → nicht gekennzeichnet');
 scenario('Y03', ["UPDATE DB.dyndns_accounts SET current_ipv4 = NULL WHERE id = 1"], [], 'keine gespeicherte Account-IP → nicht gekennzeichnet');
 scenario('Y04', ["INSERT INTO DB.records (zone_id, name, type, content, ttl) VALUES (1, 'dyn', 'A', '192.0.2.97', 300)"], [], 'zweiter A-Record unter dem Hostnamen → mehrdeutig');
-scenario('Y05', ["UPDATE DB.records SET name = 'DYN' WHERE id = 8"], [], 'abweichende Schreibweise (DYN) → mehrdeutig');
+scenario('Y05', ["UPDATE DB.records SET name = 'DYN' WHERE id = 8"], [8], 'nur ASCII-Groß-/Kleinschreibung abweichend (DYN): nach den DynDNS-Regeln gleich → verwaltet');
 scenario('Y06', ["UPDATE DB.records SET name = 'dyn.u0.test.' WHERE id = 8"], [], 'absoluter Name → mehrdeutig');
 scenario('Y07', ["UPDATE DB.records SET server_id = 1 WHERE id = 8"], [], 'Systemrecord unter dem Hostnamen → nicht gekennzeichnet');
 scenario('Y08', ["INSERT INTO DB.dyndns_accounts (username, password_hash, zone_id, hostname, current_ipv4) VALUES ('u0dyn2', 'x', 1, 'dýn', '192.0.2.99')"], [],
