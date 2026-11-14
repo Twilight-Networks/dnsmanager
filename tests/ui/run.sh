@@ -7,6 +7,8 @@
 #                                                Ergebnis erzeugen und mit der Basis vergleichen (Exit 1 bei Vertragsabweichung)
 #   run.sh serve   <Commit-SHA>                 Testkopie je Rolle lokal ausliefern (Screenshots, siehe README)
 #   UIG_CSP_REPORT_ONLY=1 run.sh serve <SHA>    zusätzlich CSP Report-Only nur in der Testkopie (U2, siehe README)
+#   run.sh matrix  <Commit-SHA>                 Record-Typ-Matrix (U4-Core, tests/ui/records, siehe README)
+#   UIG_RECORDS_MATRIX=1 run.sh serve <SHA>     Testkopie zusätzlich mit der Matrix-Fixture (Erfassung der JS-Daten)
 #
 # Ablauf: eigener GitHub-Klon → git archive des Commits nach /tmp/dnsmgr-uig/app; Konfiguration aus
 # web/config/ui_config-sample.php (isolierte DB dnsmgr_uig_*, eigener DB-Benutzer, Log in Datei, Sprache de);
@@ -19,7 +21,7 @@ H=$(cd "$(dirname "$0")" && pwd)
 T=/tmp/dnsmgr-uig
 OUT_DIR=${OUT_DIR:-/root/dnsmgr-uig-results}
 REPO=${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}
-[[ "$MODE" =~ ^(record|compare|serve)$ ]] && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Aufruf: run.sh record|compare|serve <40-stelliger Commit-SHA> [basis.json] [ausnahmen.json]"; exit 2; }
+[[ "$MODE" =~ ^(record|compare|serve|matrix)$ ]] && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Aufruf: run.sh record|compare|serve|matrix <40-stelliger Commit-SHA> [basis.json] [ausnahmen.json]"; exit 2; }
 [ "$MODE" = compare ] && [ ! -f "$BASELINE" ] && { echo "Basisdatei fehlt: $BASELINE"; exit 2; }
 [ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ] && [ "$MODE" != serve ] && { echo "UIG_CSP_REPORT_ONLY nur im Modus serve (Golden-Läufe ohne CSP-Header)"; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "als root ausführen (php-cgi läuft per sudo als www-data)"; exit 2; }
@@ -75,6 +77,11 @@ for d in tpl app; do
 done
 mariadb -e "DROP USER IF EXISTS 'uigweb'@'localhost'; CREATE USER 'uigweb'@'localhost' IDENTIFIED BY '$PW'; GRANT SELECT, INSERT, UPDATE, DELETE ON dnsmgr_uig_app.* TO 'uigweb'@'localhost'"
 php $H/fixture.php | mariadb dnsmgr_uig_tpl || { echo "ABBRUCH: Fixture"; exit 1; }
+if [ "$MODE" = matrix ] || [ "${UIG_RECORDS_MATRIX:-0}" = 1 ]; then
+  # U4-Core: zusätzliche Records aller Typen (nur Matrix-Läufe und optional Serve zur Erfassung, nie Golden)
+  mariadb dnsmgr_uig_tpl < $H/records/matrix_fixture.sql || { echo "ABBRUCH: Matrix-Fixture"; exit 1; }
+  echo "Matrix-Fixture: $(mariadb -N -e 'SELECT COUNT(*) FROM dnsmgr_uig_tpl.records') Records in der Vorlage"
+fi
 
 openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k/s.key -out $T/k/s.pem -days 2 -subj "/CN=ui-golden-stub" 2>/dev/null
 : > $T/stub.log; : > $T/pids
@@ -109,6 +116,14 @@ if [ "$MODE" = serve ]; then
   PAT='PHP (Fatal error|Warning|Notice|Deprecated|Parse error)|event=php_error'
   echo "PHP-Meldungen im Log: $(grep -cE "$PAT" $T/app.log)"; grep -E "$PAT" $T/app.log | sed -E 's/^\[[^]]+\] //; s/ time="[^"]+"//' | sort | uniq -c | head -10
   echo "Screenshot-Modus beendet"; exit 0
+fi
+
+if [ "$MODE" = matrix ]; then
+  mkdir -p -m 700 "$OUT_DIR"; OUT="$OUT_DIR/records-matrix-${SHA:0:7}-$(date +%Y%m%d-%H%M%S).json"
+  php $H/records/matrix.php "$OUT" "${UIG_JS_POSTS:-$H/records/js_posts.json}"; rc=$?
+  chmod 600 "$OUT" 2>/dev/null
+  echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
+  exit $rc
 fi
 
 php $H/cases.php $T/result.json "$SHA"; rc=$?
