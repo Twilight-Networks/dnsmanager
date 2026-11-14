@@ -62,8 +62,6 @@ return [
     'publish_pending_zones' => 'Zonas pendientes: %d',
     'publish_pending_hint' => 'Los cambios están guardados, pero aún no se han distribuido a los servidores DNS.',
     'breadcrumb' => 'Ruta',
-    'status_no_errors' => 'Estado del sistema sin errores',
-    'status_has_errors' => 'El estado del sistema informa errores',
     'menu_check_updates' => 'Buscar actualizaciones',
     'publish' => 'Publicar',
     'logged_in_as' => 'Conectado como:',

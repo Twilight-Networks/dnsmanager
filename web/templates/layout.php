@@ -176,8 +176,8 @@ $changedZones = (int)($publishStatus['changedZones'] ?? 0);
 </nav> <!-- Ende Seitenleiste -->
 
 <?php
-// Kopfleiste des Arbeitsbereichs (ab lg): Pfadangabe nach aktueller Seite und – nur für admin – Systemstatus aus der
-// bereits geladenen Diagnoseübersicht. Keine neuen Linkziele.
+// Kopfleiste des Arbeitsbereichs (ab lg): Pfadangabe nach aktueller Seite. Keine neuen Linkziele. Eine Statusanzeige
+// folgt erst mit dem Dashboard (U5), damit sie dieselbe Quelle wie die Systemstatus-Seite nutzt.
 $pageKeys = ['dashboard.php' => 'menu_dashboard', 'zones.php' => 'zones', 'records.php' => 'records', 'servers.php' => 'menu_servers',
     'dyndns.php' => 'menu_dyndns', 'users.php' => 'users', 'system_health.php' => 'system_status', 'update.php' => 'menu_check_updates'];
 $currentPage = basename($_SERVER['PHP_SELF'] ?? '');
@@ -193,11 +193,6 @@ $currentPage = basename($_SERVER['PHP_SELF'] ?? '');
             <span class="sep" aria-hidden="true">/</span><span class="here" aria-current="page"><?= htmlspecialchars($LANG[$pageKeys[$currentPage]]) ?></span>
         <?php endif; ?>
     </nav>
-    <?php if ($isAdmin && isset($diagOverview) && $diagOverview !== null): ?>
-        <div class="app-pagebar-status">
-            <span class="app-status <?= $system_has_errors ? 'app-status-error' : 'app-status-ok' ?>"><?= htmlspecialchars($system_has_errors ? $LANG['status_has_errors'] : $LANG['status_no_errors']) ?></span>
-        </div>
-    <?php endif; ?>
 </header>
 
 <main id="main" class="content" tabindex="-1">

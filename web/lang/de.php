@@ -62,8 +62,6 @@ return [
     'publish_pending_zones' => 'Ausstehende Zonen: %d',
     'publish_pending_hint' => 'Änderungen sind gespeichert, aber noch nicht auf die DNS-Server verteilt.',
     'breadcrumb' => 'Pfad',
-    'status_no_errors' => 'Systemstatus ohne Fehler',
-    'status_has_errors' => 'Systemstatus meldet Fehler',
     'menu_check_updates' => 'Auf Updates prüfen',
     'publish' => 'Veröffentlichen',
     'logged_in_as' => 'Angemeldet als:',

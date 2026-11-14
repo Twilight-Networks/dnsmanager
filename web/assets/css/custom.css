@@ -245,11 +245,6 @@ hr { border-color: var(--dm-border); opacity: 1; }
 .app-crumbs a { color: var(--dm-muted); }
 .app-crumbs a:hover { color: var(--dm-text); }
 .app-crumbs .here { color: var(--dm-text); font-weight: 500; }
-.app-pagebar-status { margin-left: auto; font-size: 12.5px; }
-.app-status { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
-.app-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.app-status-ok { color: var(--dm-ok); }
-.app-status-error { color: var(--dm-err); }
 
 .app-topbar {
     position: sticky; top: 0; z-index: 1030; display: flex; align-items: center; justify-content: space-between;
@@ -340,6 +335,12 @@ hr { border-color: var(--dm-border); opacity: 1; }
 .form-check-input { background-color: var(--dm-input); border-color: var(--dm-border); }
 .form-check-input:checked { background-color: var(--dm-accent); border-color: var(--dm-accent); }
 .form-check-input:focus { border-color: var(--dm-accent); box-shadow: 0 0 0 3px var(--dm-accent-soft); }
+
+/* Native Kontrollkästchen und Optionsfelder (ohne Bootstrap-Klasse) im Markenakzent */
+input[type=checkbox], input[type=radio] { accent-color: var(--dm-accent); }
+
+/* Helle Hilfsflächen der Seiten (text-bg-light) an die Kartenflächen angleichen */
+.text-bg-light { background-color: var(--dm-card) !important; color: var(--dm-text) !important; border: 1px solid var(--dm-border); }
 
 /* Karten */
 .card { --bs-card-bg: var(--dm-card); --bs-card-border-color: var(--dm-border); --bs-card-cap-bg: var(--dm-card-head); --bs-card-border-radius: 8px; box-shadow: var(--dm-shadow); }

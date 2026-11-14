@@ -62,8 +62,6 @@ return [
     'publish_pending_zones' => 'Pending zones: %d',
     'publish_pending_hint' => 'Changes are saved but not yet distributed to the DNS servers.',
     'breadcrumb' => 'Breadcrumb',
-    'status_no_errors' => 'System status without errors',
-    'status_has_errors' => 'System status reports errors',
     'menu_check_updates' => 'Check for updates',
     'publish' => 'Publish',
     'logged_in_as' => 'Logged in as:',
