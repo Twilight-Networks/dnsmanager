@@ -3,7 +3,7 @@
  * Datei: tests/ui/compare.php
  * Zweck: Vergleicht ein Ergebnis der UI-Golden-Basis mit einer gespeicherten Basis.
  *        Vertragsrelevant (Abweichung = Fehler, Exit 1): Status, Weiterleitung, Sicherheitsheader, Toasts, Login-Hinweise,
- *        Logs, Datenbankzustand, PHP-Probleme, Seitenvertrag (Formulare/Linkziele), API-/Fehlerantworten.
+ *        Logs, Datenbankzustand, PHP-Probleme, Seitenvertrag (Formulare inkl. Kodierung, Linkziele), API-/Fehlerantworten.
  *        Informativ (nur gemeldet): normalisierter Seiteninhalt (info.*) – er ändert sich mit der UI-Modernisierung.
  *        Beabsichtigte Abweichungen werden je Fall-ID in einer Ausnahmedatei (JSON: {"<Fall-ID>": ["<Schlüssel>", …]})
  *        freigegeben und so im PR dokumentiert.

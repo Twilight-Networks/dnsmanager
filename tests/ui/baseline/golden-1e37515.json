@@ -1221,8 +1221,8 @@
         "page/admin/dashboard": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1257,10 +1257,10 @@
         "page/admin/dyndns": {
             "contract": {
                 "forms": [
-                    "post actions/dyndns_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/dyndns_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/dyndns_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/dyndns_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1297,11 +1297,11 @@
         "page/admin/dyndns_add": {
             "contract": {
                 "forms": [
-                    "post actions/dyndns_add.php [csrf_token:hidden, hostname:text, password:password, username:text, zone_id:select]",
-                    "post actions/dyndns_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/dyndns_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/dyndns_add.php application/x-www-form-urlencoded [csrf_token:hidden, hostname:text, password:password, username:text, zone_id:select]",
+                    "post actions/dyndns_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/dyndns_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1338,10 +1338,10 @@
         "page/admin/dyndns_edit1": {
             "contract": {
                 "forms": [
-                    "post actions/dyndns_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/dyndns_update.php [csrf_token:hidden, hostname:text, id:hidden, username:text, zone_id:select]",
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/dyndns_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/dyndns_update.php application/x-www-form-urlencoded [csrf_token:hidden, hostname:text, id:hidden, username:text, zone_id:select]",
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1377,7 +1377,7 @@
         "page/admin/login": {
             "contract": {
                 "forms": [
-                    "post  [csrf_token:hidden, password:password, username:text]"
+                    "post  application/x-www-form-urlencoded [csrf_token:hidden, password:password, username:text]"
                 ],
                 "links": []
             },
@@ -1425,16 +1425,16 @@
         "page/admin/records_add": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_add.php [auto_ptr:checkbox, content:text, csrf_token:hidden, dkim_file:file, dkim_subdomain:text, fqdn_mode:select, is_dkim:hidden, mx_priority:number, mx_target_mode:select, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_target_mode:select, srv_weight:number, ttl:select, type:select, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_add.php multipart/form-data [auto_ptr:checkbox, content:text, csrf_token:hidden, dkim_file:file, dkim_subdomain:text, fqdn_mode:select, is_dkim:hidden, mx_priority:number, mx_target_mode:select, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_target_mode:select, srv_weight:number, ttl:select, type:select, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1442,6 +1442,17 @@
                     "pages/dyndns.php",
                     "pages/records.php?zone_id=1",
                     "pages/records.php?zone_id=1&add_new=1",
+                    "pages/records.php?zone_id=1&edit_id=1",
+                    "pages/records.php?zone_id=1&edit_id=13",
+                    "pages/records.php?zone_id=1&edit_id=14",
+                    "pages/records.php?zone_id=1&edit_id=15",
+                    "pages/records.php?zone_id=1&edit_id=2",
+                    "pages/records.php?zone_id=1&edit_id=3",
+                    "pages/records.php?zone_id=1&edit_id=4",
+                    "pages/records.php?zone_id=1&edit_id=5",
+                    "pages/records.php?zone_id=1&edit_id=6",
+                    "pages/records.php?zone_id=1&edit_id=7",
+                    "pages/records.php?zone_id=1&edit_id=8",
                     "pages/servers.php",
                     "pages/system_health.php",
                     "pages/update.php",
@@ -1477,21 +1488,32 @@
         "page/admin/records_edit3": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_update.php [content:text, csrf_token:hidden, dkim_flags:text, dkim_hash_algos:text, dkim_key:textarea, dkim_key_type:select, dkim_selector:text, dkim_subdomain:text, edit_name_prefix:text, id:hidden, is_dkim:hidden, mx_priority:number, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_weight:number, ttl:select, type:hidden, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_update.php application/x-www-form-urlencoded [content:text, csrf_token:hidden, dkim_flags:text, dkim_hash_algos:text, dkim_key:textarea, dkim_key_type:select, dkim_selector:text, dkim_subdomain:text, edit_name_prefix:text, id:hidden, is_dkim:hidden, mx_priority:number, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_weight:number, ttl:select, type:hidden, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
                     "pages/dashboard.php",
                     "pages/dyndns.php",
+                    "pages/records.php?zone_id=1",
                     "pages/records.php?zone_id=1&add_new=1",
+                    "pages/records.php?zone_id=1&edit_id=1",
+                    "pages/records.php?zone_id=1&edit_id=13",
+                    "pages/records.php?zone_id=1&edit_id=14",
+                    "pages/records.php?zone_id=1&edit_id=15",
+                    "pages/records.php?zone_id=1&edit_id=2",
+                    "pages/records.php?zone_id=1&edit_id=4",
+                    "pages/records.php?zone_id=1&edit_id=5",
+                    "pages/records.php?zone_id=1&edit_id=6",
+                    "pages/records.php?zone_id=1&edit_id=7",
+                    "pages/records.php?zone_id=1&edit_id=8",
                     "pages/servers.php",
                     "pages/system_health.php",
                     "pages/update.php",
@@ -1527,21 +1549,32 @@
         "page/admin/records_z1": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
                     "pages/dashboard.php",
                     "pages/dyndns.php",
                     "pages/records.php?zone_id=1&add_new=1",
+                    "pages/records.php?zone_id=1&edit_id=1",
+                    "pages/records.php?zone_id=1&edit_id=13",
+                    "pages/records.php?zone_id=1&edit_id=14",
+                    "pages/records.php?zone_id=1&edit_id=15",
+                    "pages/records.php?zone_id=1&edit_id=2",
+                    "pages/records.php?zone_id=1&edit_id=3",
+                    "pages/records.php?zone_id=1&edit_id=4",
+                    "pages/records.php?zone_id=1&edit_id=5",
+                    "pages/records.php?zone_id=1&edit_id=6",
+                    "pages/records.php?zone_id=1&edit_id=7",
+                    "pages/records.php?zone_id=1&edit_id=8",
                     "pages/servers.php",
                     "pages/system_health.php",
                     "pages/update.php",
@@ -1577,16 +1610,18 @@
         "page/admin/records_z2": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
                     "pages/dashboard.php",
                     "pages/dyndns.php",
                     "pages/records.php?zone_id=2&add_new=1",
+                    "pages/records.php?zone_id=2&edit_id=10",
+                    "pages/records.php?zone_id=2&edit_id=9",
                     "pages/servers.php",
                     "pages/system_health.php",
                     "pages/update.php",
@@ -1620,16 +1655,18 @@
         "page/admin/records_z3": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
                     "pages/dashboard.php",
                     "pages/dyndns.php",
                     "pages/records.php?zone_id=3&add_new=1",
+                    "pages/records.php?zone_id=3&edit_id=11",
+                    "pages/records.php?zone_id=3&edit_id=12",
                     "pages/servers.php",
                     "pages/system_health.php",
                     "pages/update.php",
@@ -1663,13 +1700,13 @@
         "page/admin/servers": {
             "contract": {
                 "forms": [
-                    "get  []",
-                    "get  []",
-                    "post actions/bind_reload.php [csrf_token:hidden, id:hidden]",
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/server_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/server_delete.php [csrf_token:hidden, id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "get  application/x-www-form-urlencoded []",
+                    "get  application/x-www-form-urlencoded []",
+                    "post actions/bind_reload.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/server_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/server_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1707,14 +1744,14 @@
         "page/admin/servers_add": {
             "contract": {
                 "forms": [
-                    "get  []",
-                    "get  []",
-                    "post actions/bind_reload.php [csrf_token:hidden, id:hidden]",
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/server_add.php [active:checkbox, api_ip:text, api_token:text, csrf_token:hidden, dns_ip4:text, dns_ip6:text, is_local:checkbox, name:text]",
-                    "post actions/server_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/server_delete.php [csrf_token:hidden, id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "get  application/x-www-form-urlencoded []",
+                    "get  application/x-www-form-urlencoded []",
+                    "post actions/bind_reload.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/server_add.php application/x-www-form-urlencoded [active:checkbox, api_ip:text, api_token:text, csrf_token:hidden, dns_ip4:text, dns_ip6:text, is_local:checkbox, name:text]",
+                    "post actions/server_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/server_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1752,12 +1789,12 @@
         "page/admin/servers_edit2": {
             "contract": {
                 "forms": [
-                    "get  []",
-                    "post actions/bind_reload.php [csrf_token:hidden, id:hidden]",
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/server_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/server_update.php [active:checkbox, api_ip:text, api_token:password, csrf_token:hidden, dns_ip4:text, dns_ip6:text, id:hidden, is_local:checkbox, name:text]",
-                    "post logout.php [csrf_token:hidden]"
+                    "get  application/x-www-form-urlencoded []",
+                    "post actions/bind_reload.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/server_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/server_update.php application/x-www-form-urlencoded [active:checkbox, api_ip:text, api_token:password, csrf_token:hidden, dns_ip4:text, dns_ip6:text, id:hidden, is_local:checkbox, name:text]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1794,9 +1831,9 @@
         "page/admin/system_health": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]",
-                    "post pages/system_health.php [csrf_token:hidden, force_update:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]",
+                    "post pages/system_health.php application/x-www-form-urlencoded [csrf_token:hidden, force_update:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1831,8 +1868,8 @@
         "page/admin/update": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1867,19 +1904,19 @@
         "page/admin/users": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1919,20 +1956,20 @@
         "page/admin/users_add": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/user_add.php [csrf_token:hidden, password:password, role:select, username:text, zones[]:select]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/user_add.php application/x-www-form-urlencoded [csrf_token:hidden, password:password, role:select, username:text, zones[]:select]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -1972,19 +2009,19 @@
         "page/admin/users_edit2": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post actions/user_set_active.php [active:hidden, csrf_token:hidden, id:hidden]",
-                    "post actions/user_update.php [csrf_token:hidden, id:hidden, role:select, username:text, zones[]:select]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post actions/user_set_active.php application/x-www-form-urlencoded [active:hidden, csrf_token:hidden, id:hidden]",
+                    "post actions/user_update.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, role:select, username:text, zones[]:select]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -2023,11 +2060,11 @@
         "page/admin/zones": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -2069,12 +2106,12 @@
         "page/admin/zones_add": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/zone_add.php [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, master_server_id:radio, prefix_length:number, server_ids[]:checkbox, soa_domain:text, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns_display:text, soa_refresh:number, soa_retry:number, ttl:number, type:select, zone_prefix:text]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/zone_add.php application/x-www-form-urlencoded [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, master_server_id:radio, prefix_length:number, server_ids[]:checkbox, soa_domain:text, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns_display:text, soa_refresh:number, soa_retry:number, ttl:number, type:select, zone_prefix:text]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "/dnsmanager-ui/pages/zones.php",
@@ -2121,11 +2158,11 @@
         "page/admin/zones_edit1": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_update.php [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, edit_version:hidden, id:hidden, master_server_id:radio, server_ids[]:checkbox, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns:text, soa_refresh:number, soa_retry:number, ttl:number]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_update.php application/x-www-form-urlencoded [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, edit_version:hidden, id:hidden, master_server_id:radio, server_ids[]:checkbox, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns:text, soa_refresh:number, soa_retry:number, ttl:number]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -2165,11 +2202,11 @@
         "page/admin/zones_edit2": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_delete.php [csrf_token:hidden, id:hidden]",
-                    "post actions/zone_update.php [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, edit_version:hidden, id:hidden, master_server_id:radio, server_ids[]:checkbox, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns:text, soa_refresh:number, soa_retry:number, ttl:number]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden]",
+                    "post actions/zone_update.php application/x-www-form-urlencoded [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, edit_version:hidden, id:hidden, master_server_id:radio, server_ids[]:checkbox, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns:text, soa_refresh:number, soa_retry:number, ttl:number]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -2305,7 +2342,7 @@
         "page/anon/login": {
             "contract": {
                 "forms": [
-                    "post  [csrf_token:hidden, password:password, username:text]"
+                    "post  application/x-www-form-urlencoded [csrf_token:hidden, password:password, username:text]"
                 ],
                 "links": []
             },
@@ -2761,8 +2798,8 @@
         "page/zoneadmin/dashboard": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -2872,7 +2909,7 @@
         "page/zoneadmin/login": {
             "contract": {
                 "forms": [
-                    "post  [csrf_token:hidden, password:password, username:text]"
+                    "post  application/x-www-form-urlencoded [csrf_token:hidden, password:password, username:text]"
                 ],
                 "links": []
             },
@@ -2920,22 +2957,33 @@
         "page/zoneadmin/records_add": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_add.php [auto_ptr:checkbox, content:text, csrf_token:hidden, dkim_file:file, dkim_subdomain:text, fqdn_mode:select, is_dkim:hidden, mx_priority:number, mx_target_mode:select, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_target_mode:select, srv_weight:number, ttl:select, type:select, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_add.php multipart/form-data [auto_ptr:checkbox, content:text, csrf_token:hidden, dkim_file:file, dkim_subdomain:text, fqdn_mode:select, is_dkim:hidden, mx_priority:number, mx_target_mode:select, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_target_mode:select, srv_weight:number, ttl:select, type:select, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
                     "pages/dashboard.php",
                     "pages/records.php?zone_id=1",
                     "pages/records.php?zone_id=1&add_new=1",
+                    "pages/records.php?zone_id=1&edit_id=1",
+                    "pages/records.php?zone_id=1&edit_id=13",
+                    "pages/records.php?zone_id=1&edit_id=14",
+                    "pages/records.php?zone_id=1&edit_id=15",
+                    "pages/records.php?zone_id=1&edit_id=2",
+                    "pages/records.php?zone_id=1&edit_id=3",
+                    "pages/records.php?zone_id=1&edit_id=4",
+                    "pages/records.php?zone_id=1&edit_id=5",
+                    "pages/records.php?zone_id=1&edit_id=6",
+                    "pages/records.php?zone_id=1&edit_id=7",
+                    "pages/records.php?zone_id=1&edit_id=8",
                     "pages/users.php",
                     "pages/zones.php"
                 ]
@@ -2968,20 +3016,31 @@
         "page/zoneadmin/records_edit3": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_update.php [content:text, csrf_token:hidden, dkim_flags:text, dkim_hash_algos:text, dkim_key:textarea, dkim_key_type:select, dkim_selector:text, dkim_subdomain:text, edit_name_prefix:text, id:hidden, is_dkim:hidden, mx_priority:number, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_weight:number, ttl:select, type:hidden, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_update.php application/x-www-form-urlencoded [content:text, csrf_token:hidden, dkim_flags:text, dkim_hash_algos:text, dkim_key:textarea, dkim_key_type:select, dkim_selector:text, dkim_subdomain:text, edit_name_prefix:text, id:hidden, is_dkim:hidden, mx_priority:number, name:text, naptr_flags:text, naptr_order:number, naptr_pref:number, naptr_regexp:text, naptr_replacement:text, naptr_service:text, srv_port:number, srv_priority:number, srv_protocol:select, srv_target:text, srv_weight:number, ttl:select, type:hidden, uri_priority:number, uri_protocol:select, uri_service:text, uri_target:text, uri_weight:number, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
                     "pages/dashboard.php",
+                    "pages/records.php?zone_id=1",
                     "pages/records.php?zone_id=1&add_new=1",
+                    "pages/records.php?zone_id=1&edit_id=1",
+                    "pages/records.php?zone_id=1&edit_id=13",
+                    "pages/records.php?zone_id=1&edit_id=14",
+                    "pages/records.php?zone_id=1&edit_id=15",
+                    "pages/records.php?zone_id=1&edit_id=2",
+                    "pages/records.php?zone_id=1&edit_id=4",
+                    "pages/records.php?zone_id=1&edit_id=5",
+                    "pages/records.php?zone_id=1&edit_id=6",
+                    "pages/records.php?zone_id=1&edit_id=7",
+                    "pages/records.php?zone_id=1&edit_id=8",
                     "pages/users.php",
                     "pages/zones.php"
                 ]
@@ -3014,20 +3073,31 @@
         "page/zoneadmin/records_z1": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/record_delete.php [bulk_ids:hidden, csrf_token:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post actions/record_delete.php [csrf_token:hidden, id:hidden, zone_id:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [bulk_ids:hidden, csrf_token:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post actions/record_delete.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, zone_id:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
                     "pages/dashboard.php",
                     "pages/records.php?zone_id=1&add_new=1",
+                    "pages/records.php?zone_id=1&edit_id=1",
+                    "pages/records.php?zone_id=1&edit_id=13",
+                    "pages/records.php?zone_id=1&edit_id=14",
+                    "pages/records.php?zone_id=1&edit_id=15",
+                    "pages/records.php?zone_id=1&edit_id=2",
+                    "pages/records.php?zone_id=1&edit_id=3",
+                    "pages/records.php?zone_id=1&edit_id=4",
+                    "pages/records.php?zone_id=1&edit_id=5",
+                    "pages/records.php?zone_id=1&edit_id=6",
+                    "pages/records.php?zone_id=1&edit_id=7",
+                    "pages/records.php?zone_id=1&edit_id=8",
                     "pages/users.php",
                     "pages/zones.php"
                 ]
@@ -3060,8 +3130,8 @@
         "page/zoneadmin/records_z2": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3094,8 +3164,8 @@
         "page/zoneadmin/records_z3": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3258,9 +3328,9 @@
         "page/zoneadmin/users": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3291,9 +3361,9 @@
         "page/zoneadmin/users_add": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3324,10 +3394,10 @@
         "page/zoneadmin/users_edit2": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/user_password.php [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
-                    "post actions/user_update.php [csrf_token:hidden, id:hidden, role:select, username:text, zones[]:select]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/user_password.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, password:password, password_repeat:password]",
+                    "post actions/user_update.php application/x-www-form-urlencoded [csrf_token:hidden, id:hidden, role:select, username:text, zones[]:select]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3358,8 +3428,8 @@
         "page/zoneadmin/zones": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3392,8 +3462,8 @@
         "page/zoneadmin/zones_add": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3426,9 +3496,9 @@
         "page/zoneadmin/zones_edit1": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post actions/zone_update.php [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, edit_version:hidden, id:hidden, master_server_id:radio, server_ids[]:checkbox, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns:text, soa_refresh:number, soa_retry:number, ttl:number]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post actions/zone_update.php application/x-www-form-urlencoded [allow_dyndns:checkbox, csrf_token:hidden, description:textarea, edit_version:hidden, id:hidden, master_server_id:radio, server_ids[]:checkbox, soa_expire:number, soa_mail:text, soa_minimum:number, soa_ns:text, soa_refresh:number, soa_retry:number, ttl:number]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",
@@ -3459,8 +3529,8 @@
         "page/zoneadmin/zones_edit2": {
             "contract": {
                 "forms": [
-                    "post actions/publish_all.php [csrf_token:hidden, return:hidden]",
-                    "post logout.php [csrf_token:hidden]"
+                    "post actions/publish_all.php application/x-www-form-urlencoded [csrf_token:hidden, return:hidden]",
+                    "post logout.php application/x-www-form-urlencoded [csrf_token:hidden]"
                 ],
                 "links": [
                     "https://www.twilight-networks.com",

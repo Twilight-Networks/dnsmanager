@@ -3,7 +3,7 @@
  * Datei: tests/ui/cases.php
  * Zweck: Fälle der UI-Golden-Basis (U0). Erzeugt ein normalisiertes Ergebnis (JSON) für
  *        - alle Seiten je Rolle (anonym, admin, zoneadmin): Status, Weiterleitung, Header, Logs, PHP-Probleme,
- *          Seitenvertrag (Formulare mit Methode/Ziel/Feldern, Linkziele) und informativ den normalisierten Body;
+ *          Seitenvertrag (Formulare mit Methode/Ziel/Kodierung/Feldern, Linkziele) und informativ den normalisierten Body;
  *        - die relevanten Actions, Login/Logout und die DynDNS-API: Status, Weiterleitung, Toasts, Logs,
  *          Datenbankzustand und PHP-Probleme.
  * Formulare werden wie von einem Browser abgesendet: Felder aus der ausgelieferten Seite übernehmen und nur die

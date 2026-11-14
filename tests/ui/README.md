@@ -7,13 +7,13 @@ Stands `main` `1e37515` fest und weist bei jedem UI-PR nach, dass Web-Verträge 
 
 | Bereich | Fälle | Vertrag (Abweichung = Fehler) | Nur informativ |
 |---|---|---|---|
-| Seiten (GET) je Rolle anonym, admin, zoneadmin | 23 Seiten × 3 Rollen | HTTP-Status, Weiterleitung, Sicherheitsheader, Logzeilen, PHP-Meldungen, **Seitenvertrag**: alle Formulare mit Methode, Ziel und Feldnamen/-typen sowie alle Linkziele | normalisierter Seiteninhalt (Prüfsumme, Zeilenzahl, Titel) |
+| Seiten (GET) je Rolle anonym, admin, zoneadmin | 23 Seiten × 3 Rollen | HTTP-Status, Weiterleitung, Sicherheitsheader, Logzeilen, PHP-Meldungen, **Seitenvertrag**: alle Formulare mit Methode, Ziel, Kodierung (`enctype`; ohne Attribut `application/x-www-form-urlencoded`) und Feldnamen/-typen sowie alle Linkziele (`href` in doppelten oder einfachen Anführungszeichen) | normalisierter Seiteninhalt (Prüfsumme, Zeilenzahl, Titel) |
 | Actions | 40 Fälle für alle 20 Actions | Status, Weiterleitung, Header, Toasts, Logzeilen, **Datenbankzustand**, PHP-Meldungen, Fehlertext | – |
 | Login/Logout | 7 Fälle | Status, Weiterleitung, Hinweistexte, Session-Benutzername, Folgeanfrage, Logzeilen, Datenbankzustand | – |
 | DynDNS-API | 2 Fälle | Status, Antwort (`good`/`badauth`), Logzeilen, Datenbankzustand | – |
 
 Der Seiteninhalt ändert sich mit der Modernisierung beabsichtigt und wird deshalb nur gemeldet. Formularziele,
-Feldnamen, Linkziele, Zugriffsschutz und das Verhalten der Actions sind dagegen Vertrag: Abweichungen müssen je
+Formularkodierung, Feldnamen, Linkziele, Zugriffsschutz und das Verhalten der Actions sind dagegen Vertrag: Abweichungen müssen je
 Fall-ID in einer Ausnahmedatei freigegeben werden (siehe unten) und sind damit im PR dokumentiert.
 
 **Formulare** werden wie von einem Browser **ohne JavaScript** abgesendet: Felder aus der ausgelieferten Seite

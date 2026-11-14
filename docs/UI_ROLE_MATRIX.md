@@ -1,7 +1,7 @@
 # DNS Manager – Rollenmatrix der Weboberfläche (Ist-Zustand U0)
 
 Stand: 14.11.2026. Erzeugt mit `tests/ui/matrix.php` aus der versionierten Golden-Basis
-`tests/ui/baseline/golden-1e37515.json` (Anwendung `main` `1e37515`, Harness `21ca9e3`, ns1, PHP 8.5.4, MariaDB 11.8.6).
+`tests/ui/baseline/golden-1e37515.json` (Anwendung `main` `1e37515`, Harness `d347258`, ns1, PHP 8.5.4, MariaDB 11.8.6).
 Rollen: **anonym** (nicht angemeldet), **admin**, **zoneadmin** (Zone `u0.test` zugewiesen; `other.u0.test` und die
 Reverse-Zone nicht). Fixture und Normalisierung: [`tests/ui/README.md`](../tests/ui/README.md).
 
