@@ -128,6 +128,9 @@ if [ "$MODE" = matrix ]; then
   mkdir -p -m 700 "$OUT_DIR"; OUT="$OUT_DIR/records-matrix-${SHA:0:7}-$(date +%Y%m%d-%H%M%S).json"
   php $H/records/matrix.php "$OUT" "${UIG_JS_POSTS:-$H/records/js_posts.json}"; rc=$?
   chmod 600 "$OUT" 2>/dev/null
+  # U4-Core: Builder/Parser/BIND und DynDNS-Kennzeichen (RR und RC) gegen dieselbe Testkopie
+  echo "--- Builder/Parser/BIND"; php $H/records/unit.php "$T/app" "$H" || rc=1
+  for iso in RR RC; do echo "--- DynDNS-Kennzeichen $iso"; php $H/records/dyndns_flag.php $iso || rc=1; done
   echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
   exit $rc
 fi
