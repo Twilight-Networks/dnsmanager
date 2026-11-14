@@ -70,7 +70,9 @@ function cgi(string $method, string $path, string $body, array &$cookies, array 
         'SCRIPT_NAME' => "/dnsmanager-ui/$script", 'REQUEST_URI' => "/dnsmanager-ui/$path", 'QUERY_STRING' => $query, 'HTTP_HOST' => 'ui-golden.test',
         'SERVER_NAME' => 'ui-golden.test', 'SERVER_PORT' => '443', 'HTTPS' => 'on', 'REMOTE_ADDR' => '192.0.2.57', 'HTTP_ACCEPT_LANGUAGE' => 'de',
         'CONTENT_TYPE' => 'application/x-www-form-urlencoded', 'CONTENT_LENGTH' => (string)strlen($body),
-        'HTTP_COOKIE' => implode('; ', array_map(fn($k, $v) => "$k=$v", array_keys($cookies), $cookies)), 'PATH' => '/usr/sbin:/usr/bin:/bin'] + $extraEnv;
+        'HTTP_COOKIE' => implode('; ', array_map(fn($k, $v) => "$k=$v", array_keys($cookies), $cookies)), 'PATH' => '/usr/sbin:/usr/bin:/bin'];
+    // Zusätzliche Werte überschreiben die Vorgaben (z. B. CONTENT_TYPE multipart/form-data für Datei-Uploads, U4-UI)
+    $env = $extraEnv + $env;
     $cmd = array_merge(['sudo', '-u', 'www-data', 'env', '-i'], array_map(fn($k, $v) => "$k=$v", array_keys($env), $env),
         ['php-cgi', '-d', 'session.save_path=' . T . '/sess', '-d', 'error_log=' . T . '/app.log', '-d', 'log_errors=1', '-d', 'display_errors=0', '-d', 'opcache.enable=0']);
     $p = proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
@@ -167,6 +169,12 @@ function forms(string $html): array
     foreach ($fm as [$all, $open, $inner]) {
         $fa = attrs($open);
         $fields = []; $values = [];
+        // Felder in deaktivierten Feldbereichen (<fieldset disabled>) sendet der Browser nicht (U4-UI); ihre Namen bleiben
+        // Teil der Formularstruktur.
+        $disabledRanges = [];
+        if (preg_match_all('#<fieldset\b[^>]*\bdisabled\b[^>]*>.*?</fieldset>#s', $inner, $dm, PREG_OFFSET_CAPTURE)) {
+            foreach ($dm[0] as [$block, $pos]) { $disabledRanges[] = [$pos, $pos + strlen($block)]; }
+        }
         preg_match_all('#<(input|select|textarea|button)\b[^>]*>#s', $inner, $im, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
         foreach ($im as $x) {
             $tag = $x[0][0]; $kind = strtolower($x[1][0]); $a = attrs($tag);
@@ -176,6 +184,7 @@ function forms(string $html): array
             if ($kind === 'button' || in_array($type, ['submit', 'file', 'button', 'reset'], true)) { continue; }
             if (in_array($type, ['checkbox', 'radio'], true) && !array_key_exists('checked', $a)) { continue; }
             if (array_key_exists('disabled', $a)) { continue; }
+            foreach ($disabledRanges as [$from, $to]) { if ($x[0][1] >= $from && $x[0][1] < $to) { continue 2; } }
             if ($kind === 'select') {
                 $rest = substr($inner, $x[0][1]);
                 $sel = preg_match('#^(.*?)</select>#s', $rest, $sm) ? $sm[1] : '';

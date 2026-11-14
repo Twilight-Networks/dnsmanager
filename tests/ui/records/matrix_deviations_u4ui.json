@@ -1,0 +1,14 @@
+{
+  "add_cname_abszone/js": "U4U-A1",
+  "add_mx_abszone/js": "U4U-A1",
+  "add_dkim_rsa/nojs": "U4U-A2",
+  "add_dkim_ed/nojs": "U4U-A2",
+  "add_dkim_252/nojs": "U4U-A2",
+  "add_dkim_256/nojs": "U4U-A2",
+  "add_dkim_4096/nojs": "U4U-A2",
+  "add_dkim_rsa/js": "U4U-A3",
+  "add_dkim_ed/js": "U4U-A3",
+  "add_dkim_252/js": "U4U-A3",
+  "add_dkim_256/js": "U4U-A3",
+  "add_dkim_4096/js": "U4U-A3"
+}

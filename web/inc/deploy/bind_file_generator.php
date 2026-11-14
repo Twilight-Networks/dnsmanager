@@ -33,6 +33,26 @@
 require_once __DIR__ . '/../soa_serial.php';
 
 /**
+ * Zeile eines Records in der Zonendatei (U4-UI, E3): "<Name>\t<TTL>\tIN\t<TYP>\t<Inhalt>".
+ *
+ * Reine Funktion ohne Datei- oder Datenbankzugriff. Wird von generate_zone_file() und der Record-Vorschau
+ * (inc/web/record_editor.php) gemeinsam verwendet, damit die Vorschau bytegenau der erzeugten Zeile entspricht.
+ * Format unverändert aus generate_zone_file() übernommen: Tabulatoren, Typ in Großbuchstaben, TTL des Records
+ * oder – falls nicht gesetzt – die TTL der Zone, Inhalt unverändert.
+ *
+ * @param array $r       Record mit name, type, content und optional ttl
+ * @param mixed $zoneTtl TTL der Zone (Rückfall, wenn der Record keine TTL hat)
+ * @return string Zeile ohne Zeilenumbruch
+ */
+function zone_file_record_line(array $r, $zoneTtl): string
+{
+    $name = $r['name'] === '@' ? '@' : $r['name'];
+    $ttl = isset($r['ttl']) ? (int)$r['ttl'] : (int)$zoneTtl;
+    $type = strtoupper($r['type']);
+    return "$name\t$ttl\tIN\t$type\t" . $r['content'];
+}
+
+/**
  * Defensive Prüfung eines SOA-Namensfeldes (soa_ns, soa_mail) unmittelbar vor dem Schreiben der
  * Zonendatei (Sicherheitsbefund S17).
  *
@@ -266,11 +286,7 @@ ZONE;
 
     // Alle Records einfügen
     foreach ($records as $r) {
-        $name = $r['name'] === '@' ? '@' : $r['name'];
-        $ttl = isset($r['ttl']) ? (int)$r['ttl'] : (int)$zone['ttl'];
-        $type = strtoupper($r['type']);
-        $line = "$name\t$ttl\tIN\t$type\t" . $r['content'];
-        $content .= $line . "\n";
+        $content .= zone_file_record_line($r, $zone['ttl']) . "\n";
     }
 
     // Datei schreiben

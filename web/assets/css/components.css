@@ -159,3 +159,55 @@ html.no-js .toast .btn-close { display: none; }
 /* ---------- 12. Fehlerseite im Layout (U0-B6) ---------- */
 .dm-error-page { max-width: 560px; margin: 48px auto; }
 .dm-error-page .dm-empty > .bi { color: var(--dm-err); }
+
+/* ---------- Record-Verwaltung (U4-UI) ---------- */
+.dm-zone-select { display: flex; gap: 6px; align-items: center; }
+.dm-zone-select .form-select { min-width: 220px; max-width: 360px; }
+.dm-records-table .dm-col-name { white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.dm-records-table .dm-col-content { max-width: 0; width: 40%; }
+.dm-records-table .dm-col-ttl { white-space: nowrap; color: var(--dm-text-2); }
+.dm-truncate { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-records-table .dm-chip { margin: 1px 0; }
+.dm-records-table .dm-col-type, .dm-records-table .dm-col-origin { white-space: nowrap; }
+.dm-editor-body > .dm-editor-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.dm-group-count { margin-left: 6px; color: var(--dm-muted); font-variant-numeric: tabular-nums; }
+.dm-lock { display: inline-flex; color: var(--dm-muted); }
+.dm-lock .bi { width: 14px; height: 14px; }
+.dm-origin { display: inline-flex; gap: 4px; flex-wrap: nowrap; }
+.dm-diagnostics > summary { cursor: pointer; list-style: none; flex-wrap: wrap; }
+.dm-diagnostics > summary::-webkit-details-marker { display: none; }
+.dm-diagnostics:not([open]) > summary { border-bottom: 0; }
+.dm-diagnostic + .dm-diagnostic { margin-top: 10px; }
+.dm-diagnostic pre { margin: 4px 0 0; font-size: 12px; }
+
+/* Editor-Formular */
+.dm-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.dm-field { min-width: 0; }
+.dm-field-wide { grid-column: 1 / -1; }
+.dm-field .form-label { font-size: 12.5px; font-weight: 500; margin-bottom: 4px; color: var(--dm-text-2); }
+.dm-field .form-text { font-size: 12px; }
+.dm-field .form-text .bi { width: 12px; height: 12px; vertical-align: -1px; }
+.dm-static-value { padding: 6px 0; }
+.dm-type-fields { margin: 14px 0 0; padding: 0; border: 0; min-width: 0; }
+.dm-type-fields[hidden] { display: none; }
+.dm-type-info { margin-bottom: 12px; font-size: 12.5px; }
+.dm-type-info > summary { cursor: pointer; color: var(--dm-accent-text); display: inline-flex; align-items: center; gap: 6px; }
+.dm-type-info-body { margin-top: 8px; padding: 10px 12px; border-radius: 6px; background: var(--dm-info-soft); color: var(--dm-text-2); }
+.dm-record-form input[readonly] { background: var(--dm-card-head); color: var(--dm-muted); }
+@media (max-width: 575.98px) { .dm-field-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Vorschau */
+.dm-record-preview { transition: opacity .15s; }
+.dm-record-preview.dm-preview-pending .dm-diff,
+.dm-record-preview.dm-preview-pending .dm-record-preview-status { opacity: .5; }
+.dm-record-preview .dm-diff[hidden] { display: none; }
+.dm-record-preview-status > p { font-size: 12.5px; color: var(--dm-text-2); margin: 0 0 8px; }
+.dm-record-preview-status .dm-notice { margin-bottom: 8px; }
+.dm-record-preview-errors { margin: 0 0 8px; padding-left: 20px; font-size: 12.5px; color: var(--dm-err); }
+.dm-record-preview-hint .bi { width: 12px; height: 12px; color: var(--dm-info); vertical-align: -1px; }
+@media (max-width: 767.98px) {
+    .dm-page-actions { margin-left: 0; width: 100%; }
+    .dm-zone-select { flex: 1 1 100%; }
+    .dm-zone-select .form-select { min-width: 0; max-width: none; flex: 1 1 auto; }
+    .dm-records-table .dm-col-content { min-width: 200px; }
+}

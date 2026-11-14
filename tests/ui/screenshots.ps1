@@ -56,7 +56,19 @@ $shots = @(
     @('u3-showcase-editor', 'admin', '__ui/showcase.php?editor=1', 1440, 1000),
     @('u3-showcase-mobile', 'admin', '__ui/showcase.php', 492, 3600),
     @('u3-showcase-editor-mobile', 'admin', '__ui/showcase.php?editor=1', 492, 900),
-    @('u3-403-zoneadmin', 'zoneadmin', 'pages/servers.php', 1440, 800)
+    @('u3-403-zoneadmin', 'zoneadmin', 'pages/servers.php', 1440, 800),
+    # U4-UI: Record-Verwaltung (Zonenauswahl, Herkunft, Klassifizierung), rechter Editor mit Vorschau/DIFF
+    @('u4-records', 'admin', 'pages/records.php?zone_id=1', 1440, 1500),
+    @('u4-records-reverse', 'admin', 'pages/records.php?zone_id=3', 1440, 900),
+    @('u4-records-zoneadmin', 'zoneadmin', 'pages/records.php?zone_id=1', 1440, 1500),
+    @('u4-records-edit-srv', 'admin', 'pages/records.php?zone_id=1&edit_id=103', 1440, 1000),
+    @('u4-records-edit-dkim', 'admin', 'pages/records.php?zone_id=1&edit_id=110', 1440, 1200),
+    @('u4-records-edit-dyndns', 'admin', 'pages/records.php?zone_id=1&edit_id=8', 1440, 1000),
+    @('u4-records-edit-glue', 'admin', 'pages/records.php?zone_id=1&edit_id=13', 1440, 1000),
+    @('u4-records-add-mx', 'admin', 'pages/records.php?zone_id=1&add_new=1&type=MX', 1440, 1000),
+    @('u4-records-add-dkim', 'admin', 'pages/records.php?zone_id=1&add_new=1&type=DKIM', 1440, 1200),
+    @('u4-records-mobile', 'admin', 'pages/records.php?zone_id=1', 492, 1400),
+    @('u4-records-edit-mobile', 'admin', 'pages/records.php?zone_id=1&edit_id=110', 492, 1400)
 )
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $profileDir = Join-Path $env:TEMP ("uig-edge-" + [guid]::NewGuid().ToString('N'))

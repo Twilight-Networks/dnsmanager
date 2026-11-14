@@ -98,6 +98,7 @@ if [ "$MODE" = serve ]; then
   if [ "${UIG_RECORDS_MATRIX:-0}" = 1 ]; then
     # U4-Core: Fälle und Erfassungsskript der Record-Matrix unter /__ui/, Ablage der Erfassung in $T/upload
     install -m 644 -o root -g root $H/records/capture.js $T/ui/capture.js
+    install -m 644 -o root -g root $H/records/preview_race.js $T/ui/preview_race.js   # U4-UI: Browsertest der Live-Vorschau
     php $H/records/matrix.php --cases-json > $T/ui/cases.json && chmod 644 $T/ui/cases.json
     install -d -m 700 -o www-data -g www-data $T/upload
   fi
@@ -131,6 +132,17 @@ if [ "$MODE" = matrix ]; then
   # U4-Core: Builder/Parser/BIND und DynDNS-Kennzeichen (RR und RC) gegen dieselbe Testkopie
   echo "--- Builder/Parser/BIND"; php $H/records/unit.php "$T/app" "$H" || rc=1
   for iso in RR RC; do echo "--- DynDNS-Kennzeichen $iso"; php $H/records/dyndns_flag.php $iso || rc=1; done
+  # U4-UI: Vorschau-Endpunkt, Rechte, keine Schreibzugriffe, Vorschau ↔ Zonendatei, No-JS-Vorschau, >500 Zonen;
+  # E3-Bytevergleich der Zonendateien gegen eine Basis-Anwendung (UIG_BASE_SHA, z. B. main)
+  if [ -f $T/app/web/actions/record_preview.php ]; then
+    BASE=""
+    if [ -n "${UIG_BASE_SHA:-}" ]; then
+      [[ "$UIG_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git -C $T/repo cat-file -e "$UIG_BASE_SHA^{commit}" || { echo "ABBRUCH: UIG_BASE_SHA"; exit 1; }
+      mkdir -m 750 $T/base; git -C $T/repo archive "$UIG_BASE_SHA" | tar -x -C $T/base; BASE=$T/base
+      echo "Basis (E3): Commit $UIG_BASE_SHA"
+    fi
+    echo "--- U4-UI"; php $H/records/u4ui.php "${UIG_JS_POSTS:-$H/records/js_posts.json}" "$BASE" || rc=1
+  fi
   echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
   exit $rc
 fi

@@ -1,0 +1,19 @@
+{
+  "page/zoneadmin/dyndns": ["contract"],
+  "page/zoneadmin/dyndns_add": ["contract"],
+  "page/zoneadmin/dyndns_edit1": ["contract"],
+  "page/zoneadmin/servers": ["contract"],
+  "page/zoneadmin/servers_add": ["contract"],
+  "page/zoneadmin/servers_edit2": ["contract"],
+  "page/zoneadmin/system_health": ["contract"],
+  "page/zoneadmin/update": ["contract"],
+  "record/add_admin_txt_ohne_js": ["db", "log", "toasts"],
+  "page/admin/records_add": ["contract", "log", "problems"],
+  "page/admin/records_edit3": ["contract", "log", "problems"],
+  "page/admin/records_z1": ["contract", "log", "problems"],
+  "page/admin/records_z2": ["contract", "log", "problems"],
+  "page/admin/records_z3": ["contract", "log", "problems"],
+  "page/zoneadmin/records_add": ["contract", "log", "problems"],
+  "page/zoneadmin/records_edit3": ["contract", "log", "problems"],
+  "page/zoneadmin/records_z1": ["contract", "log", "problems"]
+}
