@@ -32,7 +32,7 @@ if (!defined('IN_APP')) {
 
     <div class="col-md-3">
         <label><?= $LANG['role'] ?></label>
-        <select name="role" class="form-select" id="new_user_role" onchange="toggleZoneOptions(this)">
+        <select name="role" class="form-select" id="new_user_role">
             <option value="admin" selected><?= $LANG['role_admin'] ?></option>
             <option value="zoneadmin"><?= $LANG['role_zoneadmin'] ?></option>
         </select>

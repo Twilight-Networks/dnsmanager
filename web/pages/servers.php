@@ -87,13 +87,13 @@ if ($has_server_errors) {
     <?php endif; ?>
 </div>
 
-<div class="card mb-4"<?= $overall_server_class !== 'success' ? ' onclick="toggleServerDiagnostics()" style="cursor: pointer;"' : '' ?>>
+<div class="card mb-4<?= $overall_server_class !== 'success' ? ' app-clickable' : '' ?>"<?= $overall_server_class !== 'success' ? ' data-server-diagnostics-toggle' : '' ?>>
     <div class="card-body">
         <h5><?= $LANG['server_status'] ?></h5>
             <div class="alert alert-<?= $overall_server_class ?> mb-0">
                 <?= htmlspecialchars($overall_server_message) ?>
             </div>
-        <div id="serverDiagnosticsBlock"<?= $overall_server_class !== 'success' ? ' style="display: none;"' : ' style="display: none;" hidden' ?> class="mt-3 small">
+        <div id="serverDiagnosticsBlock"<?= $overall_server_class !== 'success' ? '' : ' hidden' ?> class="mt-3 small app-hidden">
             <?php foreach ($server_diagnostics_output as $block): ?>
                 <div class="alert alert-<?= $overall_server_class ?>"><?= $block ?></div>
             <?php endforeach; ?>

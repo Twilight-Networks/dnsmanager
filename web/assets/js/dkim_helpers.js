@@ -77,3 +77,13 @@ function handleDKIMFileUpload(input) {
     };
     reader.readAsText(file); // Dateiinhalt lesen
 }
+
+// CSP (U2): Datei-Eingabefeld des Anlageformulars ohne Inline-Handler binden
+document.addEventListener('DOMContentLoaded', function () {
+    const fileInput = document.getElementById('dkim_file');
+    if (fileInput) {
+        fileInput.addEventListener('change', function () {
+            handleDKIMFileUpload(this);
+        });
+    }
+});

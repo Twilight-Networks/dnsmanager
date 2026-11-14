@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const dnsIp6Field = document.getElementById('dns_ip6');
     const isLocal = document.getElementById('is_local');
     const apiToken = document.getElementById('api_token');
-    const genBtn = document.querySelector('button[onclick="generateApiKey()"]');
+    const genBtn = document.querySelector('.js-generate-api-key');
 
     if (!checkbox || !apiIpField || !dnsIpField || !isLocal || !apiToken) return;
 

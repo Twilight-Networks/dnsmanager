@@ -33,3 +33,11 @@ function copyDynDnsUrl() {
             alert(lang('clipboard_failed'));
         });
 }
+
+// CSP (U2): Schaltfläche ohne Inline-Handler binden
+document.addEventListener('DOMContentLoaded', function () {
+    const button = document.getElementById('copyDynDnsUrlBtn');
+    if (button) {
+        button.addEventListener('click', copyDynDnsUrl);
+    }
+});

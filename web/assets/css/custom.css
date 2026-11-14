@@ -493,3 +493,16 @@ body.app-login { background-color: var(--dm-bg); }
 .coltbl-dyndns-hostname { width: 10%;  white-space: nowrap; }
 .coltbl-dyndns-zone     { width: 10%;  white-space: nowrap; }
 .coltbl-dyndns-update   { width: 12%;  white-space: nowrap; }
+
+/* ---------- 7. CSP-Hilfsklassen (U2: ersetzen style-Attribute im Markup) ---------- */
+
+/* Anfangs verborgen; Skripte blenden per classList bzw. element.style (CSSOM, CSP-konform) ein */
+.app-hidden         { display: none; }
+.app-clickable      { cursor: pointer; }
+.app-badge-inactive { opacity: 0.5; }
+.app-mw-700         { max-width: 700px; }
+.app-w-20           { width: 20%; }
+.app-table-fixed    { table-layout: fixed; width: 100%; }
+.app-check-locked   { opacity: 0.5; cursor: not-allowed; }
+.app-pre-wrap       { white-space: pre-wrap; font-family: monospace; }
+.app-pre-line       { white-space: pre-line; }

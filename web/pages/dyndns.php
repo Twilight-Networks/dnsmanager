@@ -78,13 +78,13 @@ foreach ($dyndnsReadService->listAccounts($actor) as $a) {
 
             <?= $LANG['dyndns_info_text_1'] ?><br><br>
 
-            <div class="input-group input-group-sm mt-2" style="max-width: 700px;">
+            <div class="input-group input-group-sm mt-2 app-mw-700">
                 <input type="text"
                        id="dyndnsUrl"
                        class="form-control form-control-sm"
                        readonly
                        value="https://example.com<?= rtrim(BASE_URL, '/') ?>/api/v1/dyndns/update.php?myip=&lt;ipaddr&gt;&amp;myip6=&lt;ip6addr&gt;">
-                <button class="btn btn-outline-secondary btn-sm" type="button" onclick="copyDynDnsUrl()" title="<?= $LANG['dyndns_copy_title'] ?>">
+                <button class="btn btn-outline-secondary btn-sm" type="button" id="copyDynDnsUrlBtn" title="<?= $LANG['dyndns_copy_title'] ?>">
                     📋
                 </button>
             </div>
