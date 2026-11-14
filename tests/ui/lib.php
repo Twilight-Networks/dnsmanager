@@ -191,8 +191,9 @@ function forms(string $html): array
             if (str_ends_with($n, '[]')) { $values[substr($n, 0, -2)][] = $v; } else { $values[$n] = $v; }
         }
         $fields = array_values(array_unique($fields)); sort($fields);
+        // Kodierung wie der Browser: ohne Attribut application/x-www-form-urlencoded (K2)
         $forms[] = ['method' => strtolower($fa['method'] ?? 'get'), 'action' => preg_replace('#^/dnsmanager-ui/#', '', $fa['action'] ?? ''), 'id' => $fa['id'] ?? '',
-            'fields' => $fields, 'values' => $values];
+            'enctype' => strtolower(trim($fa['enctype'] ?? '')) ?: 'application/x-www-form-urlencoded', 'fields' => $fields, 'values' => $values];
     }
     return $forms;
 }
@@ -204,13 +205,16 @@ function formFor(string $html, string $action, ?string $id = null): ?array
     return null;
 }
 
-/** Vertragsrelevante Struktur einer Seite: Formulare (Methode, Ziel, Feldnamen/-typen) und Navigationsziele */
+/** Vertragsrelevante Struktur einer Seite: Formulare (Methode, Ziel, Kodierung, Feldnamen/-typen) und Linkziele */
 function pageContract(string $html): array
 {
-    $forms = array_map(fn($f) => $f['method'] . ' ' . $f['action'] . ' [' . implode(', ', $f['fields']) . ']', forms($html));
+    $forms = array_map(fn($f) => $f['method'] . ' ' . $f['action'] . ' ' . $f['enctype'] . ' [' . implode(', ', $f['fields']) . ']', forms($html));
     sort($forms);
-    preg_match_all('#<a\b[^>]*href="([^"]*)"#', $html, $am);
-    $links = array_values(array_unique(array_filter(array_map(fn($h) => preg_replace(['/[?&]v=\d+/', '/[0-9a-f]{64}/'], ['', 'HEX64'], html_entity_decode($h)), $am[1]),
+    // Linkziele mit doppelten und einfachen Anführungszeichen (K1); attrs() dekodiert HTML-Entitäten
+    preg_match_all('#<a\b[^>]*>#s', $html, $am);
+    $hrefs = [];
+    foreach ($am[0] as $tag) { $a = attrs($tag); if (isset($a['href'])) { $hrefs[] = $a['href']; } }
+    $links = array_values(array_unique(array_filter(array_map(fn($h) => preg_replace(['/[?&]v=\d+/', '/[0-9a-f]{64}/'], ['', 'HEX64'], $h), $hrefs),
         fn($h) => !str_starts_with($h, '#') && !str_starts_with($h, 'javascript:'))));
     sort($links);
     return ['forms' => $forms, 'links' => $links];
