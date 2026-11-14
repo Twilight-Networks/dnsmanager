@@ -1,16 +1,19 @@
 <?php
 /**
  * Datei: records.php
- * Zweck: Anzeige und Bearbeitung von DNS-Records einer spezifischen Zone.
+ * Zweck: Record-Verwaltung einer DNS-Zone im A+-Design (U4-UI).
  * Details:
- * - Admins dürfen alle Zonen und deren Records verwalten.
- * - Zone-Admins dürfen nur Records in ihnen zugewiesenen Zonen verwalten.
- * - Unterstützung für A, AAAA, CNAME, MX, NS, PTR, TXT, SPF, DKIM Records.
- * - Glue-Records (A/AAAA-Records, die autoritative NS-Records referenzieren) sind
- *   visuell als nicht löschbar gekennzeichnet.
- * - Bei Glue-Records ist im Bearbeitungsmodus nur die Änderung von TTL und IP-Adresse zulässig.
- * Zugriff: Geschützt über requireRole(['admin', 'zoneadmin']) und Zonenbesitzprüfung.
- * Aufruf: GET /pages/records.php?zone_id={id}
+ * - Zonenauswahl über ZoneReadService::listZones() (nur berechtigte Zonen, mit recordCount; alle Seiten der
+ *   vorhandenen Pagination werden gelesen, sodass jede berechtigte Zone erreichbar bleibt).
+ * - Tabelle mit Herkunft (System, System · Glue, Manuell, Glue; Schloss bei Schutz; DynDNS nur bei isDyndns) und
+ *   fachlicher Klassifizierung (SPF, DKIM, DMARC nach TXT-Semantik).
+ * - Löschen und Auswahl nur, wo der RecordService es zulässt (nicht bei Glue, geschütztem NS, DynDNS).
+ *   Einzellöschen mit Bestätigung, Massenlöschung über bulk_ids (record_delete.php, unverändert).
+ * - Rechter Editor (edit_id bzw. add_new) mit einheitlichem Formular (templates/record_editor_form.php) und
+ *   serverseitiger Vorschau/DIFF. Ohne JavaScript: „Vorschau“ sendet das Formular per POST an diese Seite
+ *   (CSRF-geprüft, dieselbe Vorschaufunktion wie actions/record_preview.php, keine Schreibzugriffe).
+ * Zugriff: requireRole(['admin', 'zoneadmin']) und Zonenberechtigung (ZoneAccess); fremde Zonen 403.
+ * Aufruf: GET /pages/records.php?zone_id={id}[&edit_id={id}|&add_new=1[&type=X]]; POST mit preview=1 (Vorschau)
  */
 
 define('IN_APP', true);
@@ -21,6 +24,7 @@ require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
 require_once __DIR__ . '/../inc/app/records/RecordReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
+require_once __DIR__ . '/../inc/web/record_editor.php';
 include __DIR__ . '/../templates/layout.php';
 
 // Zugriffskontrolle: Nur Admins oder Zone-Admins erlaubt
@@ -29,6 +33,7 @@ requireRole(['admin', 'zoneadmin']);
 // Eingangsparameter lesen
 $zone_id = isset($_GET['zone_id']) ? (int)$_GET['zone_id'] : 0;
 $edit_record_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
+$show_add_form = isset($_GET['add_new']) && $_GET['add_new'] == '1';
 
 // Zone und Records über die Read-Services (Berechtigung nach ZoneAccess in derselben Abfrage).
 // Nicht vorhandene und nicht berechtigte Zonen werden wie bisher gleich behandelt (403).
@@ -44,213 +49,210 @@ if ($zoneData === null || $recordView === null) {
     exit('Zugriff verweigert: Keine Berechtigung für diese Zone.');
 }
 
-// Übersetzung in die bisherige Struktur für die unveränderte Darstellung und die Formulare
 $zone = ['id' => $zoneData['id'], 'name' => $zoneData['name'], 'type' => $zoneData['type']];
-$all_records = [];
-foreach ($recordView['records'] as $rec) {
-    $row = [
-        'id'         => $rec['id'],
-        'name'       => $rec['name'],
-        'type'       => $rec['type'],
-        'content'    => $rec['content'],
-        'ttl'        => $rec['ttl'],
-        'is_glue'    => $rec['isGlue'],
-        'is_ns_glue' => $rec['isProtectedNs'],
-    ];
-    if ($rec['isDkim']) {
-        $row['is_dkim'] = true;
+$zoneUrl = 'pages/records.php?zone_id=' . (int)$zone['id'];
+$records = $recordView['records'];
+$recordsById = array_column($records, null, 'id');
+
+// Editor: Bearbeitung (edit_id) oder Anlage (add_new)
+$editRec = ($edit_record_id !== null && isset($recordsById[$edit_record_id])) ? $recordsById[$edit_record_id] : null;
+$editorMode = $editRec !== null ? 'update' : ($show_add_form ? 'create' : null);
+
+// No-JS-Vorschau: POST des Editorformulars auf diese Seite (nur passend zu Zone und Editor der URL)
+$preview = null;
+$postedValues = null;
+if ($editorMode !== null && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['preview'] ?? '') === '1') {
+    verify_csrf_token();
+    $postMatches = (int)($_POST['zone_id'] ?? 0) === (int)$zone['id']
+        && ($editorMode === 'update' ? (int)($_POST['id'] ?? 0) === (int)$editRec['id'] : !isset($_POST['id']));
+    if ($postMatches) {
+        $preview = recordEditorPreview($pdo, $actor, $zoneAccess, $_POST, $_FILES);
+        if ($preview['status'] === 'denied') {
+            logAccessDenied('records', 'Benutzer-ID ' . $actor->userId . ' – Vorschau ohne Berechtigung (Zone-ID ' . $zone_id . ')');
+            http_response_code(403);
+            exit('Zugriff verweigert: Keine Berechtigung für diese Zone.');
+        }
+        $postedValues = $_POST;
     }
-    $all_records[] = $row;
 }
 
-// Records gruppieren (Darstellung)
+// Gruppierung (Darstellung): NS, Mail (MX und Klassifizierung SPF/DKIM/DMARC), übrige Einträge
 $groups = ['NS' => [], 'MAIL' => [], 'OTHER' => []];
-foreach ($all_records as $r) {
-    $is_dkim = !empty($r['is_dkim']);
-
-    // Gruppierung
+foreach ($records as $i => $r) {
+    $records[$i]['classes'] = recordEditorClassify($r);
     if ($r['type'] === 'NS') {
-        $groups['NS'][] = $r;
-    } elseif ($r['type'] === 'MX' || $is_dkim || ($r['type'] === 'TXT' && preg_match('/spf|dmarc/i', $r['content']))) {
-        $groups['MAIL'][] = $r;
+        $groups['NS'][] = $records[$i];
+    } elseif ($r['type'] === 'MX' || $records[$i]['classes'] !== []) {
+        $groups['MAIL'][] = $records[$i];
     } else {
-        $groups['OTHER'][] = $r;
+        $groups['OTHER'][] = $records[$i];
     }
 }
+$groupTitles = [
+    'NS' => $LANG['records_ns'],
+    'MAIL' => $LANG['records_mail'],
+    'OTHER' => $zone['type'] === 'reverse' ? $LANG['records_host_reverse'] : $LANG['records_host'],
+];
 
-/**
- * Helper-Funktion zum Anzeigen einer Tabelle von Records.
- */
-function render_records_table(array $records, string $title, int $zone_id, ?int $edit_record_id): void
-{
-    global $zone, $LANG;
-
-    if (empty($records)) {
-        return;
-    }
-
-    echo "<h4 class='mt-4'>" . htmlspecialchars($title) . "</h4>";
-    echo "<div class='table-responsive'>
-            <table class='table table-striped table-bordered align-middle app-table-fixed'>";
-
-    echo "<thead class='table-light'><tr>";
-    echo "<th class='coltbl-select'><input type='checkbox' class='form-check-input select-all' data-table-id='" . md5($title) . "'></th>";
-    echo "<th class='coltbl-name'>" . $LANG['name'] . "</th>";
-    echo "<th class='coltbl-type'>" . $LANG['record_type'] . "</th>";
-    echo "<th class='coltbl-content'>" . $LANG['record_content'] . "</th>";
-    echo "<th class='coltbl-ttl'>TTL</th>";
-    echo "<th class='coltbl-actions'>" . $LANG['actions'] . "</th>";
-    echo "</tr></thead><tbody>";
-
-    foreach ($records as $r) {
-        // Schutzkennzeichen aus dem RecordReadService (Glue bzw. geschützter NS-Record)
-        $is_glue = $r['is_glue'];
-        $is_ns_glue = $r['is_ns_glue'];
-        $is_editing = ($edit_record_id === (int)$r['id']);
-        $row_class = $is_editing ? 'table-warning' : '';
-
-        echo "<tr class='$row_class'>";
-        echo "<td class='coltbl-select'>";
-        if (!$is_editing) {
-            if ($is_glue) {
-                echo "<input type='checkbox' class='form-check-input app-check-locked' disabled title='" . $LANG['glue_protected'] . "'>";
-            } else {
-                echo "<input type='checkbox' class='form-check-input select-row' data-id='" . $r['id'] . "' data-table-id='" . md5($title) . "'>";
-            }
-        }
-        echo "</td>";
-
-        echo "<td>" . htmlspecialchars($r['name']) . "</td>";
-        echo "<td>" . htmlspecialchars($r['type']) . "</td>";
-        echo "<td class='coltbl-content' title='" . htmlspecialchars($r['content']) . "'>" . htmlspecialchars($r['content']) . "</td>";
-
-        // TTL-Anzeige
-        $ttl_value = (int)$r['ttl'];
-        $ttl_auto = getAutoTTL($r['type']);
-        if ($ttl_value === $ttl_auto) {
-            $ttl_display = $LANG['ttl_auto'];
-        } else {
-            $ttl_map = [
-                60 => '1 ' . $LANG['minute'],
-                120 => '2 ' . $LANG['minutes'],
-                300 => '5 ' . $LANG['minutes'],
-                600 => '10 ' . $LANG['minutes'],
-                900 => '15 ' . $LANG['minutes'],
-                1800 => '30 ' . $LANG['minutes'],
-                3600 => '1 ' . $LANG['hour'],
-                7200 => '2 ' . $LANG['hours'],
-                18000 => '5 ' . $LANG['hours'],
-                43200 => '12 ' . $LANG['hours'],
-                86400 => '1 ' . $LANG['day'],
-            ];
-            $ttl_display = $ttl_map[$ttl_value] ?? $ttl_value . ' ' . $LANG['seconds'];
-        }
-
-        echo "<td>" . htmlspecialchars($ttl_display) . "</td>";
-
-        // Aktionsspalte
-        echo "<td><div class='d-flex gap-1 flex-wrap'>";
-        if ($is_editing) {
-            echo "<button type='submit' form='editForm_" . $r['id'] . "' class='btn btn-sm btn-success'>" . $LANG['save'] . "</button>";
-            echo "<a href='pages/records.php?zone_id=" . $zone_id . "' class='btn btn-sm btn-secondary'>" . $LANG['cancel'] . "</a>";
-        } else {
-            echo "<a href='pages/records.php?zone_id=" . $zone_id . "&edit_id=" . $r['id'] . "' class='btn btn-sm btn-outline-warning'>" . $LANG['edit'] . "</a>";
-
-            if (!$is_glue && !$is_ns_glue) {
-                echo "<form method='post' action='actions/record_delete.php' class='d-inline confirm-delete'>";
-                echo csrf_input();
-                echo "<input type='hidden' name='id' value='" . $r['id'] . "'>";
-                echo "<input type='hidden' name='zone_id' value='" . $zone_id . "'>";
-                echo ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]);
-                echo "</form>";
-            }
-        }
-        echo "</div></td>";
-
-        // Bearbeitungsformular (wenn aktiv)
-        if ($is_editing) {
-            include __DIR__ . '/../templates/record_edit_form.php';
-        }
-
-        echo "</tr>";
-    }
-
-    echo "</tbody></table></div>";
+// Zonenauswahl: alle berechtigten Zonen (vollständig über die Pagination von listZones())
+$allZones = recordEditorAllZones($zoneReadService, $actor);
+$zoneSelect = '<form method="get" action="pages/records.php" class="dm-zone-select" data-dm-zone-select>'
+    . '<label class="visually-hidden" for="dmZoneSelect">' . ui_e($LANG['zone_select_label']) . '</label>'
+    . '<select name="zone_id" id="dmZoneSelect" class="form-select">';
+foreach ($allZones as $z) {
+    $zoneSelect .= '<option value="' . $z['id'] . '"' . ($z['id'] === (int)$zone['id'] ? ' selected' : '') . '>'
+        . ui_e(sprintf($LANG['zone_select_option'], rtrim($z['name'], '.'), $z['recordCount'])) . '</option>';
 }
-?>
+$zoneSelect .= '</select><button type="submit" class="btn btn-outline-secondary" data-dm-zone-open>' . ui_e($LANG['zone_select_open']) . '</button></form>';
 
-<br>
-<br>
-<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap">
-    <h2><?= sprintf($LANG['dns_records_for'], htmlspecialchars($zone['name'])) ?></h2>
-    <div class="d-flex gap-2 align-items-center flex-wrap">
-        <a href="pages/records.php?zone_id=<?= $zone['id'] ?>&add_new=1" class="btn btn-success">+ <?= $LANG['add_record'] ?></a>
+$addButton = '<a href="' . ui_e($zoneUrl) . '&amp;add_new=1" class="btn btn-success">' . '+ ' . ui_e($LANG['add_record']) . '</a>';
 
-        <form id="bulkDeleteForm" method="post" action="actions/record_delete.php" class="d-none confirm-delete">
-            <?= csrf_input() ?>
-
-            <input type="hidden" name="bulk_ids" value="">
-            <button type="submit" class="btn btn-danger fw-bold" id="bulkDeleteBtn"><?= $LANG['delete_records'] ?></button>
-        </form>
-    </div>
-</div>
-
-<?php
+echo ui_page_header(sprintf($LANG['dns_records_for'], rtrim($zone['name'], '.')), [
+    'subtitle' => sprintf($LANG['records_count'], count($records)),
+    'actionsHtml' => $zoneSelect . $addButton,
+]);
 
 // Zonendiagnosen dieser Zone (ZoneReadService, Berechtigung in derselben Abfrage)
-$results = [];
+$diagnostics = [];
 foreach ($zoneReadService->listZoneDiagnostics($actor) as $entry) {
     if ($entry['zoneId'] === (int)$zone['id'] && $entry['checkType'] === 'zone_status') {
-        $results[] = [
-            'server' => htmlspecialchars($entry['serverName'] ?? '(unbekannt)'),
-            'status' => $entry['status'],
-            'message' => $entry['message']
-        ];
+        $diagnostics[] = $entry;
     }
 }
-
-// Ausgabe gesammelt darstellen
-echo "<div class='alert alert-secondary'><strong>📦 " . sprintf($LANG['zone_diagnostic_for'], htmlspecialchars($zone['name'])) . "</strong><br>";
-echo "<br>";
-
-foreach ($results as $r) {
-    $color = match ($r['status']) {
-        'ok' => '✅',
-        'error' => '❌',
-        'not_found' => '❌',
-        default => '❓'
-    };
-
-    echo "<div class='mt-2'><strong>{$color} {$r['server']}</strong><br>";
-    echo "<pre class='app-pre-wrap'>" . htmlspecialchars($r['message']) . "</pre></div>";
+if ($diagnostics !== []) {
+    echo '<details class="dm-card dm-diagnostics"><summary class="dm-card-head"><h2 class="dm-card-title">'
+        . ui_e($LANG['zone_diagnostic_title']) . '</h2>';
+    foreach ($diagnostics as $d) {
+        $variant = match ($d['status']) { 'ok' => 'ok', 'error', 'not_found' => 'err', default => 'warn' };
+        echo ' ' . ui_chip((string)($d['serverName'] ?? '(unbekannt)'), $variant, $variant === 'ok' ? 'check-circle' : ($variant === 'err' ? 'x-circle' : 'exclamation-triangle'));
+    }
+    echo '</summary><div class="dm-card-body">';
+    foreach ($diagnostics as $d) {
+        // U0-B2: Diagnosen ohne Meldungstext (NULL) ergeben einen leeren Text statt einer Deprecation
+        echo '<div class="dm-diagnostic"><strong>' . ui_e((string)($d['serverName'] ?? '(unbekannt)')) . '</strong>'
+            . '<pre class="app-pre-wrap">' . ui_e((string)($d['message'] ?? '')) . '</pre></div>';
+    }
+    echo '</div></details>';
 }
 
-echo "</div>";
+// Massenlöschung (bestehender Vertrag: record_delete.php mit bulk_ids, Bestätigung)
+$bulkForm = '<form id="bulkDeleteForm" method="post" action="actions/record_delete.php" class="d-inline confirm-delete">' . csrf_input()
+    . '<input type="hidden" name="bulk_ids" value="" data-dm-bulk-ids>'
+    . ui_confirm_delete_button($LANG['delete_records'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']])
+    . '</form>';
 
-// === Formular für neuen Eintrag hier einfügen ===
-$show_add_form = isset($_GET['add_new']) && $_GET['add_new'] == '1';
-if ($show_add_form): ?>
-    <?php include __DIR__ . '/../templates/record_add_form.php'; ?>
-<?php endif; ?>
+echo ui_card_open($LANG['records'], ['flush' => true, 'actionsHtml' => ui_chip((string)count($records))]);
+echo ui_bulk_bar('records', $LANG['bulk_selected'], $bulkForm);
 
-<?php
-$record_title_ns   = $LANG['records_ns'];
-$record_title_mail = $LANG['records_mail'];
-$record_title_other = $zone['type'] === 'reverse'
-    ? $LANG['records_host_reverse']
-    : $LANG['records_host'];
+if ($records === []) {
+    echo ui_empty_state($LANG['record_empty'], ['icon' => 'inbox', 'actionHtml' => $addButton]);
+} else {
+    echo '<div class="table-responsive"><table class="dm-table dm-records-table"><thead><tr>'
+        . '<th class="dm-col-select">' . ui_select_all('records', $LANG['select_all']) . '</th>'
+        . '<th>' . ui_e($LANG['name']) . '</th><th>' . ui_e($LANG['record_type']) . '</th>'
+        . '<th>' . ui_e($LANG['record_content']) . '</th><th>' . ui_e($LANG['ttl']) . '</th>'
+        . '<th>' . ui_e($LANG['record_col_origin']) . '</th><th class="dm-col-actions">' . ui_e($LANG['actions']) . '</th>'
+        . '</tr></thead><tbody>';
+    foreach ($groups as $key => $groupRecords) {
+        if ($groupRecords === []) {
+            continue;
+        }
+        echo '<tr class="dm-group-row"><td colspan="7">' . ui_e($groupTitles[$key]) . ' <span class="dm-group-count">' . count($groupRecords) . '</span></td></tr>';
+        foreach ($groupRecords as $r) {
+            $deletable = recordEditorDeletable($r);
+            $isCurrent = $editRec !== null && $editRec['id'] === $r['id'];
+            echo '<tr' . ($isCurrent ? ' class="dm-current"' : '') . '>';
+            echo '<td class="dm-col-select">' . ($deletable ? ui_select_row('records', (string)$r['id'], $LANG['select_row'] . ' ' . $r['name'])
+                : '<span class="dm-lock" title="' . ui_e($LANG['record_not_deletable']) . '">' . ui_icon('shield-lock') . '</span>') . '</td>';
+            echo '<td class="dm-mono dm-col-name">' . ui_e($r['name']) . '</td>';
+            echo '<td>' . ui_chip($r['type'], 'accent');
+            foreach ($r['classes'] as $class) {
+                echo ' ' . ui_chip($class, 'info');
+            }
+            echo '</td>';
+            echo '<td class="dm-mono dm-col-content" title="' . ui_e($r['content']) . '"><span class="dm-truncate">' . ui_e($r['content']) . '</span></td>';
+            echo '<td class="dm-col-ttl">' . ui_e(recordEditorTtlLabel($r['type'], (int)$r['ttl'])) . '</td>';
+            echo '<td>' . recordEditorOriginHtml($r) . '</td>';
+            echo '<td class="dm-col-actions"><a class="btn btn-sm btn-outline-secondary" href="' . ui_e($zoneUrl . '&edit_id=' . $r['id']) . '">'
+                . ui_e($LANG['edit']) . '</a>';
+            if ($deletable) {
+                echo ' <form method="post" action="actions/record_delete.php" class="d-inline confirm-delete">' . csrf_input()
+                    . '<input type="hidden" name="id" value="' . (int)$r['id'] . '">'
+                    . '<input type="hidden" name="zone_id" value="' . (int)$zone['id'] . '">'
+                    . ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']])
+                    . '</form>';
+            }
+            echo '</td></tr>';
+        }
+    }
+    echo '</tbody></table></div>';
+}
+echo ui_card_close();
 
-render_records_table($groups['NS'], $record_title_ns, $zone['id'], $edit_record_id);
-render_records_table($groups['MAIL'], $record_title_mail, $zone['id'], $edit_record_id);
-render_records_table($groups['OTHER'], $record_title_other, $zone['id'], $edit_record_id);
-?>
+// Rechter Editor (serverseitig geöffnet, D2)
+if ($editorMode !== null) {
+    $formId = $editorMode === 'update' ? 'editForm_' . $editRec['id'] : 'recordForm';
+    $formValues = recordEditorFormValues($editorMode, $editRec, (string)$zone['name'], $postedValues);
+    $selectedType = $editorMode === 'create'
+        ? (string)($postedValues['type'] ?? ($_GET['type'] ?? ''))
+        : (string)$editRec['type'];
+    $previewUrl = $zoneUrl . ($editorMode === 'update' ? '&edit_id=' . $editRec['id'] : '&add_new=1');
+    $storedLine = $editorMode === 'update' ? zone_file_record_line($editRec, $zoneData['ttl']) : null;
 
-<!-- JavaScript auslagern -->
-<?php
-AssetRegistry::enqueueScript('js/records.js');
-AssetRegistry::enqueueScript('js/record_add_form.js');
-AssetRegistry::enqueueScript('js/record_edit_form.js');
-AssetRegistry::enqueueScript('js/dkim_helpers.js');
+    $title = $editorMode === 'update' ? $LANG['record_editor_title_edit'] : $LANG['add_record'];
+    echo ui_editor_open($title, $zoneUrl, [
+        'chip' => $editorMode === 'update' ? (!empty($editRec['isDkim']) ? 'DKIM' : $editRec['type']) : '',
+        'subtitle' => ($editorMode === 'update' ? $editRec['name'] . ' · ' : '') . sprintf($LANG['record_editor_zone'], rtrim($zone['name'], '.')),
+        'closeLabel' => $LANG['close'],
+    ]);
+    if ($editorMode === 'update') {
+        if ($editRec['isDyndns']) {
+            echo ui_notice('info', $LANG['record_lock_dyndns'], ['icon' => 'shield-lock']);
+        } elseif ($editRec['isProtectedNs']) {
+            echo ui_notice('info', $LANG['record_lock_ns'], ['icon' => 'shield-lock']);
+        } elseif ($editRec['isGlue']) {
+            echo ui_notice('info', $LANG['record_lock_glue'], ['icon' => 'shield-lock']);
+        }
+    }
+    ob_start();
+    include __DIR__ . '/../templates/record_editor_form.php';
+    echo ui_editor_section($LANG['record_editor_section_input'], (string)ob_get_clean());
+
+    $editorTexts = recordEditorDiffTexts() + [
+        'pending' => $LANG['record_preview_pending'], 'failed' => $LANG['record_preview_failed'],
+        'invalid' => $LANG['record_preview_invalid'], 'denied' => $LANG['record_preview_denied'],
+        'unchanged' => $LANG['record_preview_unchanged'], 'initial' => $LANG['record_preview_hint_initial'],
+    ];
+    echo ui_editor_section($LANG['record_editor_section_preview'],
+        '<div class="dm-record-preview" data-dm-record-preview aria-live="polite">' . recordEditorPreviewHtml($preview, $storedLine) . '</div>'
+        . '<script type="application/json" id="dmRecordEditorTexts">'
+        . json_encode($editorTexts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)
+        . '</script>'
+        // Vorlagen für die Darstellung mit JavaScript (Symbole aus dem Sprite, Texte per textContent)
+        . '<template id="dmPreviewNoticeTpl">' . ui_notice('err', '', ['role' => 'alert']) . '</template>'
+        . '<template id="dmPreviewHintTpl"><p class="dm-record-preview-hint">' . ui_icon('info-circle') . ' <span></span></p></template>');
+    echo '<div class="dm-editor-note">' . ui_icon('info-circle') . '<span>' . ui_e($LANG['record_preview_disclaimer']) . '</span></div>';
+    echo '<div class="dm-editor-note">' . ui_icon('info-circle') . '<span>' . ui_e($LANG['saved_not_published']) . '</span></div>';
+
+    $leftHtml = '';
+    if ($editorMode === 'update' && recordEditorDeletable($editRec)) {
+        $leftHtml = '<form method="post" action="actions/record_delete.php" class="confirm-delete">' . csrf_input()
+            . '<input type="hidden" name="id" value="' . (int)$editRec['id'] . '">'
+            . '<input type="hidden" name="zone_id" value="' . (int)$zone['id'] . '">'
+            . ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']])
+            . '</form>';
+    }
+    echo ui_editor_close($zoneUrl, [
+        'cancelLabel' => $LANG['cancel'],
+        'leftHtml' => $leftHtml,
+        'saveHtml' => '<button type="submit" class="btn btn-outline-primary" form="' . ui_e($formId) . '" name="preview" value="1"'
+            . ' formaction="' . ui_e($previewUrl) . '" formmethod="post" data-dm-preview-button>' . ui_e($LANG['record_preview_button']) . '</button>'
+            . '<button type="submit" class="btn btn-success" form="' . ui_e($formId) . '">' . ui_e($LANG['save']) . '</button>',
+    ]);
+}
+
+AssetRegistry::enqueueScript('js/diff.js');
+AssetRegistry::enqueueScript('js/record_editor.js');
 ?>
 
 <?php include __DIR__ . '/../templates/layout_footer.php'; ?>

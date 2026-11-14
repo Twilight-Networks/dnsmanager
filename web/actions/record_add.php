@@ -30,6 +30,7 @@ require_once __DIR__ . '/../inc/app/records/RecordService.php';
 require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
+require_once __DIR__ . '/../inc/web/record_editor.php';
 
 // Nur POST-Anfragen zulassen
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -51,62 +52,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $raw_type = $_POST['type'] ?? '';
 
-    // Überprüfen, ob eine DKIM-Datei hochgeladen wurde
-    if (isset($_FILES['dkim_file']) && $_FILES['dkim_file']['error'] === UPLOAD_ERR_OK) {
-        // Maximale Dateigröße auf 2 KB festlegen
-        $maxFileSize = 2048; // 2 KB
-
-        // Überprüfen, ob die Datei nicht größer als die maximal erlaubte Größe ist
-        if ($_FILES['dkim_file']['size'] > $maxFileSize) {
-        toastError(
-            $LANG['record_error_dkim_file_too_large'],
-            "DKIM-Upload abgebrochen: Datei überschreitet 2 KB Limit."
-        );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
-            exit;
-        }
-
-        // Überprüfen der Dateiendung (nur .txt-Dateien erlauben)
-        $fileInfo = pathinfo($_FILES['dkim_file']['name']);
-        $fileExtension = strtolower($fileInfo['extension']);
-        if ($fileExtension !== 'txt') {
-            toastError(
-                $LANG['record_error_dkim_invalid_extension'],
-                "DKIM-Upload abgelehnt: Dateiendung '{$fileExtension}' ist nicht erlaubt."
-            );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
-            exit;
-        }
-
-        // Pfad zur temporären Datei
-        $filePath = $_FILES['dkim_file']['tmp_name'];
-
-        // Dateiinhalt überprüfen (keine schädlichen Tags oder PHP-Code)
-        $fileContent = file_get_contents($filePath);
-        if (preg_match('/<\?php|<script|<\/script>/', $fileContent)) {
-            toastError(
-                $LANG['record_error_dkim_invalid_code'],
-                "DKIM-Datei abgewiesen: Enthält verbotene Zeichenfolgen."
-            );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
-            exit;
-        }
-
-        // DKIM-Datei verarbeiten
-        $dkimData = parseDKIMFile($filePath);
-
-        if ($dkimData) {
-            // DKIM-Daten extrahiert, an das Formular übergeben
-            $_POST['dkim_selector'] = $dkimData['selector'];
-            $_POST['dkim_key'] = $dkimData['key'];
-        } else {
-            toastError(
-                $LANG['record_error_dkim_parse_failed'],
-                "Fehler beim Parsen der hochgeladenen DKIM-Datei."
-            );
-            header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
-            exit;
-        }
+    // Hochgeladene DKIM-Datei prüfen und übernehmen (gemeinsam mit der Vorschau, inc/web/record_editor.php)
+    $dkimUpload = recordEditorApplyDkimUpload($_FILES, $_POST);
+    if ($dkimUpload !== null && isset($dkimUpload['error'])) {
+        toastError($LANG[$dkimUpload['error']], $dkimUpload['log']);
+        header("Location: " . rtrim(BASE_URL, '/') . "/pages/records.php?zone_id=" . urlencode($zone_id));
+        exit;
     }
 
     // TTL auf Basis des Record-Typs setzen, wenn "auto" gewählt wurde
@@ -132,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $type    = $result['type'];
     $name    = $result['name'];
     $content = $result['content'];
-    $ttl     = intval($_POST['ttl']) ?: 3600;
+    $ttl     = recordEditorTtlCreate($_POST, $raw_type);
     $is_dkim = $result['isDkim'];
     $validator_type = $result['validationType'];
 

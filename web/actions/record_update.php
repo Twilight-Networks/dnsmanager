@@ -17,6 +17,7 @@ require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
 require_once __DIR__ . '/../inc/app/records/RecordReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 require_once __DIR__ . '/../inc/web/record_messages.php';
+require_once __DIR__ . '/../inc/web/record_editor.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     requireRole(['admin', 'zoneadmin']);
@@ -64,8 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $is_dkim = $result['isDkim'];
     $validator_type = $result['validationType'];
     // TTL auf Basis des Record-Typs setzen, wenn "auto" gewählt wurde
-    $ttl_raw = $_POST['ttl'] ?? '';
-    $ttl = ($ttl_raw === 'auto') ? getAutoTTL($type) : (int)$ttl_raw;
+    $ttl = recordEditorTtlUpdate($_POST, $type);
 
     // Fachliche Update-Operation im RecordService
     $actor      = actorFromSession();
