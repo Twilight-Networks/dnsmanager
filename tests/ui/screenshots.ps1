@@ -81,7 +81,25 @@ $shots = @(
     @('u5a-zones-add-reverse', 'admin', 'pages/zones.php?add_new=1&type=reverse_ipv4', 1440, 1400),
     @('u5a-dashboard-mobile', 'admin', 'pages/dashboard.php', 492, 1500),
     @('u5a-zones-mobile', 'admin', 'pages/zones.php', 492, 1000),
-    @('u5a-zones-edit-mobile', 'admin', 'pages/zones.php?edit_id=1', 492, 1600)
+    @('u5a-zones-edit-mobile', 'admin', 'pages/zones.php?edit_id=1', 492, 1600),
+    # U5b: Server, DynDNS, Benutzer, Systemstatus, Update
+    @('u5b-servers', 'admin', 'pages/servers.php', 1440, 800),
+    @('u5b-servers-edit', 'admin', 'pages/servers.php?edit_id=2', 1440, 1000),
+    @('u5b-servers-add', 'admin', 'pages/servers.php?add_new=1', 1440, 1000),
+    @('u5b-dyndns', 'admin', 'pages/dyndns.php', 1440, 800),
+    @('u5b-dyndns-edit', 'admin', 'pages/dyndns.php?edit_id=1', 1440, 800),
+    @('u5b-dyndns-password', 'admin', 'pages/dyndns.php?pw_id=1', 1440, 800),
+    @('u5b-users', 'admin', 'pages/users.php', 1440, 800),
+    @('u5b-users-edit', 'admin', 'pages/users.php?edit_id=2', 1440, 900),
+    @('u5b-users-add', 'admin', 'pages/users.php?add_new=1', 1440, 900),
+    @('u5b-users-password-own', 'admin', 'pages/users.php?pw_id=1', 1440, 800),
+    @('u5b-users-zoneadmin', 'zoneadmin', 'pages/users.php', 1440, 700),
+    @('u5b-users-zoneadmin-password', 'zoneadmin', 'pages/users.php?pw_id=2', 1440, 800),
+    @('u5b-system-health', 'admin', 'pages/system_health.php', 1440, 1000),
+    @('u5b-update', 'admin', 'pages/update.php', 1440, 600),
+    @('u5b-servers-mobile', 'admin', 'pages/servers.php', 492, 1000),
+    @('u5b-users-mobile', 'admin', 'pages/users.php', 492, 1100),
+    @('u5b-system-health-mobile', 'admin', 'pages/system_health.php', 492, 1300)
 )
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $profileDir = Join-Path $env:TEMP ("uig-edge-" + [guid]::NewGuid().ToString('N'))
