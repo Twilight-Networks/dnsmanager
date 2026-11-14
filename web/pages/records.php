@@ -165,14 +165,14 @@ if ($records === []) {
             echo '<td class="dm-col-select">' . ($deletable ? ui_select_row('records', (string)$r['id'], $LANG['select_row'] . ' ' . $r['name'])
                 : '<span class="dm-lock" title="' . ui_e($LANG['record_not_deletable']) . '">' . ui_icon('shield-lock') . '</span>') . '</td>';
             echo '<td class="dm-mono dm-col-name">' . ui_e($r['name']) . '</td>';
-            echo '<td>' . ui_chip($r['type'], 'accent');
+            echo '<td class="dm-col-type">' . ui_chip($r['type'], 'accent');
             foreach ($r['classes'] as $class) {
                 echo ' ' . ui_chip($class, 'info');
             }
             echo '</td>';
             echo '<td class="dm-mono dm-col-content" title="' . ui_e($r['content']) . '"><span class="dm-truncate">' . ui_e($r['content']) . '</span></td>';
             echo '<td class="dm-col-ttl">' . ui_e(recordEditorTtlLabel($r['type'], (int)$r['ttl'])) . '</td>';
-            echo '<td>' . recordEditorOriginHtml($r) . '</td>';
+            echo '<td class="dm-col-origin">' . recordEditorOriginHtml($r) . '</td>';
             echo '<td class="dm-col-actions"><a class="btn btn-sm btn-outline-secondary" href="' . ui_e($zoneUrl . '&edit_id=' . $r['id']) . '">'
                 . ui_e($LANG['edit']) . '</a>';
             if ($deletable) {

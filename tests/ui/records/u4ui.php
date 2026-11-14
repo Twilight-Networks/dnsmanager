@@ -129,7 +129,7 @@ post('pages/records.php?zone_id=1&add_new=1', array_merge($aPairs, [['preview', 
 $log = logSince($off);
 $ok(snap() === $snap0, 'W01', "$n Vorschauen: Datenbank unverändert (inkl. Zonen-Änderungskennzeichen und Serial)");
 $ok(sessNorm($admin) === $sess0 && toasts($admin) === [], 'W02', 'Sitzung unverändert, keine Toasts');
-$ok(array_filter($log, fn($l) => !str_contains($l, 'event=php_error')) === [] || true, 'W03', 'Log: ' . count($log) . ' Zeilen');
+$ok($log === [], 'W03', 'keine Logzeilen durch die Vorschau (' . count($log) . ')');
 $ok(array_filter($log, fn($l) => str_contains($l, 'php_error')) === [], 'W04', 'keine PHP-Meldungen');
 
 // ---------- Z: Vorschau ↔ Zonendatei bytegenau (alle Matrixfälle, ohne und mit JS) ----------
@@ -181,6 +181,43 @@ foreach ($cases as $id => $case) {
 }
 $ok($zFail === [], 'Z01', sprintf('%d Fall-Varianten: %d gültig (Zeile exakt in der erzeugten Zonendatei), %d ungültig (nichts gespeichert)%s',
     $zStats['ok'] + $zStats['invalid'], $zStats['ok'], $zStats['invalid'], $zFail ? ': ' . implode(' | ', $zFail) : ''));
+
+// ---------- ZN: ungültige Eingaben – Vorschau ungültig ⇔ nichts gespeichert; Grenze der Vorschau (nicht autoritativ) ----------
+$neg = [
+    'A-IP'        => ['add', [['zone_id', '1'], ['type', 'A'], ['ttl', 'auto'], ['name', 'n1'], ['content', '192.0.2.300']]],
+    'MX-Prio'     => ['add', [['zone_id', '1'], ['type', 'MX'], ['ttl', 'auto'], ['name', 'n2'], ['mx_priority', 'x'], ['content', 'mx.other.test'], ['mx_target_mode', 'dot']]],
+    'SRV-Ziel'    => ['add', [['zone_id', '1'], ['type', 'SRV'], ['ttl', 'auto'], ['name', 'n3'], ['srv_protocol', '_tcp'], ['srv_priority', '0'], ['srv_weight', '0'], ['srv_port', '1'], ['srv_target', '.'], ['srv_target_mode', 'dot']]],
+    'DKIM-Key'    => ['add', [['zone_id', '1'], ['type', 'DKIM'], ['ttl', 'auto'], ['dkim_selector', 'n4'], ['dkim_key_type', 'rsa'], ['dkim_key', 'AAAA!BBBB']]],
+    'DKIM-h'      => ['add', [['zone_id', '1'], ['type', 'DKIM'], ['ttl', 'auto'], ['dkim_selector', 'n5'], ['dkim_key_type', 'rsa'], ['dkim_hash_algos', 'sha256; s=*'], ['dkim_key', str_repeat('A', 64)]]],
+    'NAPTR-Felder' => ['add', [['zone_id', '1'], ['type', 'NAPTR'], ['ttl', 'auto'], ['name', 'n6'], ['naptr_order', '1'], ['naptr_pref', '1'], ['naptr_flags', ''], ['naptr_service', 'x'], ['naptr_regexp', 'x'], ['naptr_replacement', '.']]],
+    'Glue-Name'   => ['edit', [['id', '13'], ['zone_id', '1'], ['type', 'A'], ['ttl', 'auto'], ['name', 'ns1neu'], ['content', '192.0.2.11']], 13],
+    'NS-Ziel'     => ['edit', [['id', '1'], ['zone_id', '1'], ['type', 'NS'], ['ttl', 'auto'], ['name', '@'], ['content', 'ns9.other.test.']], 1],
+];
+$nFail = [];
+foreach ($neg as $label => [$mode, $pairs]) {
+    reset4();
+    $c = session('admin');
+    cgi('GET', 'pages/records.php?zone_id=1', '', $c);
+    $pv = json_decode(post('actions/record_preview.php', $pairs, $c)['body'], true);
+    $s0 = snap();
+    post($mode === 'add' ? 'actions/record_add.php' : 'actions/record_update.php', $pairs, $c);
+    $stored = snap()['records'] !== $s0['records'];
+    if (($pv['status'] ?? '') !== 'invalid' || $pv['newLine'] !== null || $stored) {
+        $nFail[] = "$label: " . json_encode([$pv['status'] ?? null, $stored]);
+    }
+}
+$ok($nFail === [], 'Z02', count($neg) . ' ungültige Eingaben (Anlage und geschützte Bearbeitung): Vorschau ungültig ohne DIFF, Speichern ändert nichts' . ($nFail ? ': ' . implode(' | ', $nFail) : ''));
+// Grenze: Duplikat erkennt erst der RecordService beim Speichern (Hinweis in der Vorschau, keine Garantie)
+reset4();
+$c = session('admin');
+cgi('GET', 'pages/records.php?zone_id=1', '', $c);
+$dup = [['zone_id', '1'], ['type', 'A'], ['ttl', '3600'], ['name', 'www'], ['content', '192.0.2.80']];
+$pv = json_decode(post('actions/record_preview.php', $dup, $c)['body'], true);
+$s0 = snap();
+post('actions/record_add.php', $dup, $c);
+$t = toasts($c);
+$ok(($pv['status'] ?? '') === 'ok' && snap()['records'] === $s0['records'] && $t !== [] && str_starts_with($t[0], 'error'), 'Z03',
+    'Duplikat: Vorschau gültig (nicht autoritativ), Speichern abgelehnt: ' . ($t[0] ?? ''));
 
 // ---------- R: Roundtrip aller Records (Vorschau ohne Änderung) ----------
 reset4();
