@@ -74,7 +74,13 @@ Aus der früheren U1-Fassung bleiben unverändert:
 
 **Interaktiv** (eingebauter Browser über SSH-Tunnel): Farbmodus-Umschalter setzt `data-bs-theme`, `aria-pressed` und die Speicherung; „Systemvorgabe“ entfernt sie. Die Logos wechseln korrekt zwischen `_neg` und `_CMYK`, auch in der mobilen Kopfleiste.
 
-Das Öffnen des Offcanvas-Menüs wurde in diesem Durchgang nicht erneut per Klick geprüft (Browseransicht ausgeblendet). Der Mechanismus (`offcanvas-lg`, Menü-Schaltfläche, No-JS-Block) ist unverändert gegenüber der früheren, interaktiv geprüften Fassung; die No-JS-Darstellung belegen die Aufnahmen.
+**Mobiles Offcanvas-Menü** interaktiv geprüft (eingebauter Browser, 375 × 812 px, Head `e53d089`, dunkel, Administrator):
+- Öffnen über „Menü“: Menü fährt ein, Hintergrund wird abgedunkelt.
+- Navigation über „Zonen“: Seitenwechsel Dashboard → `zones.php`, Menü danach geschlossen, „Zonen“ als aktiv markiert.
+- Erneutes Öffnen und Schließen über die Schaltfläche „Schließen“: Menü ausgeblendet, Abdunkelung entfernt, Seite wieder scrollbar, Fokus zurück auf „Menü“.
+- Keine JavaScript-Fehler in der Konsole.
+
+Die No-JS-Darstellung als Block belegen die Aufnahmen.
 
 ## 4. Offene Punkte für die folgenden Pakete
 
