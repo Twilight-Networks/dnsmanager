@@ -189,6 +189,24 @@ function ui_confirm_delete_button(string $label, array $opts = []): string
         . '</span></details>';
 }
 
+/**
+ * Aktionsschaltfläche mit Inline-Bestätigung (U5b), mit und ohne JavaScript gleich: <details> – der erste Klick
+ * öffnet die Rückfrage, erst die Bestätigung sendet das umgebende Formular. Für zustandsändernde Aktionen ohne
+ * Löschcharakter (z. B. Konto deaktivieren, BIND-Reload). Kein Modal; components.js greift nicht ein
+ * (data-dm-confirm-inline). Formular, Felder und Ziel bestimmt der Aufrufer.
+ *
+ * @param array{prompt?: string, confirm?: string, variant?: string, size?: string} $opts variant: warning|primary
+ */
+function ui_confirm_action_button(string $label, array $opts = []): string
+{
+    $size = ($opts['size'] ?? 'sm') === 'sm' ? ' btn-sm' : '';
+    $variant = in_array($opts['variant'] ?? 'warning', ['warning', 'primary', 'secondary'], true) ? ($opts['variant'] ?? 'warning') : 'warning';
+    return '<details class="dm-confirm dm-confirm-action" data-dm-confirm-inline><summary class="btn' . $size . ' btn-outline-' . $variant . '">' . ui_e($label) . '</summary>'
+        . '<span class="dm-confirm-pop" role="group"><span class="dm-confirm-prompt">' . ui_e($opts['prompt'] ?? '') . '</span>'
+        . '<button type="submit" class="btn' . $size . ' btn-' . $variant . ' dm-confirm-submit">' . ui_e($opts['confirm'] ?? $label) . '</button>'
+        . '</span></details>';
+}
+
 /* ---------- Editor-Rahmen (rechtes Offcanvas, serverseitig geöffnet) ---------- */
 
 /**

@@ -53,7 +53,8 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // === Löschbestätigung: mit JavaScript direkt das Bestätigungs-Modal ===
-    document.querySelectorAll('details.dm-confirm > summary').forEach(function (summary) {
+    // Inline-Bestätigungen (ui_confirm_action_button, data-dm-confirm-inline) bleiben unverändert <details> (U5b)
+    document.querySelectorAll('details.dm-confirm:not([data-dm-confirm-inline]) > summary').forEach(function (summary) {
         summary.addEventListener('click', function (e) {
             const form = summary.closest('form');
             if (!form) {
