@@ -89,15 +89,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body class="app-login">
 
 <main class="container app-login-main">
-    <div class="card shadow-sm p-4 text-center app-login-card">
+    <div class="card p-4 text-center app-login-card">
 
-        <!-- Logo -->
+        <!-- Original-Logo je Farbmodus (hell: CMYK, dunkel: Negativ; Dateien unverändert) -->
         <div class="text-center">
-            <img src="<?= rtrim(BASE_URL, '/') ?>/assets/branding/twlnet_logo.png" alt="Twilight-Networks Logo" class="app-logo app-login-logo">
+            <img src="<?= rtrim(BASE_URL, '/') ?>/assets/branding/TWLnet_Logo_CMYK.png" alt="Twilight Networks" class="app-login-logo logo-on-light">
+            <img src="<?= rtrim(BASE_URL, '/') ?>/assets/branding/TWLnet_Logo_neg.png" alt="Twilight Networks" class="app-login-logo logo-on-dark">
         </div>
 
         <!-- Überschrift -->
-        <h1 class="h3 mb-4">DNS-Manager</h1>
+        <h1 class="visually-hidden">DNS Manager</h1>
+        <div class="app-login-product" aria-hidden="true">DNS Manager</div>
 
         <!-- Hinweis: Erfolgreich abgemeldet -->
         <?php if ($logoutSuccess): ?>

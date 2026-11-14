@@ -10,6 +10,7 @@
 
 ?>
 </main> <!-- .content (Hauptinhalt der Seite) -->
+</div> <!-- .app-main -->
 
 <!-- Bestätigungs-Modal für Löschaktionen -->
 <div class="modal fade" id="confirmDeleteModal" tabindex="-1" aria-labelledby="confirmDeleteModalLabel" aria-hidden="true">
