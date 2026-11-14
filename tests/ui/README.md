@@ -104,8 +104,9 @@ generierten Konfiguration der Testkopie** unter `/tmp/dnsmgr-uig`; die installie
   `csp_report.php` der Testkopie (Log `event=csp_violation`).
 - Nur im Modus `serve` zulässig; Golden-Läufe (`record`/`compare`) laufen ohne CSP-Header, damit der Headervertrag
   unverändert bleibt.
-- Beim Beenden werden die CSP-Logzeilen nach `$OUT_DIR/csp-<SHA>-<Zeit>.log` gesichert und gezählt; der
-  Ratenbegrenzungsstatus des Endpunkts (`/tmp/dnsmanager-csp-report-*.json`) wird entfernt.
+- Der Ratenstatus des Endpunkts liegt in `/tmp/dnsmgr-uig/csp-state` (0700, www-data; `CSP_REPORT_STATE_DIR` der
+  Testkopie) und wird mit der Testkopie entfernt; andere Dateien im temporären Verzeichnis bleiben unberührt.
+- Beim Beenden werden die CSP-Logzeilen nach `$OUT_DIR/csp-<SHA>-<Zeit>.log` gesichert und gezählt.
 
 ## Rollenmatrix
 

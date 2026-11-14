@@ -155,4 +155,7 @@ define('PHP_ERR_REPORT', false); // true = Entwicklungsmodus, false = Produktivm
  *  und nimmt Verstoßberichte unter csp_report.php an (Log: event=csp_violation). Ohne Eintrag kein Header.
  * --------------------------------------- */
 // define('CSP_REPORT_ONLY', true);
+// Optional: eigenes Verzeichnis für den Ratenstatus des Endpunkts (absolut; wird mit 0700 angelegt, muss dem
+// Webserver-Benutzer gehören). Ohne Eintrag: privates Unterverzeichnis im temporären Verzeichnis.
+// define('CSP_REPORT_STATE_DIR', '/var/lib/dnsmanager/csp');
 ?>

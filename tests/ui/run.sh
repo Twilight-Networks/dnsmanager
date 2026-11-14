@@ -26,7 +26,6 @@ REPO=${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}
 
 cleanup() {
   [ -f $T/pids ] && kill $(cat $T/pids) 2>/dev/null
-  rm -f /tmp/dnsmanager-csp-report-*.json   # Ratenbegrenzungsstatus des CSP-Report-Endpunkts der Testkopie
   mariadb -e "DROP DATABASE IF EXISTS dnsmgr_uig_tpl; DROP DATABASE IF EXISTS dnsmgr_uig_app; DROP USER IF EXISTS 'uigweb'@'localhost'" 2>/dev/null
   cd /; rm -rf $T
 }
@@ -53,10 +52,13 @@ sed -i -E -e "s/define\('DB_NAME', *'[^']*'\)/define('DB_NAME', 'dnsmgr_uig_app'
 for k in "DB_NAME', 'dnsmgr_uig_app" "DB_USER', 'uigweb" "LOG_TARGET', 'apache" "DEFAULT_LANGUAGE', 'de"; do grep -q "define('$k')" $c || { echo "ABBRUCH: Konfiguration ($k)"; exit 1; }; done
 if [ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ]; then
   # U2: Report-Only ausschließlich in dieser Testkopie (generierte Konfiguration), nie in der installierten Anwendung
-  sed -i "s#^// define('CSP_REPORT_ONLY', true);#define('CSP_REPORT_ONLY', true);#" $c
-  grep -q "^define('CSP_REPORT_ONLY', true);" $c || { echo "ABBRUCH: CSP_REPORT_ONLY in der Testkonfiguration"; exit 1; }
-  rm -f /tmp/dnsmanager-csp-report-*.json
-  echo "CSP Report-Only: aktiv (nur Testkopie $c)"
+  # Ratenstatus des Endpunkts in einem eigenen Verzeichnis der Testkopie (wird mit $T entfernt)
+  install -d -m 700 -o www-data -g www-data $T/csp-state
+  sed -i -e "s#^// define('CSP_REPORT_ONLY', true);#define('CSP_REPORT_ONLY', true);#" \
+         -e "s#^// define('CSP_REPORT_STATE_DIR', '[^']*');#define('CSP_REPORT_STATE_DIR', '$T/csp-state');#" $c
+  grep -q "^define('CSP_REPORT_ONLY', true);" $c && grep -q "^define('CSP_REPORT_STATE_DIR', '$T/csp-state');" $c \
+    || { echo "ABBRUCH: CSP-Einstellungen in der Testkonfiguration"; exit 1; }
+  echo "CSP Report-Only: aktiv (nur Testkopie $c, Ratenstatus $T/csp-state)"
 fi
 f=$T/app/web/inc/deploy/CurlUpdateFeed.php
 sed -i "s#https://www.twilight-networks.com/dnsmanager-update/latest.json#file://$T/feed/latest.json#" $f

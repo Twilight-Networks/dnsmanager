@@ -8,7 +8,8 @@
  * - Ausschließlich POST (sonst 405), Inhaltstyp application/csp-report, application/json oder
  *   application/reports+json (sonst 415), höchstens 8 KiB (sonst 413).
  * - Ratenbegrenzung ohne Session: je Quelladresse und insgesamt je Zeitfenster (sonst 429; die erste
- *   Überschreitung je Fenster wird einmal protokolliert).
+ *   Überschreitung je Fenster wird einmal protokolliert). Status in einem privaten Verzeichnis (0700, kein Symlink,
+ *   eigener Benutzer); ist es unsicher oder der Status nicht persistierbar: 503 (Fail-Closed).
  * - Je gültigem Verstoß eine Logzeile über appLog(): Seite und blockierte Quelle ohne Query/Fragment, Direktive,
  *   Quelldatei/Zeile/Spalte, Disposition. Alle Felder werden als nicht vertrauenswürdig behandelt (Typ, Länge,
  *   zulässige Werte; Steuerzeichen, Anführungszeichen und Backslashes entschärft). Keine Cookies, Tokens,
@@ -75,22 +76,73 @@ if ($declared !== null && $declared !== '' && (!ctype_digit((string)$declared) |
 }
 
 /**
- * Ratenbegrenzung ohne Session: Zähler je Quelladresse (gehasht) und gesamt im festen Zeitfenster, in einer
- * Statusdatei im temporären Verzeichnis (unter Apache mit PrivateTmp dienstbezogen), mit exklusiver Dateisperre.
- * Fehlerfälle (Datei nicht nutzbar) führen zur Ablehnung (Fail-Closed).
+ * Privates Verzeichnis für den Ratenstatus (U2-R1).
  *
- * @return array{allowed: bool, firstExceed: bool}
+ * - CSP_REPORT_STATE_DIR (ui_config.php, absoluter Pfad), sonst <temp>/dnsmanager-csp-<euid>-<hash des Installationspfads>.
+ * - Anlage mit 0700 (umask 0077). Verwendet wird es nur, wenn es ein echtes Verzeichnis ist (kein Symlink),
+ *   dem Prozessbenutzer gehört und weder für Gruppe noch für andere Rechte hat. Sonst null (Fail-Closed).
+ */
+function csp_report_state_dir(): ?string
+{
+    $euid = function_exists('posix_geteuid') ? posix_geteuid() : null;
+    $dir = defined('CSP_REPORT_STATE_DIR') && is_string(CSP_REPORT_STATE_DIR) && CSP_REPORT_STATE_DIR !== ''
+        ? rtrim(CSP_REPORT_STATE_DIR, '/')
+        : rtrim(sys_get_temp_dir(), '/') . '/dnsmanager-csp-' . ($euid ?? 'x') . '-' . substr(hash('sha256', __DIR__), 0, 16);
+    if (!str_starts_with($dir, '/')) {
+        return null;
+    }
+    $umask = umask(0077);
+    if (!is_link($dir) && !file_exists($dir)) {
+        @mkdir($dir, 0700);
+    }
+    umask($umask);
+    clearstatcache();
+    $st = @lstat($dir);
+    if ($st === false || ($st['mode'] & 0170000) !== 0040000 || ($st['mode'] & 0077) !== 0
+        || ($euid !== null && $st['uid'] !== $euid)) {
+        return null;
+    }
+    return $dir;
+}
+
+/**
+ * Ratenbegrenzung ohne Session: Zähler je Quelladresse (gehasht) und gesamt im festen Zeitfenster, in der Datei
+ * rate.json des privaten Statusverzeichnisses, mit exklusiver Dateisperre.
+ * Fail-Closed (error = true): Verzeichnis oder Datei unsicher (Symlink, fremder Eigentümer, Rechte für Gruppe/andere,
+ * keine reguläre Datei, mehrere Hardlinks) oder Lesen/Sperren/Schreiben/Persistieren fehlgeschlagen.
+ *
+ * @return array{allowed: bool, firstExceed: bool, error: bool}
  */
 function csp_report_rate_check(string $ip): array
 {
-    $file = sys_get_temp_dir() . '/dnsmanager-csp-report-' . substr(hash('sha256', __DIR__), 0, 16) . '.json';
+    $fail = ['allowed' => false, 'firstExceed' => false, 'error' => true];
+    $dir = csp_report_state_dir();
+    if ($dir === null) {
+        return $fail;
+    }
+    $file = $dir . '/rate.json';
+    if (is_link($file)) {
+        return $fail;
+    }
+    $umask = umask(0077);
     $fh = @fopen($file, 'c+');
+    umask($umask);
     if ($fh === false) {
-        return ['allowed' => false, 'firstExceed' => false];
+        return $fail;
     }
     try {
+        // Geöffnete Datei = geprüfte Datei (gleiches Inode), regulär, privat, ein Link, eigener Benutzer
+        clearstatcache();
+        $fs = fstat($fh);
+        $ls = @lstat($file);
+        $euid = function_exists('posix_geteuid') ? posix_geteuid() : null;
+        if ($fs === false || $ls === false || $fs['ino'] !== $ls['ino'] || $fs['dev'] !== $ls['dev']
+            || ($fs['mode'] & 0170000) !== 0100000 || ($fs['mode'] & 0077) !== 0 || $fs['nlink'] !== 1
+            || ($euid !== null && $fs['uid'] !== $euid)) {
+            return $fail;
+        }
         if (!flock($fh, LOCK_EX)) {
-            return ['allowed' => false, 'firstExceed' => false];
+            return $fail;
         }
         $raw = stream_get_contents($fh, 262144);
         $state = is_string($raw) ? json_decode($raw, true) : null;
@@ -110,18 +162,23 @@ function csp_report_rate_check(string $ip): array
             $state['exceeded'] = true;
             $firstExceed = true;
         }
-        ftruncate($fh, 0);
-        rewind($fh);
-        fwrite($fh, json_encode($state));
-        fflush($fh);
+        $json = json_encode($state);
+        $written = $json !== false && ftruncate($fh, 0) && rewind($fh)
+            && fwrite($fh, $json) === strlen($json) && fflush($fh);
         flock($fh, LOCK_UN);
-        return ['allowed' => $allowed, 'firstExceed' => $firstExceed];
+        if (!$written) {
+            return $fail; // Status nicht persistiert: ablehnen
+        }
+        return ['allowed' => $allowed, 'firstExceed' => $firstExceed, 'error' => false];
     } finally {
         fclose($fh);
     }
 }
 
 $rate = csp_report_rate_check((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+if ($rate['error']) {
+    csp_report_finish(503); // Ratenstatus nicht sicher nutzbar (Fail-Closed)
+}
 if (!$rate['allowed']) {
     if ($rate['firstExceed']) {
         appLog('warning', 'event=csp_report_rate_limited window_seconds=' . CSP_REPORT_WINDOW_SECONDS);
