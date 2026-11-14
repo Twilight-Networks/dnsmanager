@@ -73,7 +73,7 @@ Read-Services, Berechtigungen, Schutzregeln, Löschen, `bulk_ids` oder Publish.
 - U0-B2: Diagnose ohne Meldungstext erzeugt keine Deprecation mehr.
 - U2-B2: Das nicht initialisierte Popover ist durch einen sichtbaren Hilfetext ersetzt.
 - U2-B4: Die Debug-Ausgaben sind mit den alten Skripten entfernt.
-- U2-B3 bleibt offen, siehe Abschnitt 5.
+- U2-B3: Mit der Review-Korrektur U4U-R2 behoben (ausdrücklich freigegeben), siehe Abschnitt 6.
 
 ## 3. Bewusste Abweichungen
 
@@ -106,13 +106,13 @@ Alle Record-Actions (`record/*`) sind im Golden unverändert. Identisch bleiben 
 
 **Umgebung:** ns1, PHP 8.5.4, MariaDB 11.8.6, BIND 9.20.24. Isolierte Testkopie über `tests/ui` (eigene Datenbanken, eigener DB-Benutzer); installierte Anwendung unberührt.
 
-**Getesteter Anwendungsstand:** `1937ffd493fff1b44e8ab8c8ef1478555e50f0df` · Tree `3e4a717e0fac8c4047b8a421ae3f2dc0af40bfa3`; Harness identisch.
+**Getesteter Anwendungsstand:** `1c8a678c835c9ac6870fee6ffd01d9da9820d32e` · Tree `cafd893f61e20ed34e74cc4981895b6a55944b50` (nach U4U-R1/R2); Harness identisch. Die Zahlen unten stammen aus dem Lauf auf diesem Stand; die Browser-, CSP- und Screenshot-Nachweise vor R1/R2 von `c511349`.
 
 | Prüfung | Ergebnis |
 |---|---|
 | **Typ-Matrix** (58 Fälle × mit/ohne JS, neue Formulare und `record_editor.js`) gegen `main` `8447e35` | **104 identisch, 12 dokumentiert (U4U-A1 bis A3), 0 undokumentiert** |
 | **Golden** gegen U0-Basis mit `exceptions-u4ui.json` | **Exit 0**: 72 identisch, 29 informativ, 17 freigegeben, **0 Vertragsabweichungen**; alle Record-Actions unverändert |
-| **U4-UI** (`u4ui.php`) | **34/34**, siehe Aufschlüsselung unten |
+| **U4-UI** (`u4ui.php`) | **42/42**, siehe Aufschlüsselung unten und Abschnitt 6 (D01–D08) |
 | Builder/Parser/BIND | 73/73 (unverändert seit U4-Core) |
 | DynDNS-Kennzeichen | 17/17 unter REPEATABLE READ, 17/17 unter READ COMMITTED |
 | Statisch S01–S05 | 5/5 (131 PHP-Dateien; keine Inline-Handler, Styles oder Skripte; Sprachschlüssel vollständig) |
@@ -173,8 +173,40 @@ Alle Record-Actions (`record/*`) sind im Golden unverändert. Identisch bleiben 
 
 ## 5. Restrisiken und offene Punkte
 
-- **U2-B3 (offen, außerhalb des UI-Bereichs):** `parseDKIMFile()` in `inc/dkim_helpers.php` verwendet `$domain` ohne Definition. Das ergibt eine PHP-Warnung bei jedem DKIM-Upload; jetzt auch bei einer Vorschau mit ausgewählter Datei. Die Behebung (eine Zeile) braucht eine gesonderte Freigabe; in U4-UI ist nur E3 außerhalb des UI-Bereichs freigegeben.
-- **DynDNS „mehrdeutig“:** Für A/AAAA-Records an reservierten, aber nicht eindeutig zugeordneten Namen lehnt der RecordService jede Änderung ab. Ohne zusätzliche Core-Information kann die Oberfläche das nicht vorab erkennen: Diese Records zeigen „Bearbeiten“/„Löschen“, das Speichern wird mit der bisherigen Meldung abgelehnt.
+- **DynDNS „mehrdeutig“ (für die Produktivabnahme offen):** Im Review als vorbestehende Einschränkung akzeptiert; eine Erweiterung der DynDNS-Core-Architektur ist nicht Teil dieses PR (ggf. separater Read-PR). Für A/AAAA-Records an reservierten, aber nicht eindeutig zugeordneten Namen lehnt der RecordService jede Änderung ab. Ohne zusätzliche Core-Information kann die Oberfläche das nicht vorab erkennen: Diese Records zeigen „Bearbeiten“/„Löschen“, das Speichern wird mit der bisherigen Meldung abgelehnt.
 - **Vorschau nicht autoritativ:** Duplikate, DynDNS-Reservierungen beim Anlegen und `named-checkzone` prüft weiterhin erst der RecordService. Das ist im Editor ausdrücklich vermerkt; Z03 belegt es am Duplikat.
 - **Bearbeitung ohne Zielmodus:** wie bisher; relative Ziele werden mit „.“ ergänzt, absolute bleiben.
 - **JS-Erfassung:** `js_posts_u4ui.json` stammt von `5685f9a`. Formulare und Skript sind bis zum endgültigen Stand unverändert (danach nur CSS-Klassen der Tabelle, ein Kommentar und Tests).
+
+## 6. Review-Korrekturen U4U-R1 und U4U-R2
+
+**U4U-R1 – Veraltete Vorschau während der Entprellung (`record_editor.js`):**
+- Bisher wurde eine laufende Vorschau erst beim Start der nächsten Anfrage ungültig. Eine alte Antwort, die nach einer neuen Eingabe, aber vor Ablauf der Entprellung eintraf, aktualisierte den DIFF und beendete den Pending-Status.
+- Jetzt erhöht bereits jedes Eingabeereignis die Folgenummer und bricht eine laufende Anfrage ab. Die Anfrage nach der Entprellung verwendet diese Nummer. Ältere Antworten werden verworfen und verändern weder DIFF noch Pending-Status.
+- **Test `tests/ui/records/preview_race.js`** (wiederholbar im Serve-Modus unter `/__ui/`, `fetch` verzögert, Abbruch ignoriert):
+  - T1 Entprellung: vier schnelle Eingaben → eine Anfrage, letzte Eingabe angezeigt.
+  - **T2 (neu):** Die alte Antwort trifft nach der neuen Eingabe und vor der neuen Anfrage ein (z. B. `req1@1711 res1@1782 req2@2050`). Der DIFF bleibt unverändert, `aria-busy` bleibt `true`; danach zeigt der DIFF die neue Eingabe.
+  - T3 vertauschte Antwortreihenfolge (`res3,res2,res1`) → neueste Eingabe angezeigt (bisheriger Test, erhalten).
+- **Ergebnis:** Auf `1c8a678` bestehen T1, T2 und T3 in 4 von 4 Läufen.
+- **Gegenprobe** mit dem bisherigen Head `9c2b669`: **T2 schlägt fehl**. Die alte Antwort überschrieb den DIFF, `aria-busy` wurde `false`; T1 und T3 bestehen dort. Der Test erkennt den Befund also.
+- CSP Report-Only während der Läufe: 0 Verstöße, keine PHP-Meldungen.
+
+**U4U-R2 – PHP-Warnung beim DKIM-Upload (U2-B3, `inc/dkim_helpers.php`, ausdrücklich freigegeben):**
+- **Ursache:** `parseDKIMFile()` gab `'domain' => $domain` zurück, ohne `$domain` zu bestimmen. Eine OpenDKIM-Datei (`selector._domainkey IN TXT ( … )`) enthält keine Domain; der Wert war daher immer `null`, begleitet von einer PHP-Warnung.
+- **Korrektur:** `$domain = null;` vor der Rückgabe, mit Kommentar. Rückgabevertrag unverändert (Schlüssel `selector`, `domain` = null, `key`, optionale Parameter). Keine weiteren Änderungen an den DKIM-Hilfsfunktionen.
+- **Nachweis mit echter Datei** (`opendkim-genkey -s u4dkim -d u0.test -b 2048`, privater Schlüssel sofort gelöscht; `opendkim-tools` dafür auf der Test-VM ns1 installiert, kein Dienst):
+
+| ID | Ergebnis |
+|---|---|
+| D01 | Echte DKIM-Datei erzeugt (RSA 2048, 501 Bytes) |
+| D02 | Vorschau mit Datei-Upload gültig (`u4dkim._domainkey 3600 IN TXT "v=DKIM1; k=rsa;" "p=MII…"`), keine Schreibzugriffe |
+| D03 | Vorschau ohne PHP-Warnung |
+| D04 | Speichern mit Datei-Upload legt den Record an (Erfolgs-Toast) |
+| D05 | Vorschau = gespeicherter Record = Zeile der erzeugten Zonendatei (bytegenau) |
+| D06 | Speichern ohne PHP-Warnung |
+| D07 | 5 ungültige Uploads (zu groß, `.pem`, ohne Endung, PHP-Code, nicht lesbar): Vorschau ungültig mit der bisherigen Meldung, Speichern abgelehnt (bisheriger Toast), nichts gespeichert |
+| D08 | `parseDKIMFile()` Basis `8447e35` ↔ neu: identische Rückgabe; die Warnung „Undefined variable $domain“ entsteht nur in der Basis |
+
+**Harness:**
+- `cgi()` lässt zusätzliche Umgebungswerte die Vorgaben überschreiben (`CONTENT_TYPE` für Multipart-Uploads); bisher nutzte kein Aufrufer diesen Parameter.
+- `run.sh serve` stellt `preview_race.js` unter `/__ui/` bereit.
