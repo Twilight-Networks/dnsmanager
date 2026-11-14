@@ -39,8 +39,11 @@ const DmDiff = (function () {
         return String(template || '%d').replace('%d', String(n));
     }
 
-    /** Unveränderten Abschnitt anhängen, bei Überlänge eingeklappt (Anfang … Ende) mit Umschalter */
-    function appendPlain(parent, text, texts, fold, position) {
+    /**
+     * Unveränderten Abschnitt anhängen; bei Überlänge eingeklappt (Anfang … Ende). Eingeklappte Teile werden in
+     * folds gesammelt und von einem gemeinsamen Umschalter je Zeile geöffnet (siehe line()).
+     */
+    function appendPlain(parent, text, texts, fold, position, folds) {
         const c = chars(text);
         if (!fold || c.length < FOLD_MIN) {
             parent.appendChild(document.createTextNode(text));
@@ -49,31 +52,41 @@ const DmDiff = (function () {
         // Am Zeilenanfang nur das Ende zeigen, am Zeilenende nur den Anfang, dazwischen beide Ränder
         const head = position === 'start' ? '' : c.slice(0, KEEP).join('');
         const tail = position === 'end' ? '' : c.slice(c.length - KEEP).join('');
-        const hidden = c.length - head.length - tail.length;
+        const hidden = c.length - Array.from(head).length - Array.from(tail).length;
         const shortSpan = document.createElement('span');
         shortSpan.appendChild(document.createTextNode(head));
-        const fold_ = document.createElement('span');
-        fold_.className = 'dm-diff-fold';
-        fold_.textContent = '… ' + format(texts.chars, hidden) + ' …';
-        shortSpan.appendChild(fold_);
+        const marker = document.createElement('span');
+        marker.className = 'dm-diff-fold';
+        marker.textContent = '… ' + format(texts.chars, hidden) + ' …';
+        shortSpan.appendChild(marker);
         shortSpan.appendChild(document.createTextNode(tail));
         const fullSpan = document.createElement('span');
         fullSpan.textContent = text;
         fullSpan.hidden = true;
+        parent.appendChild(shortSpan);
+        parent.appendChild(fullSpan);
+        folds.push({short: shortSpan, full: fullSpan});
+    }
+
+    /** Ein Umschalter je Zeile für alle eingeklappten Teile */
+    function appendToggle(parent, folds, texts) {
+        if (folds.length === 0) {
+            return;
+        }
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'dm-diff-toggle';
         btn.textContent = texts.showFull || '…';
         btn.setAttribute('aria-expanded', 'false');
         btn.addEventListener('click', function () {
-            const expand = fullSpan.hidden;
-            fullSpan.hidden = !expand;
-            shortSpan.hidden = expand;
+            const expand = btn.getAttribute('aria-expanded') !== 'true';
+            folds.forEach(function (f) {
+                f.full.hidden = !expand;
+                f.short.hidden = expand;
+            });
             btn.textContent = expand ? (texts.showLess || texts.showFull || '…') : (texts.showFull || '…');
             btn.setAttribute('aria-expanded', expand ? 'true' : 'false');
         });
-        parent.appendChild(shortSpan);
-        parent.appendChild(fullSpan);
         parent.appendChild(btn);
     }
 
@@ -90,16 +103,18 @@ const DmDiff = (function () {
         const before = c.slice(0, from).join('');
         const changed = c.slice(from, to).join('');
         const after = c.slice(to).join('');
+        const folds = [];
         if (to > from) {
-            appendPlain(body, before, texts, fold, 'start');
+            appendPlain(body, before, texts, fold, 'start', folds);
             const m = document.createElement('mark');
             m.className = 'dm-diff-chg';
             m.textContent = changed;
             body.appendChild(m);
-            appendPlain(body, after, texts, fold, 'end');
+            appendPlain(body, after, texts, fold, 'end', folds);
         } else {
-            appendPlain(body, text, texts, fold, 'middle');
+            appendPlain(body, text, texts, fold, 'middle', folds);
         }
+        appendToggle(body, folds, texts);
         const len = document.createElement('span');
         len.className = 'dm-diff-len';
         len.textContent = format(texts.chars, c.length);

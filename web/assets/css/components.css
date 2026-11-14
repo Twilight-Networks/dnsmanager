@@ -103,6 +103,7 @@ html.no-js .dm-col-select, html.no-js .dm-select-all, html.no-js .dm-select-row 
     padding: 10px 12px; border-radius: 8px; border: 1px solid var(--dm-err-line); background: var(--dm-card); box-shadow: var(--dm-shadow); }
 .dm-confirm-prompt { color: var(--dm-text); font-size: 13px; }
 .dm-confirm[open] > summary { background: var(--dm-err-soft); }
+.dm-confirm:not([open]) > .dm-confirm-pop { display: none; }   /* geschlossen sicher verborgen, auch mit display:flex */
 /* Im Editor-Fuß nach oben öffnen (unten ist der Bildschirmrand) */
 .dm-editor-foot .dm-confirm-pop { top: auto; bottom: calc(100% + 6px); right: auto; left: 0; }
 
