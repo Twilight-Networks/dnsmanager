@@ -1,11 +1,15 @@
 <?php
 /**
  * Datei: zones.php
- * Zweck: Übersicht aller DNS-Zonen im System.
+ * Zweck: Zonenliste und Zoneneinstellungen im A+-Design (U5a).
  * Details:
- * - Admins sehen alle Zonen, können Zonen anlegen und löschen.
- * - Zone-Admins sehen nur ihre eigenen Zonen und können diese bearbeiten.
- * Zusätzliche Funktion: Validierung der Zonendateien via named-checkzone.
+ * - Eine gemeinsame Tabelle mit Gruppen Forward/Reverse: Status (ZoneReadService::zoneDisplayStatus), ausstehende
+ *   Veröffentlichung, recordCount, TTL, Serverzuweisung, Beschreibung und die bisherigen Aktionen.
+ * - Admins sehen alle Zonen, legen an und löschen; Zone-Admins sehen ihre Zonen und bearbeiten deren Einstellungen
+ *   (ohne Serverzuweisung). Vollständige Liste über die bestehende Pagination.
+ * - Rechter Editor (edit_id bzw. add_new, D2) mit templates/zone_editor_form.php. Ohne JavaScript übernimmt
+ *   „Typ übernehmen“ bei der Anlage den Zonentyp per POST auf diese Seite (CSRF-geprüft, keine Schreiboperation).
+ * - Zonenprüfung (named-checkzone-Ergebnisse) als Hinweis mit aufklappbaren Details.
  */
 
 define('IN_APP', true);
@@ -14,47 +18,21 @@ require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
+require_once __DIR__ . '/../inc/web/zone_view.php';
 include __DIR__ . '/../templates/layout.php';
 
-// Edit-ID aus GET-Parametern lesen (für Bearbeitungsmodus)
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
+$isAdmin = $_SESSION['role'] === 'admin';
+$showAdd = $isAdmin && isset($_GET['add_new']) && $_GET['add_new'] == '1';
 
-// Alle Fachdaten dieser Seite stammen aus dem ZoneReadService (Sichtbarkeit über ZoneAccess:
-// admin alle Zonen, zoneadmin zugewiesene Zonen). Die Übersetzung des normalisierten Ergebnisses in die
-// bisherigen Template-Felder erfolgt ausschließlich hier im Web-Layer.
+// Alle Fachdaten über den ZoneReadService (Sichtbarkeit über ZoneAccess: admin alle, zoneadmin zugewiesene Zonen)
 $actor = actorFromSession();
 $zoneReadService = new ZoneReadService($pdo, new ZoneAccess($pdo));
+$view = zoneViewAll($zoneReadService, $actor);
+$zones = $view['zones'];
+$overview = $view['overview'];
 
-// Zonen inkl. Serverzuweisungen laden – vollständige Liste über alle Seiten
-$zones = [];
-$offset = 0;
-do {
-    $page = $zoneReadService->listZones($actor, ZoneReadService::MAX_LIMIT, $offset);
-    foreach ($page['zones'] as $z) {
-        $zone_servers = [];
-        foreach ($z['servers'] as $srv) {
-            $zone_servers[] = [
-                'name'      => $srv['active'] ? $srv['name'] : $srv['name'] . ' (' . $LANG['inactive'] . ')',
-                'is_master' => $srv['role'] === 'master',
-            ];
-        }
-        $zones[] = [
-            'id'            => $z['id'],
-            'name'          => $z['name'],
-            'type'          => $z['type'],
-            'ttl'           => $z['ttl'],
-            'prefix_length' => $z['prefixLength'],
-            'description'   => $z['description'],
-            'changed'       => $z['pendingPublish'] ? 1 : 0,
-            'servers'       => $zone_servers,
-        ];
-    }
-    $offset += ZoneReadService::MAX_LIMIT;
-} while ($page['hasMore']);
-
-// Bearbeitungsformular: nur für eine in der Liste sichtbare Zone. Zone, Serverzuweisung und wählbare
-// Server über den ZoneReadService (getZone prüft die Berechtigung erneut in derselben Abfrage; ist die
-// Zuweisung inzwischen entzogen, wird kein Formular ausgegeben – E26).
+// Bearbeitung: nur für eine in der Liste sichtbare Zone; getZone prüft die Berechtigung erneut (E26)
 $zone_edit = null;
 $zone_edit_servers = [];
 $zone_edit_assigned = [];
@@ -86,245 +64,116 @@ if ($edit_id !== null && in_array($edit_id, array_column($zones, 'id'), true)) {
     }
 }
 
-// Anlageformular (nur admin): aktive Server zur Zuweisung
+// Anlage (nur admin): aktive Server; No-JS-Typübernahme per POST (nur Darstellung, keine Schreiboperation)
 $zone_add_servers = [];
-if ($_SESSION['role'] === 'admin' && isset($_GET['add_new']) && $_GET['add_new'] == '1') {
+$zoneValues = [];
+if ($showAdd) {
     foreach ($zoneReadService->listAssignableServers($actor, true) as $srv) {
         $zone_add_servers[] = ['id' => $srv['id'], 'name' => $srv['name'], 'dns_ip4' => $srv['dnsIp4'], 'dns_ip6' => $srv['dnsIp6']];
     }
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['apply_type'] ?? '') === '1') {
+        verify_csrf_token();
+        foreach (['zone_prefix', 'type', 'prefix_length', 'ttl', 'soa_domain', 'soa_mail', 'soa_refresh', 'soa_retry', 'soa_expire',
+                  'soa_minimum', 'allow_dyndns', 'master_server_id', 'description'] as $k) {
+            if (isset($_POST[$k]) && is_string($_POST[$k])) {
+                $zoneValues[$k] = $_POST[$k];
+            }
+        }
+        $zoneValues['server_ids'] = array_values(array_filter((array)($_POST['server_ids'] ?? []), 'is_string'));
+    } elseif (isset($_GET['type']) && is_string($_GET['type'])) {
+        $zoneValues['type'] = $_GET['type'];
+    }
 }
 
-// Zonendiagnosen und ihre Auswertung über den ZoneReadService (Berechtigung in derselben Abfrage, ZoneAccess,
-// S25; Statusregeln seit Paket 6 im Core: getZoneStatusOverview, zoneDisplayStatus). Hier nur Übersetzung in
-// die bisherige Darstellung.
-$zone_status_overview = $zoneReadService->getZoneStatusOverview($actor);
+$addButton = $isAdmin ? '<a href="pages/zones.php?add_new=1" class="btn btn-success">+ ' . ui_e($LANG['add_zone']) . '</a>' : '';
+echo ui_page_header($LANG['dns_zones'], ['subtitle' => sprintf($LANG['zones_count'], count($zones)), 'actionsHtml' => $addButton]);
 
-// Statusinformationen den geladenen Zonen zuweisen
-// changed: 0 = sauber, 1 = wartet auf Publish, 2 = von Publish übernommen bzw. nicht sicher abgeschlossen
-foreach ($zones as &$zone) {
-    $zone['status'] = ZoneReadService::zoneDisplayStatus(
-        $zone_status_overview['zones'][$zone['id']]['status'] ?? null,
-        (int)$zone['changed'] !== 0
-    );
-}
-unset($zone); // Referenz aufheben
-
-// Zonen nach Typ aufteilen
-$forward_zones = array_filter($zones, fn($z) => $z['type'] === 'forward');
-$reverse_zones = array_filter($zones, fn($z) => $z['type'] === 'reverse');
-?>
-
-<br>
-<br>
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h2><?= $LANG['dns_zones'] ?></h2>
-    <?php if ($_SESSION['role'] === 'admin'): ?>
-        <a href="pages/zones.php?add_new=1" class="btn btn-success">+ <?= $LANG['add_zone'] ?></a>
-    <?php endif; ?>
-</div>
-
-<?php if ($_SESSION['role'] === 'admin' && isset($_GET['add_new']) && $_GET['add_new'] == '1'): ?>
-    <?php include __DIR__ . '/../templates/zone_add_form.php'; ?>
-<?php endif; ?>
-
-
-<?php
-// Zonenstatus-Übersicht
-$zone_diagnostics_output = [];
-
-// Gesamtbewertung und Problemeinträge aus dem Core (getZoneStatusOverview); hier nur Darstellung
-$has_zone_errors = $zone_status_overview['hasErrors'];
-$has_zone_warnings = $zone_status_overview['hasWarnings'];
-
-// Detaillierte Ausgabe nur bei Problemen
-foreach ($zone_status_overview['problems'] as $problem) {
-    $zone = htmlspecialchars($problem['zoneName'] ?? '(unbekannt)');
-    $server = htmlspecialchars($problem['serverName'] ?? '(unbekannt)');
-    $message = htmlspecialchars($problem['message'] ?? '');
-    $zone_diagnostics_output[] = "<strong>{$zone} @ {$server}</strong><br><pre class='mb-2'>{$message}</pre>";
+// Zonenprüfung: Gesamtbewertung und Problemeinträge aus dem Core (getZoneStatusOverview), hier nur Darstellung
+if ($overview['hasErrors'] || $overview['hasWarnings']) {
+    $variant = $overview['hasErrors'] ? 'err' : 'warn';
+    echo '<details class="dm-card dm-diagnostics dm-diagnostics-' . $variant . '"><summary class="dm-card-head">'
+        . ui_icon($overview['hasErrors'] ? 'x-circle' : 'exclamation-triangle') . '<h2 class="dm-card-title">'
+        . ui_e($overview['hasErrors'] ? $LANG['zone_errors'] : $LANG['zone_warnings']) . '</h2>'
+        . '<span class="dm-diagnostics-more">' . ui_e($LANG['zone_diagnostics_details']) . '</span></summary><div class="dm-card-body">';
+    foreach ($overview['problems'] as $problem) {
+        echo '<div class="dm-diagnostic"><strong class="dm-mono">' . ui_e((string)($problem['zoneName'] ?? '(unbekannt)')) . ' @ '
+            . ui_e((string)($problem['serverName'] ?? '(unbekannt)')) . '</strong><pre class="app-pre-wrap">' . ui_e((string)($problem['message'] ?? '')) . '</pre></div>';
+    }
+    echo '</div></details>';
+} else {
+    echo ui_notice('ok', $LANG['zone_ok']);
 }
 
-// Zusammenfassung für Statusanzeige oben
-$overall_zone_class = $has_zone_errors ? 'danger' : ($has_zone_warnings ? 'warning' : 'success');
-$overall_zone_message = $has_zone_errors
-    ? '❌ ' . $LANG['zone_errors']
-    : ($has_zone_warnings ? '⚠️ ' . $LANG['zone_warnings'] : '✅ ' . $LANG['zone_ok']);
-?>
+echo ui_card_open($LANG['zones'], ['flush' => true, 'actionsHtml' => ui_chip((string)count($zones))]);
+if ($zones === []) {
+    echo ui_empty_state($LANG['zones_empty'], ['icon' => 'globe2', 'actionHtml' => $addButton]);
+} else {
+    echo '<div class="table-responsive"><table class="dm-table dm-zones-table"><thead><tr>'
+        . '<th>' . ui_e($LANG['name']) . '</th><th>' . ui_e($LANG['zone_col_status']) . '</th>'
+        . '<th class="dm-col-num">' . ui_e($LANG['records']) . '</th><th class="dm-col-num">TTL</th>'
+        . '<th>' . ui_e($LANG['dns_servers']) . '</th><th>' . ui_e($LANG['description']) . '</th>'
+        . '<th class="dm-col-actions">' . ui_e($LANG['actions']) . '</th></tr></thead><tbody>';
+    foreach (['forward' => 'Forward Lookup ' . $LANG['zones'], 'reverse' => 'Reverse Lookup ' . $LANG['zones']] as $type => $title) {
+        $group = array_values(array_filter($zones, fn ($z) => $z['type'] === $type));
+        if ($group === []) {
+            continue;
+        }
+        echo '<tr class="dm-group-row"><td colspan="7">' . ui_e($title) . ' <span class="dm-group-count">' . count($group) . '</span></td></tr>';
+        foreach ($group as $z) {
+            $isCurrent = $edit_id === $z['id'] && $zone_edit !== null;
+            echo '<tr' . ($isCurrent ? ' class="dm-current"' : '') . '>';
+            echo '<td class="dm-mono dm-col-name"><a href="pages/records.php?zone_id=' . $z['id'] . '">' . ui_e($z['name']) . '</a>'
+                . ($type === 'reverse' && $z['prefixLength'] !== null ? ' <span class="dm-muted">/' . (int)$z['prefixLength'] . '</span>' : '') . '</td>';
+            echo '<td class="dm-col-status">' . zoneViewStatusHtml($z) . '</td>';
+            echo '<td class="dm-col-num">' . (int)$z['recordCount'] . '</td>';
+            echo '<td class="dm-col-num">' . ($z['ttl'] === null ? '' : (int)$z['ttl']) . '</td>';
+            echo '<td class="dm-col-servers">' . zoneViewServersHtml($z) . '</td>';
+            echo '<td class="dm-col-desc" title="' . ui_e((string)($z['description'] ?? '')) . '"><span class="dm-truncate">' . ui_e((string)($z['description'] ?? '')) . '</span></td>';
+            echo '<td class="dm-col-actions"><a class="btn btn-sm btn-outline-secondary" href="pages/records.php?zone_id=' . $z['id'] . '">' . ui_e($LANG['records']) . '</a> '
+                . '<a class="btn btn-sm btn-outline-secondary" href="pages/zones.php?edit_id=' . $z['id'] . '">' . ui_e($LANG['edit']) . '</a>';
+            if ($isAdmin) {
+                echo ' <form method="post" action="actions/zone_delete.php" class="d-inline confirm-delete">' . csrf_input()
+                    . '<input type="hidden" name="id" value="' . $z['id'] . '">'
+                    . ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']])
+                    . '</form>';
+            }
+            echo '</td></tr>';
+        }
+    }
+    echo '</tbody></table></div>';
+}
+echo ui_card_close();
 
-<!-- Visualisierung: Zonenstatus-Box mit optional ausklappbaren Details -->
-<div class="card mb-4<?= $overall_zone_class !== 'success' ? ' app-clickable' : '' ?>"<?= $overall_zone_class !== 'success' ? ' data-zone-diagnostics-toggle' : '' ?>>
-    <div class="card-body">
-        <h5><?= $LANG['zone_status'] ?></h5>
-        <div class="alert alert-<?= $overall_zone_class ?> mb-0">
-            <?= $overall_zone_message ?>
-        </div>
-        <div id="zoneDiagnosticsBlock"<?= $overall_zone_class !== 'success' ? '' : ' hidden' ?> class="mt-3 small app-hidden">
-            <?php foreach ($zone_diagnostics_output as $block): ?>
-                <div class="alert alert-<?= $overall_zone_class ?>"><?= $block ?></div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-</div>
-<br>
+// Rechter Editor (serverseitig geöffnet, D2)
+if ($showAdd || $zone_edit !== null) {
+    $zoneEditorMode = $showAdd ? 'create' : 'update';
+    $zoneFormId = $showAdd ? 'zoneAddForm' : 'editForm_' . $zone_edit['id'];
+    echo ui_editor_open($showAdd ? $LANG['add_new_zone'] : $LANG['zone_editor_title_edit'], 'pages/zones.php', [
+        'chip' => $showAdd ? '' : ($zone_edit['type'] === 'reverse' ? 'Reverse' : 'Forward'),
+        'subtitle' => $showAdd ? '' : rtrim((string)$zone_edit['name'], '.'),
+        'closeLabel' => $LANG['close'],
+    ]);
+    ob_start();
+    include __DIR__ . '/../templates/zone_editor_form.php';
+    echo (string)ob_get_clean();
+    echo '<div class="dm-editor-note">' . ui_icon('info-circle') . '<span>' . ui_e($LANG['saved_not_published']) . '</span></div>';
 
-<!-- Forward Lookup Zonen -->
-<h4>Forward Lookup <?= $LANG['zones'] ?></h4>
-<div class="table-responsive">
-    <table class="table table-bordered align-middle">
-        <thead class="table-light">
-            <tr>
-                <th><?= $LANG['name'] ?></th>
-                <th class="coltbl-ttl">TTL</th>
-                <th class="coltbl-desc"><?= $LANG['description'] ?></th>
-                <th class="coltbl-dnssrv"><?= $LANG['dns_servers'] ?></th>
-                <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach ($forward_zones as $zone): ?>
-                <!-- Anzeigezeile -->
-                <tr class="<?= ($edit_id === (int)$zone['id']) ? 'table-warning' : '' ?>">
-                    <td>
-                        <?php if ($zone['status'] === 'error'): ?>
-                            <span title="<?= $LANG['zone_icon_error'] ?>">❌</span>
-                        <?php elseif ($zone['status'] === 'warning'): ?>
-                            <span title="<?= $LANG['zone_icon_warning'] ?>">⚠️</span>
-                        <?php elseif ($zone['status'] === 'changed'): ?>
-                            <span title="<?= $LANG['zone_icon_changed'] ?>">⏳</span>
-                        <?php elseif ($zone['status'] === 'ok'): ?>
-                            <span title="<?= $LANG['zone_icon_ok'] ?>">✅</span>
-                        <?php endif; ?>
-                        <?= htmlspecialchars($zone['name']) ?>
-                    </td>
-                    <td><?= $zone['ttl'] ?></td>
-                    <td><?= htmlspecialchars($zone['description'] ?? '') ?></td>
-                    <td>
-                        <?php foreach ($zone['servers'] as $srv): ?>
-                            <?php
-                            $is_inactive = stripos($srv['name'], ' (' . $LANG['inactive'] . ')') !== false;
-                            $badge_class = $srv['is_master'] ? 'bg-primary' : 'bg-secondary';
-                            $badge_inactive_class = $is_inactive ? ' app-badge-inactive' : '';
-                            ?>
-                            <span class="badge <?= $badge_class ?><?= $badge_inactive_class ?>"
-                                  title="<?= $is_inactive ? $LANG['server_inactive'] : '' ?>">
-                                <?= $srv['is_master'] ? 'Master' : 'Slave' ?>:
-                                <?= htmlspecialchars($srv['name']) ?>
-                            </span>
-                        <?php endforeach; ?>
-                    </td>
-                    <td class="coltbl-actions">
-                        <div class="d-flex flex-wrap gap-1">
-                            <?php if ($edit_id === (int)$zone['id']): ?>
-                                <button type="submit" form="editForm_<?= $zone['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                                <a href="pages/zones.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
-                            <?php else: ?>
-                                <?php if (in_array($_SESSION['role'], ['admin', 'zoneadmin'])): ?>
-                                    <a href="pages/zones.php?edit_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
-                                <?php endif; ?>
-                                <a href="pages/records.php?zone_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-warning"><?= $LANG['records'] ?></a>
-                                <?php if ($_SESSION['role'] === 'admin'): ?>
-                                    <form method="post" action="actions/zone_delete.php" class="d-inline confirm-delete">
-                                        <?= csrf_input() ?>
-                                        <input type="hidden" name="id" value="<?= $zone['id'] ?>">
-                                        <?= ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]) ?>
-                                    </form>
-                                <?php endif; ?>
-                            <?php endif; ?>
-                        </div>
-                    </td>
-                </tr>
+    $leftHtml = '';
+    if (!$showAdd && $isAdmin) {
+        $leftHtml = '<form method="post" action="actions/zone_delete.php" class="confirm-delete">' . csrf_input()
+            . '<input type="hidden" name="id" value="' . (int)$zone_edit['id'] . '">'
+            . ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']])
+            . '</form>';
+    }
+    $saveHtml = $showAdd
+        ? '<button type="submit" class="btn btn-outline-primary" form="zoneAddForm" name="apply_type" value="1" formaction="pages/zones.php?add_new=1"'
+            . ' formmethod="post" formnovalidate data-dm-zone-apply>' . ui_e($LANG['zone_type_apply']) . '</button>'
+            . '<button type="submit" class="btn btn-success" form="zoneAddForm">' . ui_e($LANG['create_zone']) . '</button>'
+        : '<button type="submit" class="btn btn-success" form="' . ui_e($zoneFormId) . '">' . ui_e($LANG['save']) . '</button>';
+    echo ui_editor_close('pages/zones.php', ['cancelLabel' => $LANG['cancel'], 'leftHtml' => $leftHtml, 'saveHtml' => $saveHtml]);
+}
 
-                <!-- Bearbeitungsformular -->
-                <?php if ($edit_id === (int)$zone['id'] && $zone_edit !== null): ?>
-                    <?php $zone = $zone_edit; include __DIR__ . '/../templates/zone_edit_form.php'; ?>
-                <?php endif; ?>
-            <?php endforeach; ?>
-        </tbody>
-    </table>
-</div>
-<br>
-<br>
-<h4>Reverse Lookup <?= $LANG['zones'] ?></h4>
-<div class="table-responsive">
-    <table class="table table-bordered align-middle">
-        <thead class="table-light">
-            <tr>
-                <th><?= $LANG['name'] ?></th>
-                <th class="coltbl-prefix">Prefix</th>
-                <th class="coltbl-ttl">TTL</th>
-                <th class="coltbl-desc"><?= $LANG['description'] ?></th>
-                <th class="coltbl-dnssrv"><?= $LANG['dns_servers'] ?></th>
-                <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach ($reverse_zones as $zone): ?>
-                <tr class="<?= ($edit_id === (int)$zone['id']) ? 'table-warning' : '' ?>">
-                    <td>
-                        <?php if ($zone['status'] === 'error'): ?>
-                            <span title="Fehlerhafte Zonendatei">❌</span>
-                        <?php elseif ($zone['status'] === 'warning'): ?>
-                            <span title="Warnung bei named-checkzone">⚠️</span>
-                        <?php elseif ($zone['status'] === 'changed'): ?>
-                            <span title="Änderung noch nicht veröffentlicht">⏳</span>
-                        <?php elseif ($zone['status'] === 'ok'): ?>
-                            <span title="Zonendatei gültig">✅</span>
-                        <?php endif; ?>
-                        <?= htmlspecialchars((string)($zone['name'] ?? '')) ?>
-                    </td>
-                    <td class="coltbl-prefix"><?= $zone['prefix_length'] ?? '-' ?></td>
-                    <td class="coltbl-ttl"><?= $zone['ttl'] ?></td>
-                    <td class="coltbl-desc"><?= htmlspecialchars((string)($zone['description'] ?? '')) ?></td>
-                    <td>
-                        <?php foreach ($zone['servers'] as $srv): ?>
-                            <?php
-                            $is_inactive = stripos($srv['name'], ' (' . $LANG['inactive'] . ')') !== false;
-                            $badge_class = $srv['is_master'] ? 'bg-primary' : 'bg-secondary';
-                            $badge_inactive_class = $is_inactive ? ' app-badge-inactive' : '';
-                            ?>
-                            <span class="badge <?= $badge_class ?><?= $badge_inactive_class ?>"
-                                  title="<?= $is_inactive ? 'Dieser Server ist derzeit deaktiviert.' : '' ?>">
-                                <?= $srv['is_master'] ? 'Master' : 'Slave' ?>:
-                                <?= htmlspecialchars($srv['name']) ?>
-                            </span><br>
-                        <?php endforeach; ?>
-                    </td>
-                    <td class="coltbl-actions">
-                        <div class="d-flex flex-wrap gap-1">
-                            <?php if ($edit_id === (int)$zone['id']): ?>
-                                <button type="submit" form="editForm_<?= $zone['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                                <a href="pages/zones.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
-                            <?php else: ?>
-                                <?php if (in_array($_SESSION['role'], ['admin', 'zoneadmin'])): ?>
-                                    <a href="pages/zones.php?edit_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
-                                <?php endif; ?>
-                                <a href="pages/records.php?zone_id=<?= $zone['id'] ?>" class="btn btn-sm btn-outline-warning"><?= $LANG['records'] ?></a>
-                                <?php if ($_SESSION['role'] === 'admin'): ?>
-                                    <form method="post" action="actions/zone_delete.php" class="d-inline confirm-delete">
-                                        <?= csrf_input() ?>
-                                        <input type="hidden" name="id" value="<?= $zone['id'] ?>">
-                                        <?= ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]) ?>
-                                    </form>
-                                <?php endif; ?>
-                            <?php endif; ?>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Bearbeitungsformular -->
-                <?php if ($edit_id === (int)$zone['id'] && $zone_edit !== null): ?>
-                    <?php $zone = $zone_edit; include __DIR__ . '/../templates/zone_edit_form.php'; ?>
-                <?php endif; ?>
-            <?php endforeach; ?>
-        </tbody>
-    </table>
-</div>
-
-<!-- JavaScript auslagern -->
-<?php
-AssetRegistry::enqueueScript('js/zones.js');
-AssetRegistry::enqueueScript('js/zone_add_form.js');
-AssetRegistry::enqueueScript('js/zone_edit_form.js');
+AssetRegistry::enqueueScript('js/zone_editor.js');
 ?>
 
 <?php include __DIR__ . '/../templates/layout_footer.php'; ?>

@@ -15,13 +15,8 @@ return [
         'clipboard_failed',
         'clipboard_success',
     ],
-    'js/zone_add_form.js' => [
+    'js/zone_editor.js' => [
         'for_example',
-        'zone_form_master_not_among_selected',
-        'zone_form_no_master_selected',
-        'zone_form_no_server_selected',
-    ],
-    'js/zone_edit_form.js' => [
         'zone_form_master_not_among_selected',
         'zone_form_no_master_selected',
         'zone_form_no_server_selected',
