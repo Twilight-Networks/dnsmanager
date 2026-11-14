@@ -59,7 +59,7 @@ connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; fram
   - Komponenten, die dennoch Verstöße erzeugen, werden ersetzt oder nicht verwendet. Eine Lockerung der Richtlinie gibt es nicht.
 - **Report-Only muss Verstöße nachvollziehbar sichtbar machen.**
   - Zuerst `Content-Security-Policy-Report-Only` mit `report-uri` auf einen eigenen, CSRF-freien, nur protokollierenden Endpunkt der Anwendung (kein Fremddienst).
-  - Je Verstoß eine Logzeile mit Zeitpunkt, Seite (ohne Query-Werte), Direktive, blockierter Quelle (gekürzt), Quelldatei/Zeile und Benutzer-ID.
+  - Je Verstoß eine Logzeile mit Zeitpunkt, Seite (ohne Query-Werte), Direktive, blockierter Quelle (gekürzt) und Quelldatei/Zeile. Eine Benutzer-ID entfällt: Der Endpunkt arbeitet freigabegemäß ohne Anwendungssession (U2, R1).
   - Ratenbegrenzung und Größenlimit gegen Log-Flutung.
   - Auswertung mit Fall-IDs im PR. Erst nach einem Lauf ohne Verstöße folgt die Durchsetzung (U6).
 - Die bestehenden Header (`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`) bleiben.
