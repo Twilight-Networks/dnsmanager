@@ -87,7 +87,7 @@ $is_auto_ttl = ((int)$r['ttl']) === $ttl_default;
 
 <tr class="table-warning table-edit-form">
     <td class="coltbl-select" aria-hidden="true">
-        <div style="visibility: hidden;">
+        <div class="invisible">
             <input type="checkbox" class="form-check-input" disabled>
         </div>
     </td>

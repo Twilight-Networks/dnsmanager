@@ -18,7 +18,7 @@
  * Gibt die Beschreibungstexte für DNS-Record-Typen abhängig vom Zonentyp zurück.
  *
  * Die Texte werden zur Laufzeit über die `lang()`-Funktion geladen, um sicherzustellen,
- * dass die Übersetzungen erst dann abgerufen werden, wenn `window.LANG` verfügbar ist.
+ * dass die Übersetzungen erst dann abgerufen werden, wenn die Sprachdaten der Seite (#app-lang) verfügbar sind.
  *
  * @param {string} zoneType - Zonenkontext ('forward' oder 'reverse')
  * @returns {Object<string, string>} Schlüssel-Wert-Paar aus Record-Typ und HTML-Text

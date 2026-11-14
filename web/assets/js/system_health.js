@@ -19,14 +19,12 @@ document.addEventListener('DOMContentLoaded', function () {
     function toggleRow(rowId) {
         const row = document.getElementById(rowId);
         if (row) {
-            row.style.display = (row.style.display === 'none') ? '' : 'none';
+            row.classList.toggle('app-hidden');
         }
     }
 
-    // Globale Funktionen für HTML-Attribute zugänglich machen
-    window.toggleConfigIssues = () => toggleRow('config-issues-row');
-    window.toggleFileIssues = () => toggleRow('file-issues-row');
-    window.toggleConfCheck = () => toggleRow('confcheck-row');
-    window.toggleZoneCheck = () => toggleRow('zonecheck-row');
-    window.toggleRemoteCheck = () => toggleRow('remotecheck-row');
+    // CSP (U2): Zeilen mit data-toggle-row="<ID der Detailzeile>" statt Inline-Handlern
+    document.querySelectorAll('[data-toggle-row]').forEach(row => {
+        row.addEventListener('click', () => toggleRow(row.dataset.toggleRow));
+    });
 });

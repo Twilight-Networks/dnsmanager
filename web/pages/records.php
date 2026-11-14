@@ -91,7 +91,7 @@ function render_records_table(array $records, string $title, int $zone_id, ?int 
 
     echo "<h4 class='mt-4'>" . htmlspecialchars($title) . "</h4>";
     echo "<div class='table-responsive'>
-            <table class='table table-striped table-bordered align-middle' style='table-layout: fixed; width: 100%;'>";
+            <table class='table table-striped table-bordered align-middle app-table-fixed'>";
 
     echo "<thead class='table-light'><tr>";
     echo "<th class='coltbl-select'><input type='checkbox' class='form-check-input select-all' data-table-id='" . md5($title) . "'></th>";
@@ -113,7 +113,7 @@ function render_records_table(array $records, string $title, int $zone_id, ?int 
         echo "<td class='coltbl-select'>";
         if (!$is_editing) {
             if ($is_glue) {
-                echo "<input type='checkbox' class='form-check-input' disabled style='opacity:0.5; cursor:not-allowed;' title='" . $LANG['glue_protected'] . "'>";
+                echo "<input type='checkbox' class='form-check-input app-check-locked' disabled title='" . $LANG['glue_protected'] . "'>";
             } else {
                 echo "<input type='checkbox' class='form-check-input select-row' data-id='" . $r['id'] . "' data-table-id='" . md5($title) . "'>";
             }
@@ -222,7 +222,7 @@ foreach ($results as $r) {
     };
 
     echo "<div class='mt-2'><strong>{$color} {$r['server']}</strong><br>";
-    echo "<pre style='white-space: pre-wrap; font-family: monospace'>" . htmlspecialchars($r['message']) . "</pre></div>";
+    echo "<pre class='app-pre-wrap'>" . htmlspecialchars($r['message']) . "</pre></div>";
 }
 
 echo "</div>";

@@ -68,7 +68,7 @@ if (!isset($edit_server)) {
                 </div>
 
                 <div class="col-md-4 colform-ip">
-                    <label class="form-label" style="white-space: nowrap;"><?= $LANG['api_ip'] ?></label>
+                    <label class="form-label text-nowrap"><?= $LANG['api_ip'] ?></label>
                     <input type="text" class="form-control" id="api_ip" name="api_ip" maxlength="45"
                             placeholder="<?= $LANG['for_example'] ?> 192.0.2.1"
                             value="<?= htmlspecialchars($edit_server['api_ip'] ?? '') ?>">
@@ -83,7 +83,7 @@ if (!isset($edit_server)) {
                                placeholder="<?= $LANG['api_token_keep_placeholder'] ?>"
                                value="">
                         <button class="btn btn-outline-secondary" type="button" id="toggleTokenVisibility" title="Anzeigen/Ausblenden">👁️</button>
-                        <button class="btn btn-outline-secondary" type="button" onclick="generateApiKey()" id="generateBtn"><?= $LANG['generate'] ?></button>
+                        <button class="btn btn-outline-secondary js-generate-api-key" type="button" id="generateBtn"><?= $LANG['generate'] ?></button>
                     </div>
                 </div>
 

@@ -31,12 +31,22 @@ function hideAddForm() {
 function toggleServerDiagnostics() {
     const section = document.getElementById('serverDiagnosticsBlock');
     if (section) {
-        section.style.display = section.style.display === 'none' ? 'block' : 'none';
+        section.classList.toggle('app-hidden');
     }
 }
 
 // === Ereignis: Wenn sich die DNS-IP ändert und Checkbox aktiv ist, API-IP automatisch mitsetzen ===
 document.addEventListener('DOMContentLoaded', function () {
+    // CSP (U2): Statuskarte und Token-Schaltflächen ohne Inline-Handler binden
+    const statusCard = document.querySelector('[data-server-diagnostics-toggle]');
+    if (statusCard) {
+        statusCard.addEventListener('click', toggleServerDiagnostics);
+    }
+    // Aufruf über window zum Klickzeitpunkt wie zuvor beim Inline-Handler (server_add_form.js kann die Funktion ersetzen)
+    document.querySelectorAll('.js-generate-api-key').forEach(button => {
+        button.addEventListener('click', () => window.generateApiKey());
+    });
+
     // BIND-Reload: Bootstrap-Modal initialisieren
     document.querySelectorAll('.btn-bind-reload').forEach(button => {
         button.addEventListener('click', function (e) {

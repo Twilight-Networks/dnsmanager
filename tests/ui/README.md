@@ -96,6 +96,18 @@ Jede Ausnahme braucht im PR eine Fall-ID-genaue Begründung und die Freigabe im 
    Mobil-Aufnahmen entstehen mit 492 CSS-Pixeln Breite. Das ist die Mindestbreite von Edge headless; schmalere Fenster beschneiden nur das Bild. Die Breite liegt im selben Bootstrap-Bereich (xs, unter 576 px) wie ein 390-px-Telefon. Echte 375 px werden im Browser geprüft.
 3. Beenden auf ns1 mit `touch /tmp/dnsmgr-uig/stop`; danach wird wie üblich aufgeräumt.
 
+## CSP Report-Only (U2)
+
+`UIG_CSP_REPORT_ONLY=1 MAX_MINUTES=30 bash run.sh serve <App-SHA>` aktiviert `CSP_REPORT_ONLY` **ausschließlich in der
+generierten Konfiguration der Testkopie** unter `/tmp/dnsmgr-uig`; die installierte Anwendung bleibt unberührt.
+- Die Seiten senden dann `Content-Security-Policy-Report-Only` mit der Zielrichtlinie, und Verstoßberichte gehen an
+  `csp_report.php` der Testkopie (Log `event=csp_violation`).
+- Nur im Modus `serve` zulässig; Golden-Läufe (`record`/`compare`) laufen ohne CSP-Header, damit der Headervertrag
+  unverändert bleibt.
+- Der Ratenstatus des Endpunkts liegt in `/tmp/dnsmgr-uig/csp-state` (0700, www-data; `CSP_REPORT_STATE_DIR` der
+  Testkopie) und wird mit der Testkopie entfernt; andere Dateien im temporären Verzeichnis bleiben unberührt.
+- Beim Beenden werden die CSP-Logzeilen nach `$OUT_DIR/csp-<SHA>-<Zeit>.log` gesichert und gezählt.
+
 ## Rollenmatrix
 
 ```bash

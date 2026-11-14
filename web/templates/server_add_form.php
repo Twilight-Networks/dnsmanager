@@ -39,7 +39,7 @@ if (!defined('IN_APP')) {
         <input type="text" class="form-control" id="dns_ip4" name="dns_ip4" maxlength="45"
                placeholder="<?= $LANG['for_example'] ?> 192.0.2.1">
         <div class="form-check mt-2">
-            <input class="form-check-input" type="checkbox" id="same_ip_checkbox" onchange="toggleApiIpField()">
+            <input class="form-check-input" type="checkbox" id="same_ip_checkbox">
             <label class="form-check-label" for="same_ip_checkbox">
                 <?= $LANG['same_as_api_ip'] ?>
             </label>
@@ -51,7 +51,7 @@ if (!defined('IN_APP')) {
         <input type="text" class="form-control" id="dns_ip6" name="dns_ip6" maxlength="45"
                placeholder="<?= $LANG['for_example'] ?> 2001:db8::1">
         <div class="form-check mt-2">
-            <input class="form-check-input" type="checkbox" id="same_ip6_checkbox" onchange="toggleApiIpField()">
+            <input class="form-check-input" type="checkbox" id="same_ip6_checkbox">
             <label class="form-check-label" for="same_ip6_checkbox">
                 = API-IP
             </label>
@@ -69,7 +69,7 @@ if (!defined('IN_APP')) {
         <div class="input-group">
             <input type="text" class="form-control" id="api_token" name="api_token" required maxlength="255"
                    placeholder="<?= $LANG['api_token_placeholder'] ?>">
-            <button class="btn btn-outline-secondary" type="button" onclick="generateApiKey()"><?= $LANG['generate'] ?></button>
+            <button class="btn btn-outline-secondary js-generate-api-key" type="button"><?= $LANG['generate'] ?></button>
         </div>
     </div>
 

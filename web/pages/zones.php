@@ -152,13 +152,13 @@ $overall_zone_message = $has_zone_errors
 ?>
 
 <!-- Visualisierung: Zonenstatus-Box mit optional ausklappbaren Details -->
-<div class="card mb-4"<?= $overall_zone_class !== 'success' ? ' onclick="toggleZoneDiagnostics()" style="cursor: pointer;"' : '' ?>>
+<div class="card mb-4<?= $overall_zone_class !== 'success' ? ' app-clickable' : '' ?>"<?= $overall_zone_class !== 'success' ? ' data-zone-diagnostics-toggle' : '' ?>>
     <div class="card-body">
         <h5><?= $LANG['zone_status'] ?></h5>
         <div class="alert alert-<?= $overall_zone_class ?> mb-0">
             <?= $overall_zone_message ?>
         </div>
-        <div id="zoneDiagnosticsBlock"<?= $overall_zone_class !== 'success' ? ' style="display: none;"' : ' style="display: none;" hidden' ?> class="mt-3 small">
+        <div id="zoneDiagnosticsBlock"<?= $overall_zone_class !== 'success' ? '' : ' hidden' ?> class="mt-3 small app-hidden">
             <?php foreach ($zone_diagnostics_output as $block): ?>
                 <div class="alert alert-<?= $overall_zone_class ?>"><?= $block ?></div>
             <?php endforeach; ?>
@@ -203,9 +203,9 @@ $overall_zone_message = $has_zone_errors
                             <?php
                             $is_inactive = stripos($srv['name'], ' (' . $LANG['inactive'] . ')') !== false;
                             $badge_class = $srv['is_master'] ? 'bg-primary' : 'bg-secondary';
-                            $badge_style = $is_inactive ? 'opacity: 0.5;' : '';
+                            $badge_inactive_class = $is_inactive ? ' app-badge-inactive' : '';
                             ?>
-                            <span class="badge <?= $badge_class ?>" style="<?= $badge_style ?>"
+                            <span class="badge <?= $badge_class ?><?= $badge_inactive_class ?>"
                                   title="<?= $is_inactive ? $LANG['server_inactive'] : '' ?>">
                                 <?= $srv['is_master'] ? 'Master' : 'Slave' ?>:
                                 <?= htmlspecialchars($srv['name']) ?>
@@ -280,9 +280,9 @@ $overall_zone_message = $has_zone_errors
                             <?php
                             $is_inactive = stripos($srv['name'], ' (' . $LANG['inactive'] . ')') !== false;
                             $badge_class = $srv['is_master'] ? 'bg-primary' : 'bg-secondary';
-                            $badge_style = $is_inactive ? 'opacity: 0.5;' : '';
+                            $badge_inactive_class = $is_inactive ? ' app-badge-inactive' : '';
                             ?>
-                            <span class="badge <?= $badge_class ?>" style="<?= $badge_style ?>"
+                            <span class="badge <?= $badge_class ?><?= $badge_inactive_class ?>"
                                   title="<?= $is_inactive ? 'Dieser Server ist derzeit deaktiviert.' : '' ?>">
                                 <?= $srv['is_master'] ? 'Master' : 'Slave' ?>:
                                 <?= htmlspecialchars($srv['name']) ?>

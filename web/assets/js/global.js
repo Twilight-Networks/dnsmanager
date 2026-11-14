@@ -46,8 +46,11 @@ document.addEventListener('DOMContentLoaded', () => {
 /**
  * Sprach-Helper für JavaScript
  *
- * Funktion: t('key') → Gibt den übersetzten Text aus window.LANG zurück.
+ * Funktion: lang('key') → Gibt den übersetzten Text aus den Sprachdaten der Seite zurück.
  * Optionales Fallback möglich, wenn Schlüssel nicht vorhanden ist.
+ *
+ * Quelle (U2, CSP): <script type="application/json" id="app-lang"> aus layout_footer.php mit den Schlüsseln der
+ * eingebundenen Skripte (inc/js_lang_keys.php). Der Inhalt wird nicht ausgeführt, sondern einmalig per JSON.parse gelesen.
  *
  * Beispiele:
  * - lang('save') → "Speichern"
@@ -57,9 +60,25 @@ document.addEventListener('DOMContentLoaded', () => {
  * @param {string|null} fallback
  * @returns {string}
  */
+let appLangData = null;
+
 function lang(key, fallback = null) {
-    if (typeof window.LANG === 'object' && key in window.LANG) {
-        return window.LANG[key];
+    if (appLangData === null) {
+        appLangData = {};
+        const el = document.getElementById('app-lang');
+        if (el) {
+            try {
+                const parsed = JSON.parse(el.textContent);
+                if (parsed && typeof parsed === 'object') {
+                    appLangData = parsed;
+                }
+            } catch (e) {
+                appLangData = {};
+            }
+        }
+    }
+    if (Object.prototype.hasOwnProperty.call(appLangData, key)) {
+        return appLangData[key];
     }
     return fallback !== null ? fallback : key;
 }

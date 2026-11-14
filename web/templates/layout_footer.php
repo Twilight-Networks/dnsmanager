@@ -6,6 +6,7 @@
  * - Einbindung von Bootstrap (JS + Popper).
  * - Bereitstellung eines globalen Modals zur Bestätigung von Löschvorgängen.
  * - Zentrale JavaScript-Logik zur Abfangung aller <form class="confirm-delete">-Submits.
+ * - Seitenbezogene Sprachdaten für JavaScript als JSON-Datenblock (U2, CSP; kein Inline-Skript).
  */
 
 ?>
@@ -36,6 +37,26 @@
 AssetRegistry::enqueueScript('js/global.js');
 AssetRegistry::enqueueScript('bootstrap/bootstrap.bundle.min.js');
 
+/**
+ * Sprachdaten für JavaScript (U2, CSP): nur die Schlüssel der eingebundenen Skripte (inc/js_lang_keys.php),
+ * als nicht ausführbarer JSON-Datenblock vor den Skripten. global.js liest ihn mit JSON.parse (lang()).
+ * JSON_HEX_* verhindert, dass Inhalte den Datenblock beenden oder als Markup wirken.
+ */
+$jsLangKeys = require __DIR__ . '/../inc/js_lang_keys.php';
+$jsLang = [];
+if (is_array($LANG)) {
+    foreach (AssetRegistry::getScripts() as $script) {
+        foreach ($jsLangKeys[$script] ?? [] as $key) {
+            if (array_key_exists($key, $LANG)) {
+                $jsLang[$key] = $LANG[$key];
+            }
+        }
+    }
+}
+echo '<script type="application/json" id="app-lang">'
+    . json_encode((object)$jsLang, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)
+    . '</script>' . PHP_EOL;
+
 // Dynamisches Einbinden aller vorgemerkten Skripte mit Cache-Busting
 foreach (AssetRegistry::getScripts() as $script) {
     $path = __DIR__ . '/../assets/' . $script;
@@ -43,23 +64,6 @@ foreach (AssetRegistry::getScripts() as $script) {
     echo '<script src="' . rtrim(BASE_URL, '/') . '/assets/' . htmlspecialchars($script) . '?v=' . $version . '"></script>' . PHP_EOL;
 }
 ?>
-
-<?php
-/**
- * Sprachdaten für JavaScript verfügbar machen
- *
- * Technische Hinweise:
- * - Die Ausgabe erfolgt als JSON-Objekt direkt im <script>-Tag am Ende der Seite.
- * - Die Daten stehen danach in allen JavaScript-Dateien über window.LANG zur Verfügung.
- * - Encoding-Flags stellen sicher, dass Sonderzeichen (z. B. Umlaute, HTML-Tags) korrekt ausgegeben werden.
- */
-?>
-
-<?php if (is_array($LANG)): ?>
-<script>
-    window.LANG = <?= json_encode($LANG, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?>;
-</script>
-<?php endif; ?>
 
 </body>
 </html>

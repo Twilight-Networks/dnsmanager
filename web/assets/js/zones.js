@@ -12,6 +12,8 @@
  *
  * Sicherheit:
  * - Es findet keine externe Kommunikation oder dynamische Codeausführung statt.
+ * - CSP (U2): keine Inline-Handler; die Statuskarte wird über das Attribut data-zone-diagnostics-toggle gebunden,
+ *   der Diagnosebereich über die Klasse app-hidden ein- und ausgeblendet.
  */
 
 /**
@@ -31,6 +33,13 @@ function toggleZoneDiagnostics() {
     }
 
     if (section) {
-        section.style.display = section.style.display === 'none' ? 'block' : 'none';
+        section.classList.toggle('app-hidden');
     }
 }
+
+document.addEventListener('DOMContentLoaded', function () {
+    const card = document.querySelector('[data-zone-diagnostics-toggle]');
+    if (card) {
+        card.addEventListener('click', toggleZoneDiagnostics);
+    }
+});

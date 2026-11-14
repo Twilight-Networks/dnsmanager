@@ -45,7 +45,7 @@ $allowedTypes = $zoneType === 'reverse'
         ℹ️ <?= $LANG['record_type_info_button'] ?>
     </button>
     <div class="collapse mt-2" id="typeInfoBox">
-        <div class="alert alert-info mb-0" id="typeInfoContent" style="white-space: pre-line;"></div>
+        <div class="alert alert-info mb-0 app-pre-line" id="typeInfoContent"></div>
     </div>
 </div>
 
@@ -77,7 +77,7 @@ $allowedTypes = $zoneType === 'reverse'
     <!-- Auswahl des gewünschten Record-Typs -->
     <div class="d-flex flex-column colform-type">
         <label class="form-label"><?= $LANG['record_type'] ?></label>
-        <select name="type" class="form-select" id="record_type" onchange="toggleDKIM(this.value)">
+        <select name="type" class="form-select" id="record_type">
             <?php foreach ($allowedTypes as $type): ?>
                 <option value="<?= $type ?>"><?= $type ?></option>
             <?php endforeach; ?>
@@ -204,7 +204,7 @@ $allowedTypes = $zoneType === 'reverse'
     </div>
 
     <!-- DKIM: Spezialfall mit drei erforderlichen Werten -->
-    <div class="col-12" id="dkim_fields" style="display: none;">
+    <div class="col-12 app-hidden" id="dkim_fields">
         <div class="row">
             <input type="hidden" name="is_dkim" value="1">
             <div class="col-md-4 colform-dkim-selector">
@@ -248,7 +248,7 @@ $allowedTypes = $zoneType === 'reverse'
 
             <div class="col-12">
                 <label class="form-label" for="dkim_file"><?= $LANG['dkim_upload_label'] ?></label>
-                <input type="file" name="dkim_file" id="dkim_file" class="form-control dkim-file-upload" accept=".txt" onchange="handleDKIMFileUpload(this)">
+                <input type="file" name="dkim_file" id="dkim_file" class="form-control dkim-file-upload" accept=".txt">
                 <button type="button" class="btn btn-link" data-bs-toggle="popover" data-bs-content="Laden Sie hier Ihre DKIM-Konfigurationsdatei hoch. Sie müssen sicherstellen, dass die Datei im richtigen Format vorliegt." data-bs-trigger="focus">
                     <i class="bi bi-question-circle"></i> <!-- Bootstrap-Icons für das Fragezeichen -->
                 </button>

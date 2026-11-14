@@ -148,4 +148,14 @@ define('LOG_LEVEL', 'info'); // Zulässige Werte: debug, info, warning, error
  *  PHP-Error-Reporting
  * --------------------------------------- */
 define('PHP_ERR_REPORT', false); // true = Entwicklungsmodus, false = Produktivmodus
+
+/** ---------------------------------------
+ *  Content-Security-Policy (Report-Only, U2)
+ *  Nur für freigegebene Testumgebungen: sendet die Zielrichtlinie als Content-Security-Policy-Report-Only
+ *  und nimmt Verstoßberichte unter csp_report.php an (Log: event=csp_violation). Ohne Eintrag kein Header.
+ * --------------------------------------- */
+// define('CSP_REPORT_ONLY', true);
+// Optional: eigenes Verzeichnis für den Ratenstatus des Endpunkts (absolut; wird mit 0700 angelegt, muss dem
+// Webserver-Benutzer gehören). Ohne Eintrag: privates Unterverzeichnis im temporären Verzeichnis.
+// define('CSP_REPORT_STATE_DIR', '/var/lib/dnsmanager/csp');
 ?>

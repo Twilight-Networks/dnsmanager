@@ -119,7 +119,7 @@ foreach ($diag_problems['server'] as $problem) {
             <table class="table table-bordered align-middle">
                 <tbody>
                     <!-- Konfigurationsprüfung -->
-                    <tr style="cursor: <?= empty($config_issues) ? 'default' : 'pointer' ?>;" <?= empty($config_issues) ? '' : 'onclick="toggleConfigIssues()"' ?>>
+                    <tr<?= empty($config_issues) ? '' : ' class="app-clickable" data-toggle-row="config-issues-row"' ?>>
                         <th><?= $LANG['config_check'] ?></th>
                         <td><?= empty($config_issues)
                             ? $LANG['config_ok']
@@ -131,7 +131,7 @@ foreach ($diag_problems['server'] as $problem) {
                             </td>
                     </tr>
                     <?php if (!empty($config_issues)): ?>
-                    <tr id="config-issues-row" style="display:none;">
+                    <tr id="config-issues-row" class="app-hidden">
                         <td colspan="3">
                         <div class="alert alert-danger small mb-3">
                             <strong>⚠️ <?= $LANG['hint'] ?>:</strong> <?= $LANG['config_hint'] ?> <code>ui_config.php</code>.<br><br>
@@ -148,7 +148,7 @@ foreach ($diag_problems['server'] as $problem) {
                     <!-- PHP-Version -->
                     <tr>
                         <th><?= $LANG['php_version_local'] ?></th>
-                        <td style="width: 20%;"><?= htmlspecialchars($php_version) ?></td>
+                        <td class="app-w-20"><?= htmlspecialchars($php_version) ?></td>
                         <td class="text-<?= $php_version_supported ? 'success' : 'danger' ?>">
                             <?= $php_version_supported
                                 ? '✅ ' . $LANG['status_ok']
@@ -176,7 +176,7 @@ foreach ($diag_problems['server'] as $problem) {
                     </tr>
 
                     <!-- Dateiberechtigungen -->
-                    <tr style="cursor: <?= empty($file_issues) ? 'default' : 'pointer' ?>;" <?= empty($file_issues) ? '' : 'onclick="toggleFileIssues()"' ?>>
+                    <tr<?= empty($file_issues) ? '' : ' class="app-clickable" data-toggle-row="file-issues-row"' ?>>
                         <th><?= $LANG['file_permissions_local'] ?></th>
                         <td><?= empty($file_issues)
                             ? $LANG['file_permissions_ok']
@@ -188,7 +188,7 @@ foreach ($diag_problems['server'] as $problem) {
                         </td>
                     </tr>
                     <?php if (!empty($file_issues)): ?>
-                    <tr id="file-issues-row" style="display:none;">
+                    <tr id="file-issues-row" class="app-hidden">
                         <td colspan="3">
                             <div class="alert alert-danger small mb-3">
                                 <strong>⚠️ <?= $LANG['hint'] ?>:</strong> <?= $LANG['file_permissions_hint'] ?><br><br>
@@ -220,7 +220,7 @@ foreach ($diag_problems['server'] as $problem) {
                     <?php endif; ?>
 
                     <!-- Serverstatus -->
-                    <tr style="cursor: <?= empty($remote_outputs) ? 'default' : 'pointer' ?>;" <?= empty($remote_outputs) ? '' : 'onclick="toggleRemoteCheck()"' ?>>
+                    <tr<?= empty($remote_outputs) ? '' : ' class="app-clickable" data-toggle-row="remotecheck-row"' ?>>
                         <th><?= $LANG['server_status'] ?></th>
                         <td><?= empty($remote_outputs)
                             ? $LANG['server_ok']
@@ -232,7 +232,7 @@ foreach ($diag_problems['server'] as $problem) {
                         </td>
                     </tr>
                     <?php if (!empty($remote_outputs)): ?>
-                    <tr id="remotecheck-row" style="display:none;">
+                    <tr id="remotecheck-row" class="app-hidden">
                         <td colspan="3">
                             <?php foreach ($remote_outputs as $i => $entry): ?>
                                 <div class="alert <?= $remote_output_classes[$i] ?> small"><?= $entry ?></div>
@@ -242,7 +242,7 @@ foreach ($diag_problems['server'] as $problem) {
                     <?php endif; ?>
 
                     <!-- named-checkconf -->
-                    <tr style="cursor: <?= empty($conf_outputs) ? 'default' : 'pointer' ?>;" <?= empty($conf_outputs) ? '' : 'onclick="toggleConfCheck()"' ?>>
+                    <tr<?= empty($conf_outputs) ? '' : ' class="app-clickable" data-toggle-row="confcheck-row"' ?>>
                         <th><?= $LANG['named_checkconf'] ?></th>
                         <td><?= empty($conf_outputs)
                             ? $LANG['named_checkconf_ok']
@@ -256,7 +256,7 @@ foreach ($diag_problems['server'] as $problem) {
                         </td>
                     </tr>
                     <?php if (!empty($conf_outputs)): ?>
-                    <tr id="confcheck-row" style="display:none;">
+                    <tr id="confcheck-row" class="app-hidden">
                         <td colspan="3">
                             <?php
                             $conf_class = !empty($conf_errors) ? 'alert-danger' : (!empty($conf_warnings) ? 'alert-warning' : 'alert-light');
@@ -268,7 +268,7 @@ foreach ($diag_problems['server'] as $problem) {
                     <?php endif; ?>
 
                     <!-- named-checkzone -->
-                    <tr style="cursor: <?= empty($outputs) ? 'default' : 'pointer' ?>;" <?= empty($outputs) ? '' : 'onclick="toggleZoneCheck()"' ?>>
+                    <tr<?= empty($outputs) ? '' : ' class="app-clickable" data-toggle-row="zonecheck-row"' ?>>
                         <th><?= $LANG['named_checkzone'] ?></th>
                         <td><?= empty($outputs)
                             ? $LANG['named_checkzone_ok']
@@ -280,7 +280,7 @@ foreach ($diag_problems['server'] as $problem) {
                         </td>
                     </tr>
                     <?php if (!empty($outputs)): ?>
-                    <tr id="zonecheck-row" style="display:none;">
+                    <tr id="zonecheck-row" class="app-hidden">
                         <td colspan="3">
                             <?php
                             $alert_class = $has_errors ? 'alert-danger' : ($has_warnings ? 'alert-warning' : 'alert-light');

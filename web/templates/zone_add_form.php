@@ -43,7 +43,7 @@ if (!defined('IN_APP')) {
         </select>
     </div>
 
-    <div class="col-md-3" id="prefix_length_container" style="display:none;">
+    <div class="col-md-3 app-hidden" id="prefix_length_container">
         <label class="form-label"><?= $LANG['prefix_length'] ?></label>
         <input type="number" name="prefix_length" class="form-control" value="<?= htmlspecialchars($_POST['prefix_length'] ?? '') ?>" placeholder="z. B. 24">
     </div>
