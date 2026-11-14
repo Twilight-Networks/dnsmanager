@@ -1,0 +1,11 @@
+{
+  "page/zoneadmin/dyndns": ["contract"],
+  "page/zoneadmin/dyndns_add": ["contract"],
+  "page/zoneadmin/dyndns_edit1": ["contract"],
+  "page/zoneadmin/servers": ["contract"],
+  "page/zoneadmin/servers_add": ["contract"],
+  "page/zoneadmin/servers_edit2": ["contract"],
+  "page/zoneadmin/system_health": ["contract"],
+  "page/zoneadmin/update": ["contract"],
+  "record/add_admin_txt_ohne_js": ["db", "log", "toasts"]
+}

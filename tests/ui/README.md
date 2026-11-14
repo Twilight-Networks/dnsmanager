@@ -105,6 +105,24 @@ Im Modus `serve` liefert der Router zusätzlich die Testseiten aus `tests/ui/sho
   `#dmDiffResults` (`data-pass`/`data-fail`).
 - Aufnahmen über `screenshots.ps1 -Only u3-showcase,u3-showcase-editor,…` (Einträge `u3-*`).
 
+## Record-Typ-Matrix (U4-Core)
+
+`bash run.sh matrix <App-SHA>` misst die **tatsächlich gespeicherten** Ergebnisse der Record-Actions je Typ
+(`tests/ui/records/`).
+- **Fälle** (`matrix_cases.php`): Anlage und Bearbeitung aller Typen als Bedienschritte im bestehenden Formular, auf
+  der Golden-Fixture plus `matrix_fixture.sql` (Records aller Typen, auch Altformen).
+- **Ohne JS:** Felder des ausgelieferten Formulars, nur benannte Felder gesetzt (Browser-Semantik).
+- **Mit JS:** POST-Daten, die die echten Formularskripte senden. Erfasst mit `capture.js` im Serve-Modus
+  (`UIG_RECORDS_MATRIX=1 run.sh serve <SHA>`, Fälle unter `/__ui/cases.json`, Ablage über `/__ui/upload`):
+  - `js_posts.json`: Formulare und Skripte von `main` (Basis);
+  - `js_posts_u4core.json`: Formulare vom U4-Core-Stand, Skripte unverändert (Übergangskombination;
+    `UIG_JS_POSTS=… run.sh matrix`).
+- **Vergleich:** `php records/matrix_compare.php <basis.json> <ergebnis.json> records/matrix_deviations.json`.
+  Jede Abweichung braucht eine Fall-ID, sonst Exit 1.
+- **Zusätzlich im selben Lauf:** `unit.php` (TXT-Aufteilung, DKIM-Parameter, verlustfreier Bearbeitungs-Roundtrip aller
+  Fixture-Records, BIND-Prüfung mit `named-checkzone`) und `dyndns_flag.php` (isDyndns gegen den DynDNS-Schutz,
+  REPEATABLE READ und READ COMMITTED).
+
 ## CSP Report-Only (U2)
 
 `UIG_CSP_REPORT_ONLY=1 MAX_MINUTES=30 bash run.sh serve <App-SHA>` aktiviert `CSP_REPORT_ONLY` **ausschließlich in der
