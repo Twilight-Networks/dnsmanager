@@ -6,6 +6,7 @@
 #   run.sh compare <Commit-SHA> <basis.json> [ausnahmen.json]
 #                                                Ergebnis erzeugen und mit der Basis vergleichen (Exit 1 bei Vertragsabweichung)
 #   run.sh serve   <Commit-SHA>                 Testkopie je Rolle lokal ausliefern (Screenshots, siehe README)
+#   UIG_CSP_REPORT_ONLY=1 run.sh serve <SHA>    zusätzlich CSP Report-Only nur in der Testkopie (U2, siehe README)
 #
 # Ablauf: eigener GitHub-Klon → git archive des Commits nach /tmp/dnsmgr-uig/app; Konfiguration aus
 # web/config/ui_config-sample.php (isolierte DB dnsmgr_uig_*, eigener DB-Benutzer, Log in Datei, Sprache de);
@@ -20,10 +21,12 @@ OUT_DIR=${OUT_DIR:-/root/dnsmgr-uig-results}
 REPO=${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}
 [[ "$MODE" =~ ^(record|compare|serve)$ ]] && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Aufruf: run.sh record|compare|serve <40-stelliger Commit-SHA> [basis.json] [ausnahmen.json]"; exit 2; }
 [ "$MODE" = compare ] && [ ! -f "$BASELINE" ] && { echo "Basisdatei fehlt: $BASELINE"; exit 2; }
+[ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ] && [ "$MODE" != serve ] && { echo "UIG_CSP_REPORT_ONLY nur im Modus serve (Golden-Läufe ohne CSP-Header)"; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "als root ausführen (php-cgi läuft per sudo als www-data)"; exit 2; }
 
 cleanup() {
   [ -f $T/pids ] && kill $(cat $T/pids) 2>/dev/null
+  rm -f /tmp/dnsmanager-csp-report-*.json   # Ratenbegrenzungsstatus des CSP-Report-Endpunkts der Testkopie
   mariadb -e "DROP DATABASE IF EXISTS dnsmgr_uig_tpl; DROP DATABASE IF EXISTS dnsmgr_uig_app; DROP USER IF EXISTS 'uigweb'@'localhost'" 2>/dev/null
   cd /; rm -rf $T
 }
@@ -48,6 +51,13 @@ sed -i -E -e "s/define\('DB_NAME', *'[^']*'\)/define('DB_NAME', 'dnsmgr_uig_app'
   -e "s/define\('DB_PASS', *'[^']*'\)/define('DB_PASS', '$PW')/" -e "s/define\('LOG_TARGET', *'[^']*'\)/define('LOG_TARGET', 'apache')/" \
   -e "s/define\('DEFAULT_LANGUAGE', *'[^']*'\)/define('DEFAULT_LANGUAGE', 'de')/" $c
 for k in "DB_NAME', 'dnsmgr_uig_app" "DB_USER', 'uigweb" "LOG_TARGET', 'apache" "DEFAULT_LANGUAGE', 'de"; do grep -q "define('$k')" $c || { echo "ABBRUCH: Konfiguration ($k)"; exit 1; }; done
+if [ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ]; then
+  # U2: Report-Only ausschließlich in dieser Testkopie (generierte Konfiguration), nie in der installierten Anwendung
+  sed -i "s#^// define('CSP_REPORT_ONLY', true);#define('CSP_REPORT_ONLY', true);#" $c
+  grep -q "^define('CSP_REPORT_ONLY', true);" $c || { echo "ABBRUCH: CSP_REPORT_ONLY in der Testkonfiguration"; exit 1; }
+  rm -f /tmp/dnsmanager-csp-report-*.json
+  echo "CSP Report-Only: aktiv (nur Testkopie $c)"
+fi
 f=$T/app/web/inc/deploy/CurlUpdateFeed.php
 sed -i "s#https://www.twilight-networks.com/dnsmanager-update/latest.json#file://$T/feed/latest.json#" $f
 grep -q "file://$T/feed/latest.json" $f || { echo "ABBRUCH: Update-Quelle der Testkopie"; exit 1; }
@@ -88,6 +98,11 @@ if [ "$MODE" = serve ]; then
   done
   sleep 1; echo "Screenshot-Server: $(ss -ltn | grep -cE ' 127\.0\.0\.1:186[01][123] ')/6 (admin 18601/18611, zoneadmin 18602/18612, anonym 18603/18613; 1861x ohne JS) – Stopp: touch $T/stop"
   for i in $(seq 1 $(( ${MAX_MINUTES:-30} * 12 ))); do [ -e $T/stop ] && break; sleep 5; done
+  if [ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ]; then
+    mkdir -p -m 700 "$OUT_DIR"; CSPLOG="$OUT_DIR/csp-${SHA:0:7}-$(date +%Y%m%d-%H%M%S).log"
+    grep -E 'event=csp_' $T/app.log > "$CSPLOG"; chmod 600 "$CSPLOG"
+    echo "CSP-Berichte im Log: $(grep -c 'event=csp_violation' "$CSPLOG") Verstöße, $(grep -c 'event=csp_report_rate_limited' "$CSPLOG") Ratenbegrenzungen → $CSPLOG"
+  fi
   PAT='PHP (Fatal error|Warning|Notice|Deprecated|Parse error)|event=php_error'
   echo "PHP-Meldungen im Log: $(grep -cE "$PAT" $T/app.log)"; grep -E "$PAT" $T/app.log | sed -E 's/^\[[^]]+\] //; s/ time="[^"]+"//' | sort | uniq -c | head -10
   echo "Screenshot-Modus beendet"; exit 0
