@@ -80,6 +80,7 @@ Jede Ausnahme braucht im PR eine Fall-ID-genaue Begründung und die Freigabe im 
 
 1. Auf ns1: `MAX_MINUTES=30 bash run.sh serve <App-SHA>`.
    - Startet die Testkopie je Rolle mit dem PHP-Entwicklungsserver ausschließlich auf `127.0.0.1`: admin 18601, zoneadmin 18602, anonym 18603.
+   - Zusätzlich je Rolle ein Server **ohne JavaScript** (18611–18613): Der Router entfernt alle `<script>`-Elemente (`UIG_NOJS=1`), der Browser rendert die Seite wie mit abgeschaltetem JavaScript. Edge headless erzeugt mit abgeschaltetem JavaScript selbst keine Screenshots.
    - Die Sessions entstehen per regulärem Login. Der Router `serve_router.php` setzt die Session-ID serverseitig, weil das Session-Cookie `Secure` ist.
 2. Auf dem Windows-Arbeitsplatz:
 
@@ -88,6 +89,11 @@ Jede Ausnahme braucht im PR eine Fall-ID-genaue Begründung und die Freigabe im 
    ```
 
    Das Skript nutzt einen SSH-Tunnel und Edge headless mit temporärem Profil. Es gibt keine Anmeldedaten im Browser.
+   - `-ColorScheme dark`: Farbschema-Vorgabe des Browsers dunkel (Dateisuffix `-dark`);
+   - `-NoJs`: Server ohne JavaScript (Suffix `-nojs`);
+   - `-Only name1,name2`: nur ausgewählte Aufnahmen.
+
+   Mobil-Aufnahmen entstehen mit 492 CSS-Pixeln Breite. Das ist die Mindestbreite von Edge headless; schmalere Fenster beschneiden nur das Bild. Die Breite liegt im selben Bootstrap-Bereich (xs, unter 576 px) wie ein 390-px-Telefon. Echte 375 px werden im Browser geprüft.
 3. Beenden auf ns1 mit `touch /tmp/dnsmgr-uig/stop`; danach wird wie üblich aufgeräumt.
 
 ## Rollenmatrix

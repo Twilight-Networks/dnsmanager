@@ -25,7 +25,14 @@ if (!str_ends_with($file, '.php')) {
 // No-JS-Modus (UIG_NOJS=1): alle <script>-Elemente aus der Antwort entfernen, damit der Browser die Seite wie mit
 // abgeschaltetem JavaScript rendert (Edge headless erzeugt mit scriptEnabled=false keine Screenshots)
 if (getenv('UIG_NOJS') === '1') {
-    ob_start(fn(string $html) => preg_replace('#<script[^>]*>.*?</script>#is', '', $html));
+    // Ohne Regex: große Inline-Skripte (z. B. window.LANG) könnten sonst das PCRE-Backtracking-Limit überschreiten
+    ob_start(function (string $html): string {
+        while (($start = stripos($html, '<script')) !== false) {
+            $end = stripos($html, '</script>', $start);
+            $html = substr($html, 0, $start) . ($end === false ? '' : substr($html, $end + 9));
+        }
+        return $html;
+    });
 }
 
 $sid = (string)getenv('UIG_SID');
