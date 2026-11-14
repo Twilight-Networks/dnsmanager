@@ -54,6 +54,23 @@ function isActive(string $page): string
 }
 
 /**
+ * Symbol aus dem lokalen Bootstrap-Icons-Sprite (U1, nur Darstellung).
+ *
+ * Das Symbol ist für Screenreader ausgeblendet (aria-hidden); die Bedeutung trägt immer der sichtbare Text bzw. ein
+ * aria-label des umgebenden Elements.
+ *
+ * @param string $name Symbolname ohne Präfix (z. B. 'house-door'); nur Kleinbuchstaben, Ziffern und Bindestriche
+ *
+ * @return string SVG-Markup
+ */
+function ui_icon(string $name): string
+{
+    $name = preg_replace('/[^a-z0-9-]/', '', $name);
+    return '<svg class="bi" aria-hidden="true" focusable="false"><use href="' . htmlspecialchars(rtrim(BASE_URL, '/'))
+        . '/assets/icons/bootstrap-icons-sprite.svg#bi-' . $name . '"></use></svg>';
+}
+
+/**
  * Gibt ein CSRF-Token als <input>-Feld zurück.
  *
  * @return string HTML-Input-Feld mit gültigem CSRF-Token
