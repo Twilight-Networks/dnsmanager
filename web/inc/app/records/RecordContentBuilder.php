@@ -17,12 +17,13 @@
  * - Bearbeitung ohne fachliche Änderung: Stimmen alle fachlichen Formularfelder mit der Zerlegung des gespeicherten
  *   Records überein (RecordContentParser), bleiben gespeicherter Name und Inhalt exakt erhalten. Reine TTL-Änderungen
  *   schreiben damit keinen Record um (auch keine Altformen wie DKIM mit s=email oder relative Ziele).
- * - Ziele (CNAME/NS/PTR bei Anlage, MX): Ein absolutes Ziel (abschließender Punkt) wird nie verlängert; ein relatives
+ * - Ziele (CNAME/NS/PTR bei Anlage, MX, SRV): Ein absolutes Ziel (abschließender Punkt) wird nie verlängert; ein relatives
  *   Ziel wird je Auswahl mit „.“ bzw. „.<Zone>.“ ergänzt. Bereits von den bisherigen Formularskripten
  *   zusammengesetzte Werte werden dadurch nicht ein zweites Mal ergänzt.
  * - DKIM: Anlage aus Selector, optionaler Subdomain, Schlüssel und den Parametern k (rsa|ed25519), optional h und t:
  *   "v=DKIM1; k=…[; h=…][; t=…];" "p=<höchstens 255 Bytes>" … (DNS-konforme TXT-Zeichenketten). Ein bereits als
- *   DKIM-TXT zusammengesetzter Inhalt (bisherige Formularskripte) wird unverändert übernommen.
+ *   DKIM-TXT zusammengesetzter Inhalt (bisherige Formularskripte) wird unverändert übernommen, aber nach denselben Regeln
+ *   geprüft (Tags, Zeichenketten ≤ 255 Bytes; U4C-R2).
  * - is_dkim wirkt nur bei Typ DKIM oder einem TXT-Inhalt mit "v=DKIM1"; ein gewöhnlicher TXT wird als TXT geprüft.
  * - SRV/URI: Name aus Dienst und Protokoll (_dienst._proto), sofern nicht bereits so angegeben.
  * - CAA/NAPTR (Bearbeitung): ein geändertes Namenspräfix (edit_name_prefix) wird übernommen.
@@ -43,6 +44,7 @@ final class RecordContentBuilder
     public const DKIM_FLAGS_INVALID       = 'RECORD_BUILD_DKIM_FLAGS_INVALID';
     public const DKIM_KEY_INVALID         = 'RECORD_BUILD_DKIM_KEY_INVALID';
     public const DKIM_SELECTOR_INVALID    = 'RECORD_BUILD_DKIM_SELECTOR_INVALID';
+    public const DKIM_CONTENT_INVALID     = 'RECORD_BUILD_DKIM_CONTENT_INVALID';
     public const NAPTR_NUMBERS_INVALID    = 'RECORD_BUILD_NAPTR_NUMBERS_INVALID';
     public const NAPTR_FIELDS_EMPTY       = 'RECORD_BUILD_NAPTR_FIELDS_EMPTY';
 
@@ -106,12 +108,11 @@ final class RecordContentBuilder
                 if (!ctype_digit($prio) || !ctype_digit($weight) || !ctype_digit($port)) {
                     return ['errorCode' => self::SRV_NUMBERS_INVALID];
                 }
-                // Ziel wie bisher: abschließenden Punkt entfernen, dann „.“ bzw. „.<Auswahl>.“ anhängen
-                $fqdn = rtrim($target, '.');
-                $fqdn .= ($tmode === 'dot') ? '.' : '.' . rtrim($tmode, '.') . '.';
-                if ($fqdn === '.') {
+                // Ziel (U4C-R1): absolut bleibt unverändert, relativ wird je Modus ergänzt; leer bzw. nur „.“ wie bisher abgelehnt
+                if (rtrim($target, '.') === '') {
                     return ['errorCode' => self::SRV_TARGET_EMPTY];
                 }
+                $fqdn = self::completeTarget($target, $tmode);
                 $result = [self::serviceName($name, (string)($fields['srv_protocol'] ?? '_tcp')), "$prio $weight $port $fqdn"];
                 break;
 
@@ -275,8 +276,74 @@ final class RecordContentBuilder
             return isset($built['errorCode']) ? $built : $meta + $built;
         }
 
-        // Bereits zusammengesetzter DKIM-TXT (z. B. bisheriges Formularskript): unverändert übernehmen
-        return $meta + ['name' => $name, 'content' => $content];
+        // Unveränderter gespeicherter Inhalt (Bearbeitung ohne DKIM-Felder): exakt erhalten, auch Altformen
+        if ($mode === 'update' && $existing !== null && $name === (string)$existing['name'] && $content === (string)$existing['content']) {
+            return $meta + ['name' => $name, 'content' => $content];
+        }
+
+        // Bereits zusammengesetzter DKIM-TXT (z. B. bisheriges Formularskript): unverändert übernehmen, aber nach denselben
+        // verbindlichen Regeln wie die Zusammensetzung aus den Feldern prüfen (U4C-R2)
+        $error = self::dkimTxtError($name, $content);
+        return $error !== null ? ['errorCode' => $error] : $meta + ['name' => $name, 'content' => $content];
+    }
+
+    /**
+     * Prüft einen bereits zusammengesetzten DKIM-TXT-Inhalt nach den Regeln von composeDkim() (U4C-R2):
+     * - Name selector._domainkey[.subdomain] aus zulässigen Namensbestandteilen;
+     * - Inhalt ausschließlich aus Zeichenketten in Anführungszeichen (ohne Anführungszeichen/Backslash darin), je höchstens
+     *   255 Bytes, nur durch Leerraum getrennt;
+     * - Tags (verbundene Zeichenketten, getrennt durch „;“): zuerst v=DKIM1, danach nur k, h, t, p, jeweils höchstens
+     *   einmal; k rsa|ed25519, h und t im zulässigen Format, p vorhanden und nur Base64.
+     *
+     * @return string|null Fehlercode oder null
+     */
+    private static function dkimTxtError(string $name, string $content): ?string
+    {
+        // Selector und Subdomain wie in composeDkim() (Namensbestandteile, höchstens 63 bzw. 190 Zeichen)
+        $label = '[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*';
+        if (!preg_match('/^(' . $label . ')\._domainkey(?:\.(' . $label . '))?$/', $name, $n)
+            || strlen($n[1]) > 63 || strlen($n[2] ?? '') > 190) {
+            return self::DKIM_SELECTOR_INVALID;
+        }
+        if (!preg_match('/^\s*"[^"\\\\]*"(?:\s+"[^"\\\\]*")*\s*$/', $content) || !preg_match_all('/"([^"]*)"/', $content, $m)) {
+            return self::DKIM_CONTENT_INVALID;
+        }
+        foreach ($m[1] as $s) {
+            if (strlen($s) > self::TXT_STRING_MAX_BYTES) {
+                return self::DKIM_CONTENT_INVALID;
+            }
+        }
+        $tags = [];
+        $parts = array_values(array_filter(array_map('trim', explode(';', implode('', $m[1]))), static fn (string $p): bool => $p !== ''));
+        foreach ($parts as $i => $part) {
+            if (!preg_match('/^([A-Za-z]+)\s*=\s*(.*)$/s', $part, $t)) {
+                return self::DKIM_CONTENT_INVALID;
+            }
+            $tag = strtolower($t[1]);
+            if (($i === 0) !== ($tag === 'v') || isset($tags[$tag]) || !in_array($tag, ['v', 'k', 'h', 't', 'p'], true)) {
+                return self::DKIM_CONTENT_INVALID;
+            }
+            $tags[$tag] = trim($t[2]);
+        }
+        if (($tags['v'] ?? '') !== 'DKIM1') {
+            return self::DKIM_CONTENT_INVALID;
+        }
+        if (isset($tags['k']) && !in_array(strtolower($tags['k']), ['rsa', 'ed25519'], true)) {
+            return self::DKIM_KEY_TYPE_INVALID;
+        }
+        if (isset($tags['h']) && (strlen($tags['h']) > 64 || !preg_match('/^[A-Za-z0-9]+(?::[A-Za-z0-9]+)*$/', $tags['h']))) {
+            return self::DKIM_HASH_INVALID;
+        }
+        if (isset($tags['t']) && (strlen($tags['t']) > 16 || !preg_match('/^[A-Za-z](?::[A-Za-z])*$/', $tags['t']))) {
+            return self::DKIM_FLAGS_INVALID;
+        }
+        if (!isset($tags['p']) || $tags['p'] === '') {
+            return self::DKIM_FIELDS_EMPTY;
+        }
+        if (strlen($tags['p']) > 4096 || !preg_match('/^[A-Za-z0-9+\/]+={0,2}$/', $tags['p'])) {
+            return self::DKIM_KEY_INVALID;
+        }
+        return null;
     }
 
     /** Normalisierte DKIM-Formularwerte */

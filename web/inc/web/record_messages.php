@@ -25,6 +25,7 @@ function recordBuildErrorText(string $code): string
         RecordContentBuilder::DKIM_FLAGS_INVALID    => 'DKIM-Flags (t=) sind ungültig (z. B. y oder s).',
         RecordContentBuilder::DKIM_KEY_INVALID      => 'DKIM Public Key darf nur Base64-Zeichen enthalten.',
         RecordContentBuilder::DKIM_SELECTOR_INVALID => 'DKIM-Selector oder -Subdomain enthält unzulässige Zeichen.',
+        RecordContentBuilder::DKIM_CONTENT_INVALID  => 'DKIM-Inhalt ist ungültig (nur v, k, h, t, p; Zeichenketten höchstens 255 Bytes).',
         RecordContentBuilder::NAPTR_NUMBERS_INVALID => 'NAPTR: Order und Preference müssen numerisch sein.',
         RecordContentBuilder::NAPTR_FIELDS_EMPTY    => 'NAPTR: Alle Felder (Flags, Service, Regexp, Replacement) müssen ausgefüllt sein.',
         default                                     => $code,

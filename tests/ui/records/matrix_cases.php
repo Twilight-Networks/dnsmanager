@@ -55,6 +55,11 @@ return [
                             ['#srv_port', '5060', 'srv_port'], ['#srv_target', 'sip', 'srv_target'], ['#srv_target_mode', 'u0.test.', 'srv_target_mode']]),
     'add_srv_abs'       => $add('SRV', [['#input_name', '_xmpp', 'name'], ['#srv_protocol', '_tcp', 'srv_protocol'], ['#input_srv_priority', '0', 'srv_priority'], ['#srv_weight', '0', 'srv_weight'],
                             ['#srv_port', '5222', 'srv_port'], ['#srv_target', 'xmpp.other.test.', 'srv_target'], ['#srv_target_mode', 'dot', 'srv_target_mode']]),
+    // U4C-R1: SRV-Ziel absolut/relativ × Zielmodus dot/Zone (zusammen mit add_srv_zone und add_srv_abs alle vier Kombinationen)
+    'add_srv_abs_zone'  => $add('SRV', [['#input_name', '_ldap', 'name'], ['#srv_protocol', '_tcp', 'srv_protocol'], ['#input_srv_priority', '0', 'srv_priority'], ['#srv_weight', '0', 'srv_weight'],
+                            ['#srv_port', '389', 'srv_port'], ['#srv_target', 'ldap.other.test.', 'srv_target'], ['#srv_target_mode', 'u0.test.', 'srv_target_mode']]),
+    'add_srv_rel_dot'   => $add('SRV', [['#input_name', '_imap', 'name'], ['#srv_protocol', '_tcp', 'srv_protocol'], ['#input_srv_priority', '0', 'srv_priority'], ['#srv_weight', '0', 'srv_weight'],
+                            ['#srv_port', '143', 'srv_port'], ['#srv_target', 'imap.other.test', 'srv_target'], ['#srv_target_mode', 'dot', 'srv_target_mode']]),
     'add_naptr'         => $add('NAPTR', [['#input_name_prefix', 'enum2', null], ['#naptr_order', '100', 'naptr_order'], ['#naptr_pref', '10', 'naptr_pref'], ['#naptr_flags', 'U', 'naptr_flags'],
                             ['#naptr_service', 'E2U+sip', 'naptr_service'], ['#naptr_regexp', '!^.*$!sip:x@u0.test!', 'naptr_regexp'], ['#naptr_replacement', '.', 'naptr_replacement']],
                             [['#input_name', 'enum2', 'name'], ['#naptr_order', '100', 'naptr_order'], ['#naptr_pref', '10', 'naptr_pref'], ['#naptr_flags', 'U', 'naptr_flags'],
@@ -93,6 +98,9 @@ return [
     'chg_cname'      => $edit(101, [['#edit_input_content', 'mail.u0.test.', 'content']]),
     'chg_srv_port'   => $edit(103, [['[name=srv_port]', '5061', 'srv_port']]),
     'chg_srv_proto'  => $edit(103, [['#edit_srv_protocol', '_udp', 'srv_protocol']]),
+    // U4C-R1: Ziel absolut bzw. relativ ändern (das Bearbeitungsformular hat keine Zielmodus-Auswahl, Modus „dot“)
+    'chg_srv_target_abs' => $edit(103, [['[name=srv_target]', 'sip2.other.test.', 'srv_target']]),
+    'chg_srv_target_rel' => $edit(103, [['[name=srv_target]', 'sip2', 'srv_target']]),
     'chg_naptr'      => $edit(105, [['[name=naptr_order]', '200', 'naptr_order']]),
     'chg_caa_prefix' => $edit(107, [['#edit_input_name_prefix', 'api', 'edit_name_prefix']]),
     'chg_caa'        => $edit(106, [['#edit_input_content', '0 issue "example.net"', 'content']]),

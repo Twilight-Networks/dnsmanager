@@ -68,6 +68,75 @@ $ok(in_array('ERR_DKIM_KEY_INVALID', $val, true), 'N-val-b64', 'Validator: ungü
 $val = validateDnsRecord('DKIM', 'x._domainkey', '"v=DKIM1; k=ed25519; p=' . $keys['ed25519'] . '"');
 $ok($val === [], 'V-pad', 'Validator: Ed25519 mit Padding = angenommen (vorher ERR_DKIM_KEY_INVALID)');
 
+// ---------- 3b. Bereits zusammengesetzter DKIM-TXT (bisheriges Formularskript, U4C-R2) ----------
+// Wie record_add_form.js: Typ TXT, is_dkim=1, Name selector._domainkey[.sub], Inhalt "Kopf;" + "p=…" in 255er-Stücken
+$jsContent = function (string $head, string $key): string {
+    $kp = 'p=' . $key; $c = ['"' . $head . '"'];
+    for ($i = 0; $i < strlen($kp); $i += 255) { $c[] = '"' . substr($kp, $i, 255) . '"'; }
+    return implode(' ', $c);
+};
+$js = function (string $name, string $content, ?array $existing = null) use ($B) {
+    $ctx = $existing === null ? ['mode' => 'create', 'zoneName' => 'u0.test'] : ['mode' => 'update', 'zoneName' => 'u0.test', 'existing' => $existing];
+    return $B::build('TXT', ['name' => $name, 'content' => $content, 'is_dkim' => '1'], $ctx);
+};
+foreach ([['rsa2048', 'v=DKIM1; k=rsa; h=sha256;', 's1._domainkey'], ['rsa4096', 'v=DKIM1; k=rsa;', 's5._domainkey'],
+          ['ed25519', 'v=DKIM1; k=ed25519; t=y;', 's2._domainkey.mail'], ['b256', 'v=DKIM1; k=rsa; h=sha1:sha256; t=y:s;', 's4._domainkey']] as [$kn, $head, $nm]) {
+    $c = $jsContent($head, $keys[$kn]);
+    $r = $js($nm, $c);
+    $ok(!isset($r['errorCode']) && $r['name'] === $nm && $r['content'] === $c && $r['validationType'] === 'DKIM' && $r['isDkim'] === true,
+        "J-ok-$kn", 'JS-Format gültig: Name und Inhalt unverändert übernommen (' . ($r['errorCode'] ?? 'ok') . ')');
+}
+$c2048 = $jsContent('v=DKIM1; k=rsa;', $keys['rsa2048']);
+$p2048 = '"p=' . $keys['rsa2048'] . '"';
+$jsNeg = [
+    // manipulierte h-/t-Parameter
+    'J-h-inject'   => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; h=sha256 s=*;', $keys['rsa2048']), $B::DKIM_HASH_INVALID],
+    'J-h-format'   => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; h=sha-256;', $keys['rsa2048']), $B::DKIM_HASH_INVALID],
+    'J-h-empty'    => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; h=;', $keys['rsa2048']), $B::DKIM_HASH_INVALID],
+    'J-h-long'     => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; h=' . str_repeat('a', 65) . ';', $keys['rsa2048']), $B::DKIM_HASH_INVALID],
+    'J-t-format'   => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; t=yes;', $keys['rsa2048']), $B::DKIM_FLAGS_INVALID],
+    'J-t-inject'   => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; t=y p=AAAA;', $keys['rsa2048']), $B::DKIM_FLAGS_INVALID],
+    'J-t-long'     => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; t=' . implode(':', array_fill(0, 9, 'y')) . ';', $keys['rsa2048']), $B::DKIM_FLAGS_INVALID],
+    // unzulässiger DKIM-Inhalt
+    'J-k'          => ['s1._domainkey', $jsContent('v=DKIM1; k=dsa;', $keys['rsa2048']), $B::DKIM_KEY_TYPE_INVALID],
+    'J-tag-s'      => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; s=email;', $keys['rsa2048']), $B::DKIM_CONTENT_INVALID],
+    'J-tag-other'  => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; x=1;', $keys['rsa2048']), $B::DKIM_CONTENT_INVALID],
+    'J-tag-dup'    => ['s1._domainkey', $jsContent('v=DKIM1; k=rsa; k=ed25519;', $keys['rsa2048']), $B::DKIM_CONTENT_INVALID],
+    'J-p-dup'      => ['s1._domainkey', $c2048 . ' "; p=AAAA"', $B::DKIM_CONTENT_INVALID],
+    'J-no-tag'     => ['s1._domainkey', '"v=DKIM1; k=rsa; foo;" ' . $p2048, $B::DKIM_CONTENT_INVALID],
+    'J-256'        => ['s1._domainkey', '"v=DKIM1; k=rsa;" "p=' . $keys['b256'] . '"', $B::DKIM_CONTENT_INVALID],
+    'J-unquoted'   => ['s1._domainkey', '"v=DKIM1; k=rsa;" p=' . $keys['rsa2048'], $B::DKIM_CONTENT_INVALID],
+    'J-trailing'   => ['s1._domainkey', $c2048 . ' ; evil', $B::DKIM_CONTENT_INVALID],
+    'J-backslash'  => ['s1._domainkey', '"v=DKIM1; k=rsa;\\" x" ' . $p2048, $B::DKIM_CONTENT_INVALID],
+    'J-p-missing'  => ['s1._domainkey', '"v=DKIM1; k=rsa;"', $B::DKIM_FIELDS_EMPTY],
+    'J-p-empty'    => ['s1._domainkey', '"v=DKIM1; k=rsa;" "p="', $B::DKIM_FIELDS_EMPTY],
+    'J-p-chars'    => ['s1._domainkey', '"v=DKIM1; k=rsa;" "p=AAAA!BBB"', $B::DKIM_KEY_INVALID],
+    'J-p-space'    => ['s1._domainkey', '"v=DKIM1; k=rsa;" "p=AAAA BBBB"', $B::DKIM_KEY_INVALID],
+    'J-p-pad'      => ['s1._domainkey', '"v=DKIM1; k=rsa;" "p=AAAA===="', $B::DKIM_KEY_INVALID],
+    // unzulässiger Name
+    'J-name-space' => ['s 1._domainkey', $c2048, $B::DKIM_SELECTOR_INVALID],
+    'J-name-abs'   => ['s1._domainkey.u0.test.', $c2048, $B::DKIM_SELECTOR_INVALID],
+    'J-name-plain' => ['www', $c2048, $B::DKIM_SELECTOR_INVALID],
+    'J-name-long'  => [str_repeat('a', 64) . '._domainkey', $c2048, $B::DKIM_SELECTOR_INVALID],
+];
+foreach ($jsNeg as $id => [$nm, $c, $code]) {
+    $r = $js($nm, $c);
+    $ok(($r['errorCode'] ?? null) === $code, $id, 'erwartet ' . $code . ', erhalten ' . ($r['errorCode'] ?? 'kein Fehler: ' . substr($r['content'] ?? '', 0, 60)));
+}
+// Ohne v=DKIM1 am Anfang der ersten Zeichenkette kein DKIM-Inhalt: als TXT geprüft, nicht als DKIM gekennzeichnet (wie bisher)
+foreach (['J-v-order' => '"k=rsa; v=DKIM1;" ' . $p2048, 'J-v-value' => '"v=DKIM2; k=rsa;" ' . $p2048] as $id => $c) {
+    $r = $js('s1._domainkey', $c);
+    $ok(!isset($r['errorCode']) && $r['validationType'] === 'TXT' && $r['isDkim'] === false, $id, 'kein DKIM-Inhalt → TXT-Prüfung, is_dkim wirkungslos');
+}
+// Bearbeitung: gespeicherter Altinhalt (s=email) unverändert gesendet → exakt erhalten; geänderter Inhalt wird geprüft
+$old = ['id' => 109, 'name' => 'old._domainkey', 'type' => 'TXT', 'content' => '"v=DKIM1; k=rsa; s=email; p=' . $keys['rsa1024'] . '"'];
+$r = $js($old['name'], $old['content'], $old);
+$ok(!isset($r['errorCode']) && $r['name'] === $old['name'] && $r['content'] === $old['content'], 'J-upd-keep', 'Bearbeitung: unveränderter Altinhalt mit s=email exakt erhalten');
+$r = $js($old['name'], '"v=DKIM1; k=rsa; h=sha256 s=*; p=' . $keys['rsa1024'] . '"', $old);
+$ok(($r['errorCode'] ?? null) === $B::DKIM_HASH_INVALID, 'J-upd-h', 'Bearbeitung: manipuliertes h im geänderten Inhalt abgelehnt (' . ($r['errorCode'] ?? 'kein Fehler') . ')');
+$r = $js($old['name'], '"hello"', $old);
+$ok(($r['errorCode'] ?? null) === $B::DKIM_CONTENT_INVALID, 'J-upd-plain', 'Bearbeitung: DKIM-Record mit Nicht-DKIM-Inhalt abgelehnt (' . ($r['errorCode'] ?? 'kein Fehler') . ')');
+
 // ---------- 4. DKIM-Erkennung ----------
 $ok($B::isDkimTxt('"v=DKIM1; k=rsa;" "p=AAAA"') && $B::isDkimTxt('"v=DKIM1; k=rsa; s=email; p=X"') && !$B::isDkimTxt('"v=spf1 -all"')
     && !$B::isDkimTxt('"hello v=DKIM1"') && !$B::isDkimTxt(''), 'K-isdkim', 'DKIM-TXT erkannt, SPF/Text nicht');
