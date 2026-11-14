@@ -30,7 +30,7 @@ $edit = fn(int $id, array $ops, ?array $nojs = null, int $zone = 1): array => [
 ];
 $ttl = fn(string $v) => ['#edit_ttl_select', $v, 'ttl'];
 
-return [
+$cases = [
     // ---------- Anlage ----------
     'add_a'             => $add('A', [['#input_name', 'www2', 'name'], ['#input_content', '192.0.2.10', 'content']]),
     'add_aaaa'          => $add('AAAA', [['#input_name', 'v6', 'name'], ['#input_content', '2001:db8::10', 'content']]),
@@ -109,3 +109,34 @@ return [
     'chg_dkim_hash'  => $edit(109, [['[name=dkim_hash_algos]', 'sha1:sha256', 'dkim_hash_algos']]),
     'chg_ptr'        => $edit(115, [['#edit_input_content', 'mx.u0.test.', 'content']], null, 3),
 ];
+
+/*
+ * U4-UI (E5): einheitliches Editorformular. Alle Felder haben einen name, mit und ohne JavaScript werden dieselben
+ * Felder ausgefüllt (kein Zusammensetzen im Browser). Die Bedienschritte werden daher auf die benannten Felder
+ * abgebildet:
+ * - Grundlage ist die No-JS-Fassung des Falls ('nojs', sonst 'ops'); bisher unbenannte Skriptfelder erhalten ihren
+ *   Feldnamen im neuen Formular (MX-Ziel → content, Präfix → name, DKIM-Felder → dkim_*).
+ * - Selektor: Feld im aktiven (nicht deaktivierten) Feldbereich des Typs; Typ und TTL liegen außerhalb.
+ * - Anlage ohne JavaScript: Die Seite wird mit &type= geöffnet (entspricht dem Typwechsel über „Vorschau“), damit
+ *   der Feldbereich des Typs aktiv ist; mit JavaScript schaltet der Typwechsel im Formular um.
+ * Die auf main erfassten JS-Daten (js_posts.json) stammen aus den bisherigen Bedienschritten (Stand 16af449).
+ */
+$scriptFieldNames = ['#input_mx_target' => 'content', '#input_name_prefix' => 'name', '#dkim_selector' => 'dkim_selector',
+    '#dkim_key_type' => 'dkim_key_type', '#dkim_hash_algos' => 'dkim_hash_algos', '#dkim_flags' => 'dkim_flags', '#dkim_key' => 'dkim_key'];
+foreach ($cases as $id => $c) {
+    $ops = [];
+    foreach ($c['nojs'] ?? $c['ops'] as [$sel, $value, $name]) {
+        $name = $name ?? ($scriptFieldNames[$sel] ?? null);
+        if ($name === null) {
+            throw new RuntimeException("Fall $id: Bedienschritt $sel ohne Feldnamen");
+        }
+        $selector = in_array($name, ['type', 'ttl'], true) ? "[name=$name]" : "fieldset:not([disabled]) [name=$name]";
+        $ops[] = [$selector, $value, $name];
+    }
+    $cases[$id]['ops'] = $ops;
+    $cases[$id]['nojs'] = null;
+    if ($c['mode'] === 'add') {
+        $cases[$id]['page'] .= '&type=' . rawurlencode($ops[0][1]);
+    }
+}
+return $cases;

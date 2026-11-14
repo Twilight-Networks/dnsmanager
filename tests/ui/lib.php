@@ -167,6 +167,12 @@ function forms(string $html): array
     foreach ($fm as [$all, $open, $inner]) {
         $fa = attrs($open);
         $fields = []; $values = [];
+        // Felder in deaktivierten Feldbereichen (<fieldset disabled>) sendet der Browser nicht (U4-UI); ihre Namen bleiben
+        // Teil der Formularstruktur.
+        $disabledRanges = [];
+        if (preg_match_all('#<fieldset\b[^>]*\bdisabled\b[^>]*>.*?</fieldset>#s', $inner, $dm, PREG_OFFSET_CAPTURE)) {
+            foreach ($dm[0] as [$block, $pos]) { $disabledRanges[] = [$pos, $pos + strlen($block)]; }
+        }
         preg_match_all('#<(input|select|textarea|button)\b[^>]*>#s', $inner, $im, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
         foreach ($im as $x) {
             $tag = $x[0][0]; $kind = strtolower($x[1][0]); $a = attrs($tag);
@@ -176,6 +182,7 @@ function forms(string $html): array
             if ($kind === 'button' || in_array($type, ['submit', 'file', 'button', 'reset'], true)) { continue; }
             if (in_array($type, ['checkbox', 'radio'], true) && !array_key_exists('checked', $a)) { continue; }
             if (array_key_exists('disabled', $a)) { continue; }
+            foreach ($disabledRanges as [$from, $to]) { if ($x[0][1] >= $from && $x[0][1] < $to) { continue 2; } }
             if ($kind === 'select') {
                 $rest = substr($inner, $x[0][1]);
                 $sel = preg_match('#^(.*?)</select>#s', $rest, $sm) ? $sm[1] : '';
