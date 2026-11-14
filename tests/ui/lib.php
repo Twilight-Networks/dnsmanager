@@ -150,7 +150,12 @@ function attrs(string $tag): array
 {
     preg_match_all('/([a-zA-Z_:-]+)(?:\s*=\s*("([^"]*)"|\'([^\']*)\'|([^\s>]+)))?/', preg_replace('/^<\w+|\/?>$/', '', $tag), $m, PREG_SET_ORDER);
     $a = [];
-    foreach ($m as $x) { $a[strtolower($x[1])] = html_entity_decode($x[3] ?? ($x[4] ?? ($x[5] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8'); }
+    foreach ($m as $x) {
+        // Nicht getroffene Gruppen liefert PCRE als leere Zeichenkette: die Variante am ersten Zeichen des Werts erkennen
+        $raw = $x[2] ?? '';
+        $v = $raw === '' ? '' : ($raw[0] === '"' ? $x[3] : ($raw[0] === "'" ? $x[4] : ($x[5] ?? '')));
+        $a[strtolower($x[1])] = html_entity_decode($v, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
     return $a;
 }
 
