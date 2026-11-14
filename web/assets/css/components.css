@@ -211,3 +211,34 @@ html.no-js .toast .btn-close { display: none; }
     .dm-zone-select .form-select { min-width: 0; max-width: none; flex: 1 1 auto; }
     .dm-records-table .dm-col-content { min-width: 200px; }
 }
+
+/* ---------- Dashboard und Zonen (U5a) ---------- */
+.dm-kpis.dm-kpis-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1199.98px) { .dm-kpis.dm-kpis-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 991.98px) { .dm-kpis.dm-kpis-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 575.98px) { .dm-kpis.dm-kpis-5 { grid-template-columns: minmax(0, 1fr); } }
+.dm-table .dm-col-num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dm-zones-table .dm-col-name { white-space: nowrap; }
+.dm-zones-table .dm-col-name a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--dm-border); }
+.dm-zones-table .dm-col-name a:hover { color: var(--dm-accent-text); }
+.dm-zones-table .dm-col-status { white-space: nowrap; }
+.dm-zones-table .dm-col-servers { min-width: 180px; }
+.dm-zones-table .dm-col-desc { max-width: 0; width: 22%; color: var(--dm-text-2); }
+.dm-server-chip { display: inline-block; margin: 1px 0; }
+.dm-server-chip.dm-inactive .dm-chip { opacity: .6; text-decoration: line-through; }
+.dm-muted { color: var(--dm-muted); }
+.dm-table tr.dm-muted-row td { color: var(--dm-muted); }
+.dm-form-group { margin: 18px 0 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--dm-border-soft); min-width: 0; }
+.dm-form-group > legend { float: none; width: auto; padding: 0; }
+.dm-server-assign { margin-top: 4px; }
+.dm-server-list { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.dm-zone-form-check { margin-top: 8px; padding: 8px 12px; border-radius: 6px; background: var(--dm-err-soft); border: 1px solid var(--dm-err-line); font-size: 12.5px; }
+.dm-zone-form-check[hidden] { display: none; }
+.dm-diagnostics > summary .bi { width: 16px; height: 16px; }
+.dm-diagnostics-err > summary { background: var(--dm-err-soft); }
+.dm-diagnostics-err > summary .bi { color: var(--dm-err); }
+.dm-diagnostics-warn > summary { background: var(--dm-warn-soft); }
+.dm-diagnostics-warn > summary .bi { color: var(--dm-warn); }
+.dm-diagnostics-more { margin-left: auto; font-size: 12.5px; color: var(--dm-accent-text); }
+.dm-diagnostics[open] .dm-diagnostics-more { visibility: hidden; }
+[data-dm-zone-reverse-only][hidden], [data-dm-zone-forward-only][hidden] { display: none; }

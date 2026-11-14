@@ -68,7 +68,20 @@ $shots = @(
     @('u4-records-add-mx', 'admin', 'pages/records.php?zone_id=1&add_new=1&type=MX', 1440, 1000),
     @('u4-records-add-dkim', 'admin', 'pages/records.php?zone_id=1&add_new=1&type=DKIM', 1440, 1200),
     @('u4-records-mobile', 'admin', 'pages/records.php?zone_id=1', 492, 1400),
-    @('u4-records-edit-mobile', 'admin', 'pages/records.php?zone_id=1&edit_id=110', 492, 1400)
+    @('u4-records-edit-mobile', 'admin', 'pages/records.php?zone_id=1&edit_id=110', 492, 1400),
+    # U5a: Dashboard, Zonenliste, Zoneneditor
+    @('u5a-dashboard', 'admin', 'pages/dashboard.php', 1440, 1000),
+    @('u5a-dashboard-zoneadmin', 'zoneadmin', 'pages/dashboard.php', 1440, 900),
+    @('u5a-zones', 'admin', 'pages/zones.php', 1440, 900),
+    @('u5a-zones-zoneadmin', 'zoneadmin', 'pages/zones.php', 1440, 800),
+    @('u5a-zones-edit', 'admin', 'pages/zones.php?edit_id=1', 1440, 1300),
+    @('u5a-zones-edit-reverse', 'admin', 'pages/zones.php?edit_id=3', 1440, 1300),
+    @('u5a-zones-edit-zoneadmin', 'zoneadmin', 'pages/zones.php?edit_id=1', 1440, 1200),
+    @('u5a-zones-add', 'admin', 'pages/zones.php?add_new=1', 1440, 1400),
+    @('u5a-zones-add-reverse', 'admin', 'pages/zones.php?add_new=1&type=reverse_ipv4', 1440, 1400),
+    @('u5a-dashboard-mobile', 'admin', 'pages/dashboard.php', 492, 1500),
+    @('u5a-zones-mobile', 'admin', 'pages/zones.php', 492, 1000),
+    @('u5a-zones-edit-mobile', 'admin', 'pages/zones.php?edit_id=1', 492, 1600)
 )
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $profileDir = Join-Path $env:TEMP ("uig-edge-" + [guid]::NewGuid().ToString('N'))
