@@ -96,6 +96,15 @@ Jede Ausnahme braucht im PR eine Fall-ID-genaue Begründung und die Freigabe im 
    Mobil-Aufnahmen entstehen mit 492 CSS-Pixeln Breite. Das ist die Mindestbreite von Edge headless; schmalere Fenster beschneiden nur das Bild. Die Breite liegt im selben Bootstrap-Bereich (xs, unter 576 px) wie ein 390-px-Telefon. Echte 375 px werden im Browser geprüft.
 3. Beenden auf ns1 mit `touch /tmp/dnsmgr-uig/stop`; danach wird wie üblich aufgeräumt.
 
+## Bausteinübersicht und DIFF-Prüfseite (U3)
+
+Im Modus `serve` liefert der Router zusätzlich die Testseiten aus `tests/ui/showcase` unter `/dnsmanager-ui/__ui/` aus
+(installiert nach `/tmp/dnsmgr-uig/ui`, nicht Teil der Anwendung, keine Schreibzugriffe):
+- `__ui/showcase.php` (`?editor=1` öffnet den Editor-Rahmen): alle UI-Bausteine mit echtem Layout, Stil und Skript.
+- `__ui/diff_cases.php`: DIFF-Logik PHP (`ui_diff`) gegen JavaScript (`diff.js`), Einklappen langer Werte; Ergebnis in
+  `#dmDiffResults` (`data-pass`/`data-fail`).
+- Aufnahmen über `screenshots.ps1 -Only u3-showcase,u3-showcase-editor,…` (Einträge `u3-*`).
+
 ## CSP Report-Only (U2)
 
 `UIG_CSP_REPORT_ONLY=1 MAX_MINUTES=30 bash run.sh serve <App-SHA>` aktiviert `CSP_REPORT_ONLY` **ausschließlich in der

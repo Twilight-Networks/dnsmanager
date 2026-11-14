@@ -35,6 +35,7 @@
 <?php
 // Basis-JavaScript-Dateien registrieren
 AssetRegistry::enqueueScript('js/global.js');
+AssetRegistry::enqueueScript('js/components.js');
 AssetRegistry::enqueueScript('bootstrap/bootstrap.bundle.min.js');
 
 /**

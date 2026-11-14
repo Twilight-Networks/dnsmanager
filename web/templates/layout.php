@@ -58,6 +58,7 @@ if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
     AssetRegistry::enqueueStyle('css/theme-auto.css');
     AssetRegistry::enqueueStyle('fonts/fonts.css');
     AssetRegistry::enqueueStyle('css/custom.css');
+    AssetRegistry::enqueueStyle('css/components.css');
 
     // Stylesheets ausgeben mit Cache-Busting
     foreach (AssetRegistry::getStyles() as $css) {

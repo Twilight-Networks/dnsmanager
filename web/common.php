@@ -97,6 +97,9 @@ if (!defined('ALLOW_UNAUTHENTICATED') || ALLOW_UNAUTHENTICATED !== true) {
 // Hilfsfunktionen (z.B. Rollenprüfungen, sichere Shell-Kommandos) laden
 require_once __DIR__ . '/inc/helpers.php';
 
+// UI-Bausteine (U3): reine Darstellungsfunktionen ohne Fachlogik
+require_once __DIR__ . '/inc/web/ui_components.php';
+
 /**
  * Fügt eine Toast-Nachricht zur Session hinzu, um sie beim nächsten Seitenaufruf im Webinterface anzuzeigen.
  *

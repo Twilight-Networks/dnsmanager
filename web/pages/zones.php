@@ -226,7 +226,7 @@ $overall_zone_message = $has_zone_errors
                                     <form method="post" action="actions/zone_delete.php" class="d-inline confirm-delete">
                                         <?= csrf_input() ?>
                                         <input type="hidden" name="id" value="<?= $zone['id'] ?>">
-                                        <button class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
+                                        <?= ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]) ?>
                                     </form>
                                 <?php endif; ?>
                             <?php endif; ?>
@@ -303,7 +303,7 @@ $overall_zone_message = $has_zone_errors
                                     <form method="post" action="actions/zone_delete.php" class="d-inline confirm-delete">
                                         <?= csrf_input() ?>
                                         <input type="hidden" name="id" value="<?= $zone['id'] ?>">
-                                        <button class="btn btn-sm btn-outline-danger"><?= $LANG['delete'] ?></button>
+                                        <?= ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]) ?>
                                     </form>
                                 <?php endif; ?>
                             <?php endif; ?>

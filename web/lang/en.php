@@ -590,4 +590,21 @@ return [
     'diag_error_php_dev_mode'   => 'PHP_ERR_REPORT is set to true (development mode active).',
     'diag_error_log_level'      => 'Invalid LOG_LEVEL: %s',
     'diag_error_log_target'     => 'Invalid LOG_TARGET: %s',
+
+    // === UI-Bausteine (U3) ===
+    'confirm_delete_prompt' => 'Really delete?',
+    'confirm_delete_final' => 'Delete permanently',
+    'access_denied_title' => 'Access denied',
+    'access_denied_text' => 'Your role does not have the permissions required for this page.',
+    'back_to_dashboard' => 'To the dashboard',
+    'bulk_selected' => '%d selected',
+    'select_all' => 'Select all',
+    'select_row' => 'Select',
+    'diff_chars' => '%d characters',
+    'diff_summary_changed' => 'Changed lines: %d',
+    'diff_summary_none' => 'No change',
+    'diff_show_full' => 'show in full',
+    'diff_show_less' => 'show less',
+    'diff_label' => 'Preview of the change',
+    'saved_not_published' => 'Saving does not publish: the change reaches the DNS servers only with “Publish”.',
 ];

@@ -4,7 +4,8 @@
  * Zweck: Sammlung von Hilfsfunktionen der Weboberfläche.
  *
  * Abgrenzung (Core-/UI-Trennung, docs/ARCHITECTURE_CORE.md):
- * - Enthält ausschließlich Web-Funktionen: requireRole (Rollenprüfung nach Session, 403), isActive
+ * - Enthält ausschließlich Web-Funktionen: requireRole (Rollenprüfung nach Session, 403; Seiten per GET mit
+ *   Fehlerseite im Layout, U3), isActive
  *   (Navigation), csrf_input (Formularfeld), safe_return_path (Rücksprungziel).
  * - Die früheren Rebuild-Funktionen (rebuild_zone_and_validate, rebuild_zone_and_flag_if_valid,
  *   rebuild_ns_and_glue_for_zone_and_flag_if_valid) sind mit Paket 4a nach inc/deploy/BindZoneBuildBackend.php
@@ -37,8 +38,26 @@ function requireRole(array $allowedRoles): void
     if (!in_array($role, $allowedRoles, true)) {
         logAccessDenied('requireRole', 'Unzureichende Berechtigungen für Rolle: ' . $role);
         http_response_code(403);
+        // U3 (U0-B6): Seitenaufrufe per GET erhalten die Fehlerseite im Layout (Navigation zurück); Status, Log und
+        // Zugriffsschutz sind unverändert. Actions und andere Anfragen behalten die bisherige Textantwort.
+        if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET' && str_contains((string)($_SERVER['SCRIPT_NAME'] ?? ''), '/pages/')) {
+            render_access_denied_page();
+        }
         exit('Zugriff verweigert: Unzureichende Berechtigungen.');
     }
+}
+
+/**
+ * Gibt die Fehlerseite „Zugriff verweigert“ im Layout aus und beendet die Anfrage (U3, U0-B6).
+ * Der HTTP-Status 403 ist vom Aufrufer bereits gesetzt.
+ *
+ * @return never
+ */
+function render_access_denied_page(): never
+{
+    global $LANG, $pdo, $lang;
+    include __DIR__ . '/../templates/access_denied.php';
+    exit;
 }
 
 /**

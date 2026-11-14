@@ -1,0 +1,160 @@
+/* ==========================================================================
+   DNS Manager – UI-Bausteine (U3, Designvorlage A+)
+   --------------------------------------------------------------------------
+   Gegenstück zu inc/web/ui_components.php (Klassenpräfix dm-). Nutzt ausschließlich
+   die Design-Tokens aus custom.css (--dm-*), funktioniert hell und dunkel, mit und
+   ohne JavaScript. Keine Inline-Stile nötig (CSP, U2).
+   ========================================================================== */
+
+/* ---------- 1. Seitenkopf ---------- */
+.dm-page-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.dm-page-head-text { min-width: 0; }
+.dm-page-title { font-size: 22px; font-weight: 500; letter-spacing: -.01em; margin: 0; color: var(--dm-text); }
+.dm-page-sub { color: var(--dm-muted); font-size: 13px; margin-top: 4px; }
+.dm-page-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- 2. Kennzahl-Karten ---------- */
+.dm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.dm-kpi { display: block; background: var(--dm-card); border: 1px solid var(--dm-border); border-radius: 8px; padding: 14px 16px; color: var(--dm-text); text-decoration: none; }
+a.dm-kpi:hover { border-color: var(--dm-accent); color: var(--dm-text); }
+.dm-kpi-label { display: flex; align-items: center; gap: 7px; color: var(--dm-muted); font-size: 12.5px; font-weight: 500; }
+.dm-kpi-value { font-size: 26px; font-weight: 500; margin-top: 6px; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.dm-kpi-value small { font-size: 14px; color: var(--dm-muted); font-weight: 400; margin-left: 4px; }
+.dm-kpi-foot { margin-top: 6px; font-size: 12.5px; color: var(--dm-muted); }
+.dm-kpi-warn .dm-kpi-value { color: var(--dm-warn); }
+.dm-kpi-err .dm-kpi-value { color: var(--dm-err); }
+.dm-kpi-ok .dm-kpi-value { color: var(--dm-ok); }
+@media (max-width: 991.98px) { .dm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 575.98px) { .dm-kpis { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- 3. Status-Chips ---------- */
+.dm-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 5px; font-size: 12px; font-weight: 500; line-height: 1.5;
+    border: 1px solid var(--dm-border); color: var(--dm-text-2); background: transparent; white-space: nowrap; vertical-align: middle; }
+.dm-chip .bi { width: 12px; height: 12px; }
+.dm-chip-ok { color: var(--dm-ok); background: var(--dm-ok-soft); border-color: transparent; }
+.dm-chip-warn { color: var(--dm-warn); background: var(--dm-warn-soft); border-color: transparent; }
+.dm-chip-err { color: var(--dm-err); background: var(--dm-err-soft); border-color: transparent; }
+.dm-chip-info { color: var(--dm-info); background: var(--dm-info-soft); border-color: transparent; }
+.dm-chip-accent { color: var(--dm-accent-text); background: var(--dm-accent-soft); border-color: transparent; }
+
+/* ---------- 4. Hinweisband ---------- */
+.dm-notice { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 8px; border: 1px solid var(--dm-border); margin-bottom: 16px; color: var(--dm-text); }
+.dm-notice > .bi { flex: 0 0 auto; width: 16px; height: 16px; }
+.dm-notice-text { min-width: 0; }
+.dm-notice-text strong { font-weight: 500; }
+.dm-notice-text span { color: var(--dm-text-2); }
+.dm-notice-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.dm-notice-warn { background: var(--dm-warn-soft); border-color: var(--dm-warn-line); }
+.dm-notice-warn > .bi { color: var(--dm-warn); }
+.dm-notice-err { background: var(--dm-err-soft); border-color: var(--dm-err-line); }
+.dm-notice-err > .bi { color: var(--dm-err); }
+.dm-notice-ok { background: var(--dm-ok-soft); border-color: transparent; }
+.dm-notice-ok > .bi { color: var(--dm-ok); }
+.dm-notice-info { background: var(--dm-info-soft); border-color: transparent; }
+.dm-notice-info > .bi { color: var(--dm-info); }
+@media (max-width: 575.98px) { .dm-notice { flex-wrap: wrap; } .dm-notice-actions { margin-left: 28px; } }
+
+/* ---------- 5. Datenkarte ---------- */
+.dm-card { background: var(--dm-card); border: 1px solid var(--dm-border); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
+.dm-card-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--dm-border); background: var(--dm-card-head); }
+.dm-card-title { font-size: 14px; font-weight: 500; margin: 0; color: var(--dm-text); }
+.dm-card-actions { margin-left: auto; display: flex; gap: 8px; }
+.dm-card-body { padding: 16px; }
+.dm-card-body.dm-card-flush { padding: 0; }
+.dm-card-flush > .table-responsive > .dm-table,
+.dm-card-flush > .dm-table { margin-bottom: 0; }
+
+/* ---------- 6. Kompakte Tabelle mit Gruppenzeilen und Auswahl ---------- */
+.dm-table { width: 100%; border-collapse: collapse; font-size: 13px; color: var(--dm-text); }
+.dm-table th { padding: 8px 12px; font-size: 11.5px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--dm-muted);
+    border-bottom: 1px solid var(--dm-border); text-align: left; background: var(--dm-card); white-space: nowrap; }
+.dm-table td { padding: 7px 12px; border-bottom: 1px solid var(--dm-border-soft); vertical-align: middle; line-height: 1.35; }
+.dm-table tbody tr:hover td { background: var(--dm-row-hover); }
+.dm-table tr.dm-group-row td { background: var(--dm-card-head); color: var(--dm-muted); font-size: 11.5px; font-weight: 500; letter-spacing: .04em;
+    text-transform: uppercase; padding-top: 6px; padding-bottom: 6px; }
+.dm-table tr.dm-current td { background: var(--dm-accent-soft); }
+.dm-table tr.dm-current td:first-child { box-shadow: inset 2px 0 0 var(--dm-accent); }
+.dm-table tr.dm-selected td { background: var(--dm-row-hover); }
+.dm-table .dm-mono, .dm-mono { font-family: var(--dm-mono); font-size: 12.5px; }
+.dm-table .dm-col-select { width: 36px; }
+.dm-table .dm-col-actions { text-align: right; white-space: nowrap; }
+/* Auswahl ist eine JavaScript-Verbesserung (Massenaktionen, D7); ohne JavaScript ausgeblendet */
+html.no-js .dm-col-select, html.no-js .dm-select-all, html.no-js .dm-select-row { display: none; }
+
+/* Massenaktionsleiste */
+.dm-bulkbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--dm-border); background: var(--dm-accent-soft); }
+.dm-bulkbar[hidden] { display: none; }
+.dm-bulk-count { font-weight: 500; }
+.dm-bulk-actions { margin-left: auto; display: flex; gap: 8px; }
+.dm-bulk-actions form { display: inline; }
+
+/* ---------- 7. Leerzustand ---------- */
+.dm-empty { text-align: center; padding: 36px 16px; color: var(--dm-muted); }
+.dm-empty > .bi { width: 30px; height: 30px; color: var(--dm-muted); margin-bottom: 10px; }
+.dm-empty-title { color: var(--dm-text); font-size: 15px; font-weight: 500; }
+.dm-empty-text { margin-top: 4px; font-size: 13px; }
+.dm-empty-action { margin-top: 14px; }
+
+/* ---------- 8. Löschbestätigung mit No-JS-Rückfall (U0-B9) ---------- */
+.dm-confirm { display: inline-block; position: relative; vertical-align: middle; }
+.dm-confirm > summary { list-style: none; cursor: pointer; }
+.dm-confirm > summary::-webkit-details-marker { display: none; }
+.dm-confirm-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; display: flex; align-items: center; gap: 10px; white-space: nowrap;
+    padding: 10px 12px; border-radius: 8px; border: 1px solid var(--dm-err-line); background: var(--dm-card); box-shadow: var(--dm-shadow); }
+.dm-confirm-prompt { color: var(--dm-text); font-size: 13px; }
+.dm-confirm[open] > summary { background: var(--dm-err-soft); }
+/* Im Editor-Fuß nach oben öffnen (unten ist der Bildschirmrand) */
+.dm-editor-foot .dm-confirm-pop { top: auto; bottom: calc(100% + 6px); right: auto; left: 0; }
+
+/* ---------- 9. Editor-Rahmen (rechtes Offcanvas, serverseitig geöffnet) ---------- */
+.dm-editor-backdrop { position: fixed; inset: 0; z-index: 1040; background: rgba(0, 0, 0, .5); }
+[data-bs-theme=light] .dm-editor-backdrop { background: rgba(17, 18, 20, .28); }
+@media (prefers-color-scheme: light) { html:not([data-bs-theme]) .dm-editor-backdrop { background: rgba(17, 18, 20, .28); } }
+.dm-editor { position: fixed; top: 0; right: 0; bottom: 0; z-index: 1045; width: min(560px, 100vw); display: flex; flex-direction: column;
+    background: var(--dm-card); border-left: 1px solid var(--dm-border); box-shadow: -20px 0 50px rgba(0, 0, 0, .35); color: var(--dm-text); }
+.dm-editor:focus { outline: none; }
+.dm-editor-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--dm-border); background: var(--dm-card-head); }
+.dm-editor-head-text { min-width: 0; }
+.dm-editor-title { font-size: 16px; font-weight: 500; margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dm-editor-sub { color: var(--dm-muted); font-size: 12.5px; margin-top: 3px; word-break: break-all; }
+.dm-editor-head .dm-icon-btn { margin-left: auto; }
+.dm-editor-body { padding: 18px 20px; overflow-y: auto; flex: 1 1 auto; }
+.dm-editor-foot { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--dm-border); background: var(--dm-card-head); }
+.dm-editor-foot-right { margin-left: auto; display: flex; gap: 8px; }
+.dm-editor-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--dm-border-soft); }
+.dm-editor-section-label { font-size: 11.5px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--dm-muted); margin: 0 0 8px; }
+.dm-editor-note { display: flex; gap: 8px; padding: 10px 12px; border-radius: 6px; background: var(--dm-info-soft); color: var(--dm-text-2); font-size: 12.5px; margin-top: 16px; }
+.dm-editor-note .bi { color: var(--dm-info); margin-top: 2px; flex: 0 0 auto; }
+/* Seite hinter dem geöffneten Editor nicht scrollen (ohne JavaScript, :has) */
+body:has(.dm-editor) { overflow: hidden; }
+
+.dm-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 6px;
+    border: 1px solid transparent; color: var(--dm-muted); background: transparent; text-decoration: none; }
+.dm-icon-btn:hover, .dm-icon-btn:focus-visible { border-color: var(--dm-border); color: var(--dm-text); background: var(--dm-card); }
+
+/* ---------- 10. DIFF-Darstellung ---------- */
+.dm-diff { border: 1px solid var(--dm-border); border-radius: 6px; background: var(--dm-input); overflow: hidden; }
+.dm-diff-summary { padding: 6px 10px; font-size: 12px; color: var(--dm-muted); border-bottom: 1px solid var(--dm-border-soft); }
+.dm-diff-summary:empty { display: none; }
+.dm-diff-line { display: flex; gap: 10px; padding: 7px 10px; font-family: var(--dm-mono); font-size: 12px; line-height: 1.55; }
+.dm-diff-line + .dm-diff-line { border-top: 1px solid var(--dm-border-soft); }
+.dm-diff-mark { flex: 0 0 12px; font-weight: 700; }
+.dm-diff-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-all; }
+.dm-diff-len { flex: 0 0 auto; color: var(--dm-muted); font-family: inherit; font-size: 11px; white-space: nowrap; align-self: flex-start; }
+.dm-diff-same { color: var(--dm-text-2); }
+.dm-diff-del { color: var(--dm-err); background: var(--dm-err-soft); }
+.dm-diff-add { color: var(--dm-ok); background: var(--dm-ok-soft); }
+.dm-diff-chg { color: inherit; padding: 0 1px; border-radius: 2px; }
+.dm-diff-del .dm-diff-chg { background: var(--dm-err-line); text-decoration: line-through; text-decoration-thickness: 1px; }
+.dm-diff-add .dm-diff-chg { background: var(--dm-ok-soft); outline: 1px solid var(--dm-ok); outline-offset: -1px; }
+.dm-diff-fold { color: var(--dm-muted); font-style: italic; }
+.dm-diff-toggle { display: inline; margin-left: 6px; padding: 0; border: 0; background: none; color: var(--dm-accent-text); font-family: inherit;
+    font-size: 11px; text-decoration: underline; cursor: pointer; }
+
+/* ---------- 11. Toasts auch ohne JavaScript sichtbar (U1-B1) ---------- */
+html.no-js .toast { display: block; opacity: 1; }
+html.no-js .toast .btn-close { display: none; }
+
+/* ---------- 12. Fehlerseite im Layout (U0-B6) ---------- */
+.dm-error-page { max-width: 560px; margin: 48px auto; }
+.dm-error-page .dm-empty > .bi { color: var(--dm-err); }

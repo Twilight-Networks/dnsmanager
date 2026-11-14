@@ -6,13 +6,18 @@
  *        Login erzeugte Session-ID serverseitig (Umgebungsvariable UIG_SID), weil das Session-Cookie der Anwendung
  *        „Secure“ ist und der Server nur lokal über HTTP (127.0.0.1, SSH-Tunnel) erreichbar ist.
  *        UIG_NOJS=1 entfernt alle <script>-Elemente (Darstellung ohne JavaScript).
+ *        /dnsmanager-ui/__ui/ liefert die Testseiten aus tests/ui/showcase (U3), nicht Teil der Anwendung.
  *        Nur für Screenshots der isolierten Testkopie; kein Bestandteil der Anwendung.
  */
 $app = '/tmp/dnsmgr-uig/app/web';
 $uri = (string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 if (!str_starts_with($uri, '/dnsmanager-ui/')) { http_response_code(404); echo 'nicht gefunden'; return true; }
-$file = realpath($app . '/' . substr($uri, strlen('/dnsmanager-ui/')));
-if ($file === false || !str_starts_with($file, $app . '/') || is_dir($file)) { http_response_code(404); echo 'nicht gefunden'; return true; }
+// U3: Testseiten des Harness (Bausteinübersicht, DIFF-Prüfseite) unter /dnsmanager-ui/__ui/, aus /tmp/dnsmgr-uig/ui
+$base = $app;
+$rel = substr($uri, strlen('/dnsmanager-ui/'));
+if (str_starts_with($rel, '__ui/')) { $base = '/tmp/dnsmgr-uig/ui'; $rel = substr($rel, strlen('__ui/')); }
+$file = realpath($base . '/' . $rel);
+if ($file === false || !str_starts_with($file, $base . '/') || is_dir($file)) { http_response_code(404); echo 'nicht gefunden'; return true; }
 
 if (!str_ends_with($file, '.php')) {
     $types = ['css' => 'text/css', 'js' => 'application/javascript', 'png' => 'image/png', 'ico' => 'image/x-icon', 'svg' => 'image/svg+xml',
