@@ -49,8 +49,8 @@ const DmDiff = (function () {
             parent.appendChild(document.createTextNode(text));
             return;
         }
-        // Am Zeilenanfang nur das Ende zeigen, am Zeilenende nur den Anfang, dazwischen beide Ränder
-        const head = position === 'start' ? '' : c.slice(0, KEEP).join('');
+        // Zeilenanfang bleibt immer sichtbar (Name, TTL, Typ); am Zeilenende genügt der Anfang des Abschnitts
+        const head = c.slice(0, KEEP).join('');
         const tail = position === 'end' ? '' : c.slice(c.length - KEEP).join('');
         const hidden = c.length - Array.from(head).length - Array.from(tail).length;
         const shortSpan = document.createElement('span');
