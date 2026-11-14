@@ -5,6 +5,7 @@
  *        Liefert die Testkopie unter /dnsmanager-ui/ aus. Für angemeldete Rollen setzt er die zuvor per regulärem
  *        Login erzeugte Session-ID serverseitig (Umgebungsvariable UIG_SID), weil das Session-Cookie der Anwendung
  *        „Secure“ ist und der Server nur lokal über HTTP (127.0.0.1, SSH-Tunnel) erreichbar ist.
+ *        UIG_NOJS=1 entfernt alle <script>-Elemente (Darstellung ohne JavaScript).
  *        Nur für Screenshots der isolierten Testkopie; kein Bestandteil der Anwendung.
  */
 $app = '/tmp/dnsmgr-uig/app/web';
@@ -19,6 +20,12 @@ if (!str_ends_with($file, '.php')) {
     header('Content-Type: ' . ($types[strtolower(pathinfo($file, PATHINFO_EXTENSION))] ?? 'application/octet-stream'));
     readfile($file);
     return true;
+}
+
+// No-JS-Modus (UIG_NOJS=1): alle <script>-Elemente aus der Antwort entfernen, damit der Browser die Seite wie mit
+// abgeschaltetem JavaScript rendert (Edge headless erzeugt mit scriptEnabled=false keine Screenshots)
+if (getenv('UIG_NOJS') === '1') {
+    ob_start(fn(string $html) => preg_replace('#<script[^>]*>.*?</script>#is', '', $html));
 }
 
 $sid = (string)getenv('UIG_SID');
