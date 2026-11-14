@@ -98,6 +98,7 @@ if [ "$MODE" = serve ]; then
   if [ "${UIG_RECORDS_MATRIX:-0}" = 1 ]; then
     # U4-Core: Fälle und Erfassungsskript der Record-Matrix unter /__ui/, Ablage der Erfassung in $T/upload
     install -m 644 -o root -g root $H/records/capture.js $T/ui/capture.js
+    install -m 644 -o root -g root $H/records/preview_race.js $T/ui/preview_race.js   # U4-UI: Browsertest der Live-Vorschau
     php $H/records/matrix.php --cases-json > $T/ui/cases.json && chmod 644 $T/ui/cases.json
     install -d -m 700 -o www-data -g www-data $T/upload
   fi

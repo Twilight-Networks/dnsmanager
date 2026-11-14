@@ -28,6 +28,10 @@ function parseDKIMFile(string $filePath) {
     // Optional zusätzliche Parameter extrahieren
     $params = extractDKIMParameters($content);
 
+    // U2-B3: Die Datei (selector._domainkey IN TXT …) enthält keine Domain; bisher war $domain undefiniert
+    // (PHP-Warnung, Wert null). Rückgabevertrag unverändert: Schlüssel 'domain' mit null.
+    $domain = null;
+
     return array_merge([
         'selector' => $selector,
         'domain'   => $domain,

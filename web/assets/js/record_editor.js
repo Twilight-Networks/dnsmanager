@@ -6,8 +6,9 @@
  * - Anlage: Typwechsel blendet den Feldbereich des Typs ein und deaktiviert alle anderen (deaktivierte Felder werden
  *   nicht gesendet). Kein Zusammensetzen von Name oder Inhalt im Browser – das erledigt ausschließlich der Server.
  * - Live-Vorschau: Eingabeänderungen werden entprellt (VORSCHAU_MS) an actions/record_preview.php gesendet
- *   (FormData des Formulars inkl. CSRF). Jede Anfrage erhält eine Folgenummer; eine laufende Anfrage wird
- *   abgebrochen, und nur die Antwort der neuesten Anfrage wird dargestellt (überholte Antworten werden verworfen).
+ *   (FormData des Formulars inkl. CSRF). Schon jedes Eingabeereignis erhöht die Folgenummer und bricht eine laufende
+ *   Anfrage ab; nur die Antwort zur neuesten Eingabe wird dargestellt (überholte Antworten werden verworfen, auch
+ *   wenn sie noch während der Entprellung eintreffen).
  *   Während der Aktualisierung ist der Bereich als veraltet gekennzeichnet (aria-busy).
  * - Darstellung: DIFF über DmDiff.render() (U3), Fehler als Liste; ungültige Eingaben ergeben keinen DIFF.
  * - Nur DOM-Methoden (textContent, cloneNode); keine Inline-Handler, kein innerHTML mit Daten (CSP, U2).
@@ -147,11 +148,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function request() {
         timer = null;
-        seq += 1;
+        // Folgenummer wurde bereits beim Eingabeereignis erhöht (schedule); diese Anfrage gehört zur neuesten Eingabe
         const mySeq = seq;
-        if (controller) {
-            controller.abort();
-        }
         controller = typeof AbortController === 'function' ? new AbortController() : null;
         const body = new FormData(form);
         body.delete('preview');
@@ -182,7 +180,14 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function schedule() {
-        // Sofort als veraltet kennzeichnen; Anfrage erst nach der Entprellung
+        // U4U-R1: Jedes Eingabeereignis macht alle bisherigen Anfragen sofort ungültig (neue Folgenummer, laufende
+        // Anfrage abbrechen). Eine ältere Antwort, die während der Entprellung eintrifft, aktualisiert daher weder den
+        // DIFF noch beendet sie den Pending-Status. Die Anfrage selbst folgt erst nach der Entprellung.
+        seq += 1;
+        if (controller) {
+            controller.abort();
+            controller = null;
+        }
         setPending(true);
         if (timer !== null) {
             clearTimeout(timer);

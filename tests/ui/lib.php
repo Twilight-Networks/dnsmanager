@@ -70,7 +70,9 @@ function cgi(string $method, string $path, string $body, array &$cookies, array 
         'SCRIPT_NAME' => "/dnsmanager-ui/$script", 'REQUEST_URI' => "/dnsmanager-ui/$path", 'QUERY_STRING' => $query, 'HTTP_HOST' => 'ui-golden.test',
         'SERVER_NAME' => 'ui-golden.test', 'SERVER_PORT' => '443', 'HTTPS' => 'on', 'REMOTE_ADDR' => '192.0.2.57', 'HTTP_ACCEPT_LANGUAGE' => 'de',
         'CONTENT_TYPE' => 'application/x-www-form-urlencoded', 'CONTENT_LENGTH' => (string)strlen($body),
-        'HTTP_COOKIE' => implode('; ', array_map(fn($k, $v) => "$k=$v", array_keys($cookies), $cookies)), 'PATH' => '/usr/sbin:/usr/bin:/bin'] + $extraEnv;
+        'HTTP_COOKIE' => implode('; ', array_map(fn($k, $v) => "$k=$v", array_keys($cookies), $cookies)), 'PATH' => '/usr/sbin:/usr/bin:/bin'];
+    // Zusätzliche Werte überschreiben die Vorgaben (z. B. CONTENT_TYPE multipart/form-data für Datei-Uploads, U4-UI)
+    $env = $extraEnv + $env;
     $cmd = array_merge(['sudo', '-u', 'www-data', 'env', '-i'], array_map(fn($k, $v) => "$k=$v", array_keys($env), $env),
         ['php-cgi', '-d', 'session.save_path=' . T . '/sess', '-d', 'error_log=' . T . '/app.log', '-d', 'log_errors=1', '-d', 'display_errors=0', '-d', 'opcache.enable=0']);
     $p = proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);

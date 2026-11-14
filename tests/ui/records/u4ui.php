@@ -13,7 +13,9 @@
  *        N  No-JS-Vorschau (POST auf pages/records.php): CSRF, gleiche Zeile wie der Endpunkt, Eingaben erhalten;
  *        E3 zone_file_record_line(): erzeugte Zonendateien von Basis- und neuem Stand bytegenau gleich (inkl. langer
  *           DKIM-Records), named-checkzone ok (nur mit Basis-Anwendung, UIG_BASE_SHA);
- *        G  Zonenauswahl mit mehr als 500 berechtigten Zonen (admin und zoneadmin), alle erreichbar.
+ *        G  Zonenauswahl mit mehr als 500 berechtigten Zonen (admin und zoneadmin), alle erreichbar;
+ *        D  DKIM-Upload mit echter OpenDKIM-Datei (opendkim-genkey): Vorschau und Speichern ohne PHP-Warnung, Vorschau =
+ *           gespeicherter Record, ungültige Uploads abgelehnt, Rückgabevertrag von parseDKIMFile() unverändert (U4U-R2).
  * Aufruf (über run.sh matrix): php u4ui.php <js_posts.json> [<Basis-Anwendung>]
  */
 require __DIR__ . '/../lib.php';
@@ -281,6 +283,109 @@ foreach (['admin' => [603, range(1001, 1600)], 'zoneadmin' => [551, range(1001, 
         && ($role === 'admin' || !array_intersect($ids, range(1551, 1600))), 'G-' . $role,
         sprintf('%d Zonen in der Auswahl (erwartet %d), alle berechtigten erreichbar, keine fremden; %d ms', count($ids), $expect, $ms));
 }
+
+// ---------- D: DKIM-Upload mit echter OpenDKIM-Datei (U4U-R2, U2-B3) ----------
+/** Multipart-Body wie ein Browser (Felder und optional eine Datei) */
+function multipart(array $pairs, ?array $file): array
+{
+    $b = '----u4uiBoundary' . bin2hex(random_bytes(6));
+    $body = '';
+    foreach ($pairs as [$n, $v]) {
+        $body .= "--$b\r\nContent-Disposition: form-data; name=\"$n\"\r\n\r\n$v\r\n";
+    }
+    if ($file !== null) {
+        $body .= "--$b\r\nContent-Disposition: form-data; name=\"dkim_file\"; filename=\"{$file[0]}\"\r\nContent-Type: text/plain\r\n\r\n{$file[1]}\r\n";
+    }
+    return [$body . "--$b--\r\n", "multipart/form-data; boundary=$b"];
+}
+function postMultipart(string $path, array $pairs, ?array $file, array &$c): array
+{
+    $pairs[] = ['csrf_token', csrfFromSession($c)];
+    [$body, $ct] = multipart($pairs, $file);
+    return cgi('POST', $path, $body, $c, ['CONTENT_TYPE' => $ct]);
+}
+$genDir = T . '/u4ui-dkim';
+if (!is_dir($genDir)) { mkdir($genDir, 0700); }
+exec('opendkim-genkey -D ' . escapeshellarg($genDir) . ' -s u4dkim -d u0.test -b 2048 2>&1', $genOut, $genRc);
+$dkimFile = $genRc === 0 ? (string)file_get_contents("$genDir/u4dkim.txt") : '';
+@unlink("$genDir/u4dkim.private");
+$ok($genRc === 0 && str_starts_with($dkimFile, 'u4dkim._domainkey') && str_contains($dkimFile, 'p=MII'), 'D01',
+    'echte DKIM-Datei mit opendkim-genkey (RSA 2048, ' . strlen($dkimFile) . ' Bytes; privater Schlüssel sofort gelöscht)');
+// Formularfelder der DKIM-Anlage wie ein Browser ohne Eingabe in Selector/Schlüssel (Werte kommen aus der Datei)
+$dkimForm = [['zone_id', '1'], ['type', 'DKIM'], ['ttl', 'auto'], ['dkim_selector', ''], ['dkim_subdomain', ''], ['dkim_key_type', 'rsa'],
+    ['dkim_hash_algos', ''], ['dkim_flags', ''], ['dkim_key', '']];
+
+reset4();
+$c = session('admin');
+cgi('GET', 'pages/records.php?zone_id=1&add_new=1&type=DKIM', '', $c);
+$off = logOffset();
+$s0 = snap();
+$rPv = postMultipart('actions/record_preview.php', $dkimForm, ['u4dkim.txt', $dkimFile], $c);
+$pv = json_decode($rPv['body'], true);
+$logPv = logSince($off);
+$ok(($pv['status'] ?? '') === 'ok' && str_starts_with((string)$pv['newLine'], "u4dkim._domainkey\t3600\tIN\tTXT\t\"v=DKIM1; k=rsa;\" \"p=MII")
+    && snap() === $s0, 'D02', 'Vorschau mit Datei: gültig, keine Schreibzugriffe – ' . substr((string)($pv['newLine'] ?? json_encode($pv)), 0, 70) . '…');
+$ok(array_filter($logPv, fn($l) => preg_match('/php_error|PHP (Warning|Notice|Deprecated)|Undefined variable/', $l)) === [], 'D03',
+    'Vorschau ohne PHP-Warnung (' . count($logPv) . ' Logzeilen)');
+$off = logOffset();
+$rSave = postMultipart('actions/record_add.php', $dkimForm, ['u4dkim.txt', $dkimFile], $c);
+$logSave = logSince($off);
+$row = $GLOBALS['root']->query('SELECT name, type, content, ttl FROM `' . DB . '`.records WHERE id > 1000')->fetchAll(PDO::FETCH_ASSOC);
+$lines = zoneLines($pdo, 1);
+$storedLine = count($row) === 1 ? zone_file_record_line($row[0], 3600) : null;
+$ok($rSave['status'] === 302 && count($row) === 1 && str_starts_with((string)(toasts($c)[0] ?? ''), 'success'), 'D04',
+    'Speichern mit Datei: Record angelegt (' . ($row[0]['name'] ?? '-') . ', TTL ' . ($row[0]['ttl'] ?? '-') . ')');
+$ok($storedLine !== null && $storedLine === $pv['newLine'] && in_array($pv['newLine'], $lines, true), 'D05',
+    'Vorschau = gespeicherter Record = Zeile der erzeugten Zonendatei (bytegenau)');
+$ok(array_filter($logSave, fn($l) => preg_match('/php_error|PHP (Warning|Notice|Deprecated)|Undefined variable/', $l)) === [], 'D06',
+    'Speichern ohne PHP-Warnung (' . count($logSave) . ' Logzeilen, nur Anwendungsmeldungen)');
+// Ungültige Uploads: Vorschau ungültig mit bisheriger Meldung, Speichern lehnt ab (Fehler-Toast, nichts gespeichert)
+$bad = [
+    'zu groß'        => ['u4dkim.txt', $dkimFile . str_repeat("; Kommentar zum Auffüllen\n", 80), 'record_error_dkim_file_too_large'],
+    'Endung .pem'    => ['u4dkim.pem', $dkimFile, 'record_error_dkim_invalid_extension'],
+    'ohne Endung'    => ['u4dkim', $dkimFile, 'record_error_dkim_invalid_extension'],
+    'PHP-Code'       => ['u4dkim.txt', "<?php echo 1; ?>\n" . $dkimFile, 'record_error_dkim_invalid_code'],
+    'nicht lesbar'   => ['u4dkim.txt', "kein DKIM-Inhalt\n", 'record_error_dkim_parse_failed'],
+];
+$lang = require APP . '/web/lang/de.php';
+$bFail = [];
+foreach ($bad as $label => [$fname, $content, $key]) {
+    reset4();
+    $c = session('admin');
+    cgi('GET', 'pages/records.php?zone_id=1&add_new=1&type=DKIM', '', $c);
+    $off = logOffset();
+    $pv = json_decode(postMultipart('actions/record_preview.php', $dkimForm, [$fname, $content], $c)['body'], true);
+    $s0 = snap();
+    $r = postMultipart('actions/record_add.php', $dkimForm, [$fname, $content], $c);
+    $t = toasts($c)[0] ?? '';
+    $log = logSince($off);
+    $expected = trim(html_entity_decode(strip_tags($lang[$key]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    if (($pv['status'] ?? '') !== 'invalid' || ($pv['errors'] ?? []) !== [$expected] || snap()['records'] !== $s0['records']
+        || !str_contains($t, $lang[$key]) || array_filter($log, fn($l) => preg_match('/php_error|PHP (Warning|Notice|Deprecated)/', $l)) !== []) {
+        $bFail[] = "$label: " . json_encode([$pv['status'] ?? null, $pv['errors'] ?? null, $t], JSON_UNESCAPED_UNICODE);
+    }
+}
+$ok($bFail === [], 'D07', count($bad) . ' ungültige Uploads (zu groß, falsche/fehlende Endung, PHP-Code, nicht lesbar): Vorschau ungültig mit der bisherigen Meldung, Speichern abgelehnt, nichts gespeichert, keine PHP-Warnung' . ($bFail ? ': ' . implode(' | ', $bFail) : ''));
+// Rückgabevertrag von parseDKIMFile(): Basis ↔ neu gleich; nur die Basis erzeugt die Warnung (Gegenprobe)
+if ($baseApp !== '' && is_dir($baseApp)) {
+    file_put_contents("$genDir/u4dkim.txt", $dkimFile);
+    $probe = function (string $app) use ($genDir): array {
+        $code = 'set_error_handler(function($n,$m){echo "WARN:",$m,"\n";return true;});'
+            . 'require ' . var_export($app . '/web/inc/dkim_helpers.php', true) . ';'
+            . 'echo json_encode(parseDKIMFile(' . var_export("$genDir/u4dkim.txt", true) . '));';
+        exec('php -r ' . escapeshellarg($code) . ' 2>&1', $out);
+        $warn = array_values(array_filter($out, fn($l) => str_starts_with($l, 'WARN:')));
+        $json = array_values(array_filter($out, fn($l) => !str_starts_with($l, 'WARN:')));
+        return [$warn, json_decode(implode('', $json), true)];
+    };
+    [$wBase, $resBase] = $probe($baseApp);
+    [$wNew, $resNew] = $probe(APP);
+    $ok($resBase === $resNew && is_array($resNew) && array_key_exists('domain', $resNew) && $resNew['domain'] === null
+        && $wNew === [] && $wBase !== [] && str_contains($wBase[0], 'domain'), 'D08',
+        'parseDKIMFile(): Rückgabe Basis = neu (Schlüssel ' . implode(', ', array_keys($resNew ?? [])) . '; domain null); Warnung nur in der Basis: ' . ($wBase[0] ?? '-'));
+}
+@unlink("$genDir/u4dkim.txt");
+@rmdir($genDir);
 
 // ---------- E3: Zonendateien Basis ↔ neu bytegenau ----------
 if ($baseApp !== '' && is_dir($baseApp)) {
