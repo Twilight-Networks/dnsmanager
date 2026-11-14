@@ -14,6 +14,7 @@ require_once __DIR__ . '/../inc/app/records/RecordService.php';
 require_once __DIR__ . '/../inc/deploy/BindZoneBuildBackend.php';
 require_once __DIR__ . '/../inc/app/records/RecordContentBuilder.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
+require_once __DIR__ . '/../inc/app/records/RecordReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 require_once __DIR__ . '/../inc/web/record_messages.php';
 
@@ -24,14 +25,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $zone_id = isset($_POST['zone_id']) ? (int)$_POST['zone_id'] : 0;
 
     $raw_type = $_POST['type'] ?? '';
-    $is_dkim = !empty($_POST['is_dkim']); // z. B. aus hidden input
 
-    // Sonderfall: Wenn DKIM als TXT gespeichert wird, aber speziell validiert werden muss
-    // (Validator-Typ wird vor dem Zusammensetzen aus dem ursprünglichen Typ bestimmt, z. B. SPF -> TXT)
-    $validator_type = ($raw_type === 'TXT' && $is_dkim) ? 'DKIM' : $raw_type;
+    // Gespeicherter Record als Ausgangspunkt der Zusammensetzung (U4-Core): nur über den Read-Service mit
+    // Zonenberechtigung in derselben Abfrage; ohne Berechtigung oder unbekannt bleibt er leer. Die autoritativen
+    // Prüfungen (Berechtigung unter Sperre, Existenz, Schutzregeln) erfolgen unverändert im RecordService.
+    $readActor = actorFromSession();
+    $readAccess = new ZoneAccess($pdo);
+    $recordView = (new RecordReadService($pdo, $readAccess))->getZoneRecordView($readActor, $zone_id);
+    $existingRecord = null;
+    foreach ($recordView['records'] ?? [] as $rec) {
+        if ($rec['id'] === $id) {
+            $existingRecord = ['name' => $rec['name'], 'type' => $rec['type'], 'content' => $rec['content']];
+            break;
+        }
+    }
 
-    // Content zusammensetzen (inkl. spezieller Typ-Logik)
-    $result = RecordContentBuilder::build($raw_type, $_POST);
+    // Content zusammensetzen (U4-Core: einzige serverseitige Zusammensetzung; Prüftyp und DKIM-Kennzeichen vom Builder)
+    $result = RecordContentBuilder::build($raw_type, $_POST, [
+        'mode' => 'update', 'zoneName' => (string)($recordView['zone']['name'] ?? ''), 'existing' => $existingRecord,
+    ]);
 
     if (isset($result['errorCode'])) {
         // Zonenname nur für die Logzeile; über den ZoneReadService (nur bei Leseberechtigung, sonst leer)
@@ -49,6 +61,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $type    = $result['type'];
     $name    = $result['name'];
     $content = $result['content'];
+    $is_dkim = $result['isDkim'];
+    $validator_type = $result['validationType'];
     // TTL auf Basis des Record-Typs setzen, wenn "auto" gewählt wurde
     $ttl_raw = $_POST['ttl'] ?? '';
     $ttl = ($ttl_raw === 'auto') ? getAutoTTL($type) : (int)$ttl_raw;

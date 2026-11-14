@@ -12,6 +12,15 @@
 $app = '/tmp/dnsmgr-uig/app/web';
 $uri = (string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 if (!str_starts_with($uri, '/dnsmanager-ui/')) { http_response_code(404); echo 'nicht gefunden'; return true; }
+// U4-Core: Ablage der im Browser erfassten JS-Formulardaten der Record-Matrix (nur mit UIG_UPLOAD=1, d. h.
+// UIG_RECORDS_MATRIX=1 im Serve-Modus; Server lauscht nur auf 127.0.0.1). Feste Zieldatei, höchstens 2 MiB.
+if ($uri === '/dnsmanager-ui/__ui/upload' && getenv('UIG_UPLOAD') === '1' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+    $data = (string)file_get_contents('php://input', false, null, 0, 2 * 1024 * 1024 + 1);
+    $ok = strlen($data) <= 2 * 1024 * 1024 && is_array(json_decode($data, true))
+        && file_put_contents('/tmp/dnsmgr-uig/upload/js_posts.json', $data) !== false;
+    http_response_code($ok ? 204 : 400);
+    return true;
+}
 // U3: Testseiten des Harness (Bausteinübersicht, DIFF-Prüfseite) unter /dnsmanager-ui/__ui/, aus /tmp/dnsmgr-uig/ui
 $base = $app;
 $rel = substr($uri, strlen('/dnsmanager-ui/'));
