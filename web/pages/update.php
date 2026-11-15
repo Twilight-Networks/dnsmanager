@@ -57,36 +57,23 @@ foreach ($result->messages as $message) {
 
 // Layout einbinden
 include __DIR__ . '/../templates/layout.php';
+
+echo ui_page_header($LANG['update_check'], ['subtitle' => sprintf($LANG['update_installed'], $current_version)]);
+if ($error) {
+    echo ui_notice('err', $LANG['update_error'] . ':', ['text' => $error, 'role' => 'alert']);
+} elseif ($update_available) {
+    $links = '';
+    if ($download_url) {
+        $links .= '<a href="' . ui_e($download_url) . '" class="btn btn-sm btn-outline-primary" target="_blank" rel="noopener">' . ui_e($LANG['update_download']) . '</a>';
+    }
+    if ($changelog_url) {
+        $links .= '<a href="' . ui_e($changelog_url) . '" class="btn btn-sm btn-outline-primary" target="_blank" rel="noopener">' . ui_e($LANG['update_changelog']) . '</a>';
+    }
+    echo ui_notice('warn', strip_tags($LANG['update_available']), [
+        'text' => strip_tags(sprintf($LANG['update_version'], $remote_version)) . ' (' . strip_tags(sprintf($LANG['update_released'], $release_date)) . ')',
+        'actionsHtml' => $links,
+    ]);
+} else {
+    echo ui_notice('ok', strip_tags(sprintf($LANG['update_current'], $current_version)));
+}
 ?>
-
-<br>
-<br>
-<h2><?= $LANG['update_check'] ?></h2>
-<br>
-
-<?php if ($error): ?>
-    <div class="alert alert-danger">
-        ❌ <?= htmlspecialchars($LANG['update_error'] . ': ' . $error) ?>
-    </div>
-<?php elseif ($update_available): ?>
-    <div class="alert alert-warning">
-        ⚠️ <?= $LANG['update_available'] ?><br><br>
-        <strong><?= sprintf($LANG['update_version'], htmlspecialchars($remote_version)) ?></strong>
-        (<?= sprintf($LANG['update_released'], htmlspecialchars($release_date)) ?>)
-        <br><br>
-        <?php if ($download_url): ?>
-            <a href="<?= htmlspecialchars($download_url) ?>" class="btn btn-sm btn-outline-primary" target="_blank">
-                <?= $LANG['update_download'] ?>
-            </a>
-        <?php endif; ?>
-        <?php if ($changelog_url): ?>
-            <a href="<?= htmlspecialchars($changelog_url) ?>" class="btn btn-sm btn-outline-primary" target="_blank">
-                <?= $LANG['update_changelog'] ?>
-            </a>
-        <?php endif; ?>
-    </div>
-<?php else: ?>
-    <div class="alert alert-success">
-        ✅ <?= sprintf($LANG['update_current'], htmlspecialchars($current_version)) ?>
-    </div>
-<?php endif; ?>

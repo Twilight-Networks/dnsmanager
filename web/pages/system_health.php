@@ -99,207 +99,93 @@ foreach ($diag_problems['server'] as $problem) {
     $remote_outputs[] = "<strong>$server</strong><br><pre>$output</pre>";
     $remote_output_classes[] = ($problem['status'] ?? null) === 'warning' ? 'alert-warning' : 'alert-danger';
 }
-?>
 
-<br>
-<br>
-<h2 class="mb-4"><?= $LANG['system_status'] ?></h2>
+/**
+ * Prüfzeile (U5b): Bezeichnung, Ergebnis, Status; Details aufklappbar (<details>, ohne JavaScript).
+ * $variant: ok|warn|err; $bodyHtml leer = keine Details
+ */
+$checkRow = static function (string $label, string $value, string $variant, string $statusText, string $bodyHtml = ''): string {
+    $chip = ui_chip($statusText, $variant, ['ok' => 'check-circle', 'warn' => 'exclamation-triangle', 'err' => 'x-circle'][$variant] ?? null);
+    $head = '<span class="dm-check-label">' . ui_e($label) . '</span><span class="dm-check-value">' . $value . '</span><span class="dm-check-status">' . $chip . '</span>';
+    if ($bodyHtml === '') {
+        return '<div class="dm-check">' . $head . '</div>';
+    }
+    return '<details class="dm-check dm-check-' . $variant . '"><summary>' . $head . '</summary><div class="dm-check-body">' . $bodyHtml . '</div></details>';
+};
+$entries = static function (array $items, string $variant): string {
+    $html = '';
+    foreach ($items as $entry) {
+        $html .= '<div class="dm-diagnostic dm-diagnostic-' . $variant . '">' . $entry . '</div>';
+    }
+    return $html;
+};
 
-<form method="post" action="pages/system_health.php" class="mb-3">
-    <?= csrf_input() ?>
-    <input type="hidden" name="force_update" value="1">
-    <button type="submit" class="btn btn-sm btn-outline-primary">
-        🔄 <?= $LANG['system_update_now'] ?>
-    </button>
-</form>
+$refresh = '<form method="post" action="pages/system_health.php" class="d-inline">' . csrf_input()
+    . '<input type="hidden" name="force_update" value="1">'
+    . '<button type="submit" class="btn btn-outline-primary">' . ui_icon('arrow-repeat') . ' ' . ui_e($LANG['system_update_now']) . '</button></form>';
+echo ui_page_header($LANG['system_status'], ['subtitle' => $LANG['system_health_sub'], 'actionsHtml' => $refresh]);
 
-<div class="card mb-4">
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-bordered align-middle">
-                <tbody>
-                    <!-- Konfigurationsprüfung -->
-                    <tr<?= empty($config_issues) ? '' : ' class="app-clickable" data-toggle-row="config-issues-row"' ?>>
-                        <th><?= $LANG['config_check'] ?></th>
-                        <td><?= empty($config_issues)
-                            ? $LANG['config_ok']
-                            : sprintf($LANG['config_errors_found'], count($config_issues)) ?></td>
-                            <td class="text-<?= empty($config_issues) ? 'success' : 'danger' ?>">
-                                <?= empty($config_issues)
-                                    ? '✅ ' . $LANG['status_ok']
-                                    : '❌ ' . $LANG['status_error'] ?>
-                            </td>
-                    </tr>
-                    <?php if (!empty($config_issues)): ?>
-                    <tr id="config-issues-row" class="app-hidden">
-                        <td colspan="3">
-                        <div class="alert alert-danger small mb-3">
-                            <strong>⚠️ <?= $LANG['hint'] ?>:</strong> <?= $LANG['config_hint'] ?> <code>ui_config.php</code>.<br><br>
-                            <ul class="mb-0">
-                                <?php foreach ($config_issues as $issue): ?>
-                                    <li><?= htmlspecialchars($issue) ?></li>
-                                <?php endforeach; ?>
-                            </ul>
-                        </div>
-                        </td>
-                    </tr>
-                    <?php endif; ?>
+echo ui_card_open($LANG['system_health_local'], ['flush' => true]);
+// Konfigurationsprüfung
+$configBody = '';
+if (!empty($config_issues)) {
+    $configBody = '<p class="mb-2"><strong>' . ui_e($LANG['hint']) . ':</strong> ' . $LANG['config_hint'] . ' <code>ui_config.php</code>.</p><ul class="mb-0">';
+    foreach ($config_issues as $issue) {
+        $configBody .= '<li>' . htmlspecialchars($issue) . '</li>';
+    }
+    $configBody .= '</ul>';
+}
+echo $checkRow($LANG['config_check'], ui_e(empty($config_issues) ? $LANG['config_ok'] : sprintf($LANG['config_errors_found'], count($config_issues))),
+    empty($config_issues) ? 'ok' : 'err', empty($config_issues) ? $LANG['status_ok'] : $LANG['status_error'], $configBody);
+// PHP-Version
+echo $checkRow($LANG['php_version_local'], '<span class="dm-mono">' . ui_e($php_version) . '</span>', $php_version_supported ? 'ok' : 'err',
+    $php_version_supported ? $LANG['status_ok'] : $LANG['status_outdated']);
+// PHP-Module
+$missing = array_keys(array_filter($php_modules, static fn ($loaded) => !$loaded));
+$moduleBody = '<ul class="dm-module-list">';
+foreach ($php_modules as $module => $loaded) {
+    $moduleBody .= '<li><span class="dm-mono">' . ui_e((string)$module) . '</span> ' . ($loaded ? ui_chip($LANG['status_ok'], 'ok') : ui_chip($LANG['status_missing'], 'err')) . '</li>';
+}
+$moduleBody .= '</ul>';
+echo $checkRow($LANG['php_modules_local'], ui_e(sprintf($LANG['php_modules_summary'], count($php_modules) - count($missing), count($php_modules))),
+    $missing === [] ? 'ok' : 'err', $missing === [] ? $LANG['status_ok'] : $LANG['status_missing'], $moduleBody);
+// Dateiberechtigungen
+$fileBody = '';
+if (!empty($file_issues)) {
+    $fileBody = '<p class="mb-2"><strong>' . ui_e($LANG['hint']) . ':</strong> ' . $LANG['file_permissions_hint'] . '</p>'
+        . '<div class="table-responsive"><table class="dm-table"><thead><tr><th>Datei</th><th>Ist</th><th>Soll</th></tr></thead><tbody>';
+    foreach ($file_issues as $issue) {
+        $fileBody .= '<tr><td class="dm-mono">' . htmlspecialchars($issue['path']) . '</td><td class="dm-mono">' . htmlspecialchars($issue['actual']) . '</td><td class="dm-mono">'
+            . htmlspecialchars(is_array($issue['expected'])
+                ? 'Owner: ' . $issue['expected']['owner'] . ', Group: ' . $issue['expected']['group'] . ', Perms: ' . $issue['expected']['perms']
+                : $issue['expected']) . '</td></tr>';
+    }
+    $fileBody .= '</tbody></table></div>';
+}
+echo $checkRow($LANG['file_permissions_local'], ui_e(empty($file_issues) ? $LANG['file_permissions_ok'] : sprintf($LANG['file_permissions_errors'], count($file_issues))),
+    empty($file_issues) ? 'ok' : 'err', empty($file_issues) ? $LANG['status_ok'] : $LANG['status_error'], $fileBody);
+echo ui_card_close();
 
-                    <!-- PHP-Version -->
-                    <tr>
-                        <th><?= $LANG['php_version_local'] ?></th>
-                        <td class="app-w-20"><?= htmlspecialchars($php_version) ?></td>
-                        <td class="text-<?= $php_version_supported ? 'success' : 'danger' ?>">
-                            <?= $php_version_supported
-                                ? '✅ ' . $LANG['status_ok']
-                                : '❌ ' . $LANG['status_outdated'] ?>
-                        </td>
-                    </tr>
-
-                    <!-- PHP-Module -->
-                    <tr>
-                        <th><?= $LANG['php_modules_local'] ?></th>
-                        <td>
-                            <?php foreach ($php_modules as $module => $loaded): ?>
-                                <?= htmlspecialchars($module) ?><br>
-                            <?php endforeach; ?>
-                        </td>
-                        <td>
-                            <?php foreach ($php_modules as $loaded): ?>
-                                <div class="text-<?= $loaded ? 'success' : 'danger' ?>">
-                                    <?= $loaded
-                                        ? '✅ ' . $LANG['status_ok']
-                                        : '❌ ' . $LANG['status_missing'] ?>
-                                </div>
-                            <?php endforeach; ?>
-                        </td>
-                    </tr>
-
-                    <!-- Dateiberechtigungen -->
-                    <tr<?= empty($file_issues) ? '' : ' class="app-clickable" data-toggle-row="file-issues-row"' ?>>
-                        <th><?= $LANG['file_permissions_local'] ?></th>
-                        <td><?= empty($file_issues)
-                            ? $LANG['file_permissions_ok']
-                            : sprintf($LANG['file_permissions_errors'], count($file_issues)) ?></td>
-                        <td class="text-<?= empty($file_issues) ? 'success' : 'danger' ?>">
-                            <?= empty($file_issues)
-                                ? '✅ ' . $LANG['status_ok']
-                                : '❌ ' . $LANG['status_error'] ?>
-                        </td>
-                    </tr>
-                    <?php if (!empty($file_issues)): ?>
-                    <tr id="file-issues-row" class="app-hidden">
-                        <td colspan="3">
-                            <div class="alert alert-danger small mb-3">
-                                <strong>⚠️ <?= $LANG['hint'] ?>:</strong> <?= $LANG['file_permissions_hint'] ?><br><br>
-                                    <table class="table table-sm table-bordered mb-0">
-                                    <thead class="table-light">
-                                        <tr>
-                                            <th>Datei</th>
-                                            <th>Ist</th>
-                                            <th>Soll</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <?php foreach ($file_issues as $issue): ?>
-                                            <tr>
-                                                <td><?= htmlspecialchars($issue['path']) ?></td>
-                                                <td><?= htmlspecialchars($issue['actual']) ?></td>
-                                                <td><?= htmlspecialchars(
-                                                    is_array($issue['expected'])
-                                                        ? 'Owner: ' . $issue['expected']['owner'] . ', Group: ' . $issue['expected']['group'] . ', Perms: ' . $issue['expected']['perms']
-                                                        : $issue['expected']
-                                                ) ?></td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </td>
-                    </tr>
-                    <?php endif; ?>
-
-                    <!-- Serverstatus -->
-                    <tr<?= empty($remote_outputs) ? '' : ' class="app-clickable" data-toggle-row="remotecheck-row"' ?>>
-                        <th><?= $LANG['server_status'] ?></th>
-                        <td><?= empty($remote_outputs)
-                            ? $LANG['server_ok']
-                            : sprintf($LANG[$remote_warnings ? 'server_warnings' : 'server_errors'], count($remote_outputs)) ?></td>
-                        <td class="text-<?= !empty($remote_errors) ? 'danger' : ($remote_warnings ? 'warning' : 'success') ?>">
-                            <?= !empty($remote_errors)
-                                ? '❌ ' . $LANG['status_error']
-                                : ($remote_warnings ? '⚠️ ' . $LANG['status_warning'] : '✅ ' . $LANG['status_ok']) ?>
-                        </td>
-                    </tr>
-                    <?php if (!empty($remote_outputs)): ?>
-                    <tr id="remotecheck-row" class="app-hidden">
-                        <td colspan="3">
-                            <?php foreach ($remote_outputs as $i => $entry): ?>
-                                <div class="alert <?= $remote_output_classes[$i] ?> small"><?= $entry ?></div>
-                            <?php endforeach; ?>
-                        </td>
-                    </tr>
-                    <?php endif; ?>
-
-                    <!-- named-checkconf -->
-                    <tr<?= empty($conf_outputs) ? '' : ' class="app-clickable" data-toggle-row="confcheck-row"' ?>>
-                        <th><?= $LANG['named_checkconf'] ?></th>
-                        <td><?= empty($conf_outputs)
-                            ? $LANG['named_checkconf_ok']
-                            : sprintf($LANG['named_checkconf_issues'], count($conf_outputs)) ?></td>
-                        <td class="text-<?= !empty($conf_errors) ? 'danger' : (!empty($conf_warnings) ? 'warning' : 'success') ?>">
-                            <?= !empty($conf_errors)
-                                ? '❌ ' . $LANG['status_error']
-                                : (!empty($conf_warnings)
-                                    ? '⚠️ ' . $LANG['status_warning']
-                                    : '✅ ' . $LANG['status_ok']) ?>
-                        </td>
-                    </tr>
-                    <?php if (!empty($conf_outputs)): ?>
-                    <tr id="confcheck-row" class="app-hidden">
-                        <td colspan="3">
-                            <?php
-                            $conf_class = !empty($conf_errors) ? 'alert-danger' : (!empty($conf_warnings) ? 'alert-warning' : 'alert-light');
-                            foreach ($conf_outputs as $entry): ?>
-                                <div class="alert <?= $conf_class ?> small"><?= $entry ?></div>
-                            <?php endforeach; ?>
-                        </td>
-                    </tr>
-                    <?php endif; ?>
-
-                    <!-- named-checkzone -->
-                    <tr<?= empty($outputs) ? '' : ' class="app-clickable" data-toggle-row="zonecheck-row"' ?>>
-                        <th><?= $LANG['named_checkzone'] ?></th>
-                        <td><?= empty($outputs)
-                            ? $LANG['named_checkzone_ok']
-                            : sprintf($LANG['named_checkzone_issues'], count($outputs)) ?></td>
-                        <td class="text-<?= $has_errors ? 'danger' : ($has_warnings ? 'warning' : 'success') ?>">
-                            <?= $has_errors
-                                ? '❌ ' . $LANG['status_error']
-                                : ($has_warnings ? '⚠️ ' . $LANG['status_warning'] : '✅ ' . $LANG['status_ok']) ?>
-                        </td>
-                    </tr>
-                    <?php if (!empty($outputs)): ?>
-                    <tr id="zonecheck-row" class="app-hidden">
-                        <td colspan="3">
-                            <?php
-                            $alert_class = $has_errors ? 'alert-danger' : ($has_warnings ? 'alert-warning' : 'alert-light');
-                            foreach ($outputs as $entry): ?>
-                                <div class="alert <?= $alert_class ?> small"><?= $entry ?></div>
-                            <?php endforeach; ?>
-                        </td>
-                    </tr>
-                    <?php endif; ?>
-
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
-<!-- JavaScript auslagern -->
-<?php
-AssetRegistry::enqueueScript('js/system_health.js');
+echo ui_card_open($LANG['system_health_dns'], ['flush' => true]);
+// Serverstatus (S42-E6: Warnungen sichtbar, solange kein Serverfehler vorliegt)
+$remoteBody = '';
+foreach ($remote_outputs as $i => $entry) {
+    $remoteBody .= '<div class="dm-diagnostic dm-diagnostic-' . ($remote_output_classes[$i] === 'alert-warning' ? 'warn' : 'err') . '">' . $entry . '</div>';
+}
+echo $checkRow($LANG['server_status'], ui_e(empty($remote_outputs) ? $LANG['server_ok'] : sprintf($LANG[$remote_warnings ? 'server_warnings' : 'server_errors'], count($remote_outputs))),
+    !empty($remote_errors) ? 'err' : ($remote_warnings ? 'warn' : 'ok'),
+    !empty($remote_errors) ? $LANG['status_error'] : ($remote_warnings ? $LANG['status_warning'] : $LANG['status_ok']), $remoteBody);
+// named-checkconf
+$confVariant = !empty($conf_errors) ? 'err' : (!empty($conf_warnings) ? 'warn' : 'ok');
+echo $checkRow($LANG['named_checkconf'], ui_e(empty($conf_outputs) ? $LANG['named_checkconf_ok'] : sprintf($LANG['named_checkconf_issues'], count($conf_outputs))),
+    $confVariant, $confVariant === 'err' ? $LANG['status_error'] : ($confVariant === 'warn' ? $LANG['status_warning'] : $LANG['status_ok']),
+    $entries($conf_outputs, $confVariant));
+// named-checkzone
+$zoneVariant = $has_errors ? 'err' : ($has_warnings ? 'warn' : 'ok');
+echo $checkRow($LANG['named_checkzone'], ui_e(empty($outputs) ? $LANG['named_checkzone_ok'] : sprintf($LANG['named_checkzone_issues'], count($outputs))),
+    $zoneVariant, $zoneVariant === 'err' ? $LANG['status_error'] : ($zoneVariant === 'warn' ? $LANG['status_warning'] : $LANG['status_ok']),
+    $entries($outputs, $zoneVariant));
+echo ui_card_close();
 ?>
 
 <?php include __DIR__ . '/../templates/layout_footer.php'; ?>

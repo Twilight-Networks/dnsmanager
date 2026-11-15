@@ -242,3 +242,33 @@ html.no-js .toast .btn-close { display: none; }
 .dm-diagnostics-more { margin-left: auto; font-size: 12.5px; color: var(--dm-accent-text); }
 .dm-diagnostics[open] .dm-diagnostics-more { visibility: hidden; }
 [data-dm-zone-reverse-only][hidden], [data-dm-zone-forward-only][hidden] { display: none; }
+
+/* ---------- Server, DynDNS, Benutzer, Systemstatus (U5b) ---------- */
+.dm-confirm-action > summary { white-space: nowrap; }
+.dm-confirm-action[open] > summary { background: var(--dm-warn-soft); }
+/* U5B-R1: Rückfrage im normalen Layoutfluss statt absolut positioniert – sie vergrößert die Tabellenzeile und kann in
+   .table-responsive (overflow) bzw. .dm-card nicht abgeschnitten werden; der Bestätigungsbutton bleibt sichtbar. */
+.dm-confirm.dm-confirm-action[open] { display: block; margin: 4px 0; }
+.dm-confirm-action .dm-confirm-pop { position: static; z-index: auto; margin: 6px 0 0 auto; width: fit-content; max-width: 18rem;
+    white-space: normal; flex-wrap: wrap; justify-content: flex-end; text-align: right; box-shadow: none; border-color: var(--dm-warn-line); }
+.dm-info-card > summary { cursor: pointer; list-style: none; }
+.dm-info-card > summary::-webkit-details-marker { display: none; }
+.dm-info-card > summary .bi { width: 16px; height: 16px; color: var(--dm-info); }
+.dm-info-card:not([open]) > summary { border-bottom: 0; }
+.dm-check { display: block; border-bottom: 1px solid var(--dm-border-soft); }
+.dm-check:last-child { border-bottom: 0; }
+.dm-check > summary, div.dm-check { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(0, 2fr) auto; gap: 12px; align-items: center; padding: 10px 16px; font-size: 13px; }
+.dm-check > summary { cursor: pointer; list-style: none; }
+.dm-check > summary::-webkit-details-marker { display: none; }
+.dm-check > summary:hover { background: var(--dm-row-hover); }
+.dm-check-label { font-weight: 500; color: var(--dm-text); }
+.dm-check-value { color: var(--dm-text-2); min-width: 0; }
+.dm-check-status { justify-self: end; }
+details.dm-check > summary .dm-check-value::after { content: " ›"; color: var(--dm-muted); }
+details.dm-check[open] > summary .dm-check-value::after { content: " ⌄"; }
+.dm-check-body { padding: 4px 16px 14px; font-size: 12.5px; }
+.dm-check-body pre { margin: 4px 0 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.dm-diagnostic-err { border-left: 3px solid var(--dm-err); padding-left: 10px; }
+.dm-diagnostic-warn { border-left: 3px solid var(--dm-warn); padding-left: 10px; }
+.dm-module-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 12px; }
+@media (max-width: 575.98px) { .dm-check > summary, div.dm-check { grid-template-columns: minmax(0, 1fr) auto; } .dm-check-value { grid-column: 1 / -1; grid-row: 2; } }

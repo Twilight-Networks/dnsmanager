@@ -1,7 +1,17 @@
 <?php
 /**
  * Datei: users.php
- * Zweck: Benutzerverwaltung mit Passwort-Modalfunktion
+ * Zweck: Benutzerverwaltung im A+-Design (U5b).
+ *
+ * - Tabelle der sichtbaren Benutzer (UserReadService: admin alle, zoneadmin nur das eigene Konto) mit Rolle, Status
+ *   und Zonen; Aktionen nach den bisherigen Rollenregeln.
+ * - Rechter Editor: Anlage (add_new) und Bearbeitung (edit_id) nur für admin (U0-B4: zoneadmin erhält kein
+ *   Bearbeitungsformular mehr); Passwortänderung (pw_id) für jedes sichtbare Konto – zoneadmin also nur das eigene,
+ *   beim eigenen Konto mit Passwortwiederholung. Auch ohne JavaScript; das Öffnen ändert keinen Zustand.
+ * - Deaktivieren mit Inline-Bestätigung (auch ohne JavaScript), Aktivieren und Löschen wie bisher. Schutz des
+ *   letzten aktiven Administrators und des eigenen Kontos in der Anzeige wie bisher; maßgeblich bleibt der UserService.
+ * - Actions, Felder und CSRF unverändert (user_add.php, user_update.php, user_password.php, user_set_active.php,
+ *   user_delete.php); Session-Verhalten nach eigener Passwortänderung unverändert (Action).
  */
 
 define('IN_APP', true);
@@ -13,12 +23,14 @@ require_once __DIR__ . '/../inc/app/users/UserReadService.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 include __DIR__ . '/../templates/layout.php';
 
+$isAdmin = $_SESSION['role'] === 'admin';
 $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : null;
+$pw_id = isset($_GET['pw_id']) ? (int)$_GET['pw_id'] : null;
+$add_new = $isAdmin && isset($_GET['add_new']) && $_GET['add_new'] == '1';
 
 $actor = actorFromSession();
 
-// Benutzer laden (UserReadService: Sichtbarkeit nach DB-Rolle; admin: alle, zoneadmin: eigener Datensatz).
-// Vollständige Liste: alle Seiten abrufen, keine Begrenzung auf eine Seite.
+// Benutzer laden (UserReadService: Sichtbarkeit nach DB-Rolle; admin: alle, zoneadmin: eigener Datensatz), vollständig
 $userReadService = new UserReadService($pdo);
 $users = [];
 $offset = 0;
@@ -27,8 +39,9 @@ do {
     $users = array_merge($users, $page['users']);
     $offset += UserReadService::MAX_LIMIT;
 } while ($page['hasMore']);
+$usersById = array_column($users, null, 'id');
 
-// Liste der verfügbaren Zonen (Formulare; nur für Admins sichtbar), vollständig, nach Name sortiert
+// Verfügbare Zonen (Formulare, nur admin relevant), vollständig, nach Name sortiert
 $zoneReadService = new ZoneReadService($pdo, new ZoneAccess($pdo));
 $zones = [];
 $offset = 0;
@@ -40,163 +53,104 @@ do {
     $offset += ZoneReadService::MAX_LIMIT;
 } while ($page['hasMore']);
 
-// Anzahl der aktiven Admins (S27, PR B): steuert die Anzeige von „Löschen“ und „Deaktivieren“ wie die
-// Prüfung im UserService (last_admin) – deaktivierte Admins zählen nicht und bleiben löschbar.
-// Maßgeblich bleibt in allen Fällen der Service.
+// Anzahl aktiver Admins (S27): steuert die Anzeige von „Löschen“ und „Deaktivieren“ wie die Prüfung im UserService
 $active_admin_count = count(array_filter($users, static fn (array $u): bool => $u['role'] === 'admin' && $u['active']));
 $current_user_id = (int)$_SESSION['user_id'];
-?>
+$canDisable = static fn (array $u): bool => $isAdmin && $u['active'] && $u['id'] !== $current_user_id && !($u['role'] === 'admin' && $active_admin_count <= 1);
+$canDelete = static fn (array $u): bool => $isAdmin && !($u['role'] === 'admin' && $u['active'] && $active_admin_count <= 1);
 
-<br><br>
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h2><?= $LANG['user_management'] ?></h2>
-    <?php if ($_SESSION['role'] === 'admin'): ?>
-        <a href="pages/users.php?add_new=1" class="btn btn-success">+ <?= $LANG['add_user'] ?></a>
-    <?php endif; ?>
-</div>
+$addButton = $isAdmin ? '<a href="pages/users.php?add_new=1" class="btn btn-success">+ ' . ui_e($LANG['add_user']) . '</a>' : '';
+echo ui_page_header($LANG['user_management'], ['subtitle' => sprintf($LANG['users_count'], count($users)), 'actionsHtml' => $addButton]);
 
-<?php if ($_SESSION['role'] === 'admin' && isset($_GET['add_new']) && $_GET['add_new'] == '1'): ?>
-    <?php include __DIR__ . '/../templates/user_add_form.php'; ?>
-<?php endif; ?>
+echo ui_card_open($LANG['users'], ['flush' => true, 'actionsHtml' => ui_chip((string)count($users))]);
+echo '<div class="table-responsive"><table class="dm-table"><thead><tr>'
+    . '<th>' . ui_e($LANG['username']) . '</th><th>' . ui_e($LANG['role']) . '</th><th>' . ui_e($LANG['user_status']) . '</th>'
+    . '<th>' . ui_e($LANG['zones']) . '</th><th class="dm-col-actions">' . ui_e($LANG['actions']) . '</th></tr></thead><tbody>';
+foreach ($users as $u) {
+    $isCurrent = $u['id'] === $edit_id || $u['id'] === $pw_id;
+    echo '<tr' . ($isCurrent ? ' class="dm-current"' : ($u['active'] ? '' : ' class="dm-muted-row"')) . '>';
+    echo '<td class="dm-mono">' . ui_e($u['username']) . ($u['id'] === $current_user_id ? ' ' . ui_chip($LANG['user_self'], 'info') : '') . '</td>';
+    echo '<td>' . ui_chip($u['role'] === 'admin' ? $LANG['role_admin'] : $LANG['role_zoneadmin'], $u['role'] === 'admin' ? 'accent' : 'neutral') . '</td>';
+    echo '<td>' . ($u['active'] ? ui_chip($LANG['user_status_active'], 'ok') : ui_chip($LANG['user_status_inactive'])) . '</td>';
+    echo '<td>';
+    if ($u['role'] === 'admin') {
+        echo '<em>' . ui_e($LANG['all_zones']) . '</em>';
+    } else {
+        foreach (array_column($u['zones'], 'name') as $zname) {
+            echo ui_chip((string)$zname) . ' ';
+        }
+    }
+    echo '</td><td class="dm-col-actions">';
+    if ($isAdmin) {
+        echo '<a class="btn btn-sm btn-outline-secondary" href="pages/users.php?edit_id=' . $u['id'] . '">' . ui_e($LANG['edit']) . '</a> ';
+    }
+    echo '<a class="btn btn-sm btn-outline-secondary" href="pages/users.php?pw_id=' . $u['id'] . '">' . ui_e($LANG['password']) . '</a> ';
+    if ($canDisable($u)) {
+        // Deaktivieren (S27): bestehender POST-/CSRF-Vertrag (user_set_active.php, active=0); Bestätigung inline statt Modal
+        echo '<form method="post" action="actions/user_set_active.php" class="d-inline">' . csrf_input()
+            . '<input type="hidden" name="id" value="' . $u['id'] . '"><input type="hidden" name="active" value="0">'
+            . ui_confirm_action_button($LANG['user_disable'], ['prompt' => sprintf($LANG['user_disable_confirm_text'], $u['username']), 'confirm' => $LANG['user_disable']])
+            . '</form> ';
+    }
+    if ($isAdmin && !$u['active']) {
+        echo '<form method="post" action="actions/user_set_active.php" class="d-inline">' . csrf_input()
+            . '<input type="hidden" name="id" value="' . $u['id'] . '"><input type="hidden" name="active" value="1">'
+            . '<button class="btn btn-sm btn-outline-success">' . ui_e($LANG['user_enable']) . '</button></form> ';
+    }
+    if ($canDelete($u)) {
+        echo '<form method="post" action="actions/user_delete.php" class="d-inline confirm-delete">' . csrf_input()
+            . '<input type="hidden" name="id" value="' . $u['id'] . '">'
+            . ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']])
+            . '</form>';
+    }
+    echo '</td></tr>';
+}
+echo '</tbody></table></div>';
+echo ui_card_close();
 
-<div class="table-responsive">
-    <table class="table table-bordered align-middle">
-        <thead class="table-light">
-            <tr>
-                <th class="coltbl-users-name"><?= $LANG['username'] ?></th>
-                <th class="coltbl-users-role">Rolle</th>
-                <th><?= $LANG['user_status'] ?></th>
-                <th class="coltbl-users-zones"><?= $LANG['zones'] ?></th>
-                <th class="coltbl-actions"><?= $LANG['actions'] ?></th>
-            </tr>
-        </thead>
-        <tbody>
-        <?php foreach ($users as $u): ?>
-            <?php if ($edit_id === (int)$u['id']): ?>
-                <?php
-                // Zugewiesene Zonen-IDs für das Bearbeitungsformular (aus dem UserReadService)
-                $selected = array_column($u['zones'], 'id');
-                ?>
-                <tr class="table-warning">
-                    <td><?= htmlspecialchars($u['username']) ?></td>
-                    <td><?= htmlspecialchars($u['role']) ?></td>
-                    <td><?= $u['active'] ? '<span class="badge bg-success">' . $LANG['user_status_active'] . '</span>' : '<span class="badge bg-secondary">' . $LANG['user_status_inactive'] . '</span>' ?></td>
-                    <td><em><?= $LANG['edit_mode'] ?></em></td>
-                    <td>
-                        <div class="d-flex flex-wrap gap-1">
-                            <button type="submit" form="editForm_<?= $u['id'] ?>" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                            <a href="pages/users.php" class="btn btn-sm btn-secondary"><?= $LANG['cancel'] ?></a>
-                        </div>
-                    </td>
-                </tr>
-                <?php
-                include __DIR__ . '/../templates/user_edit_form.php';
-                ?>
-            <?php else: ?>
-                <tr<?= $u['active'] ? '' : ' class="text-muted"' ?>>
-                    <td><?= htmlspecialchars($u['username']) ?></td>
-                    <td><?= htmlspecialchars($u['role']) ?></td>
-                    <td><?= $u['active'] ? '<span class="badge bg-success">' . $LANG['user_status_active'] . '</span>' : '<span class="badge bg-secondary">' . $LANG['user_status_inactive'] . '</span>' ?></td>
-                    <td>
-                        <?php if ($u['role'] === 'admin'): ?>
-                            <em><?= $LANG['all_zones'] ?></em>
-                        <?php else: ?>
-                            <?php
-                            $userZoneNames = array_column($u['zones'], 'name');
-                            foreach ($userZoneNames as $zname): ?>
-                                <span class="badge bg-primary"><?= htmlspecialchars($zname) ?></span>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </td>
-                    <td class="d-flex flex-wrap gap-1">
-                        <?php if ($_SESSION['role'] === 'admin'): ?>
-                            <a href="pages/users.php?edit_id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-primary"><?= $LANG['edit'] ?></a>
-                        <?php endif; ?>
-                        <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pwModal<?= $u['id'] ?>"><?= $LANG['password'] ?></button>
-                        <?php if ($_SESSION['role'] === 'admin' && $u['active'] && $u['id'] !== $current_user_id && !($u['role'] === 'admin' && $active_admin_count <= 1)): ?>
-                            <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#disableModal<?= $u['id'] ?>"><?= $LANG['user_disable'] ?></button>
-                        <?php endif; ?>
-                        <?php if ($_SESSION['role'] === 'admin' && !$u['active']): ?>
-                            <form method="post" action="actions/user_set_active.php" class="d-inline">
-                                <?= csrf_input() ?>
-                                <input type="hidden" name="id" value="<?= $u['id'] ?>">
-                                <input type="hidden" name="active" value="1">
-                                <button class="btn btn-sm btn-outline-success"><?= $LANG['user_enable'] ?></button>
-                            </form>
-                        <?php endif; ?>
-                        <?php if ($_SESSION['role'] === 'admin' && !($u['role'] === 'admin' && $u['active'] && $active_admin_count <= 1)): ?>
-                            <form method="post" action="actions/user_delete.php" class="d-inline confirm-delete">
-                                <?= csrf_input() ?>
-                                <input type="hidden" name="id" value="<?= $u['id'] ?>">
-                                <?= ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']]) ?>
-                            </form>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-            <?php endif; ?>
+// Rechter Editor: Anlage/Bearbeitung nur admin (U0-B4); Passwort für jedes sichtbare Konto
+$edit_user = ($isAdmin && $edit_id !== null && isset($usersById[$edit_id])) ? $usersById[$edit_id] : null;
+$pw_user = ($pw_id !== null && isset($usersById[$pw_id])) ? $usersById[$pw_id] : null;
+if ($add_new || $edit_user !== null || $pw_user !== null) {
+    $mode = $add_new ? 'create' : ($edit_user !== null ? 'update' : 'password');
+    $titles = ['create' => $LANG['add_new_user'], 'update' => $LANG['user_editor_title_edit'],
+        'password' => sprintf($LANG['change_password_for'], $pw_user['username'] ?? '')];
+    echo ui_editor_open($titles[$mode], 'pages/users.php', [
+        'subtitle' => $mode === 'update' ? $edit_user['username'] : '',
+        'closeLabel' => $LANG['close'],
+    ]);
+    $formId = 'userForm';
+    if ($mode === 'password') {
+        $own = $pw_user['id'] === $current_user_id;
+        echo '<form method="post" action="actions/user_password.php" id="' . $formId . '">' . csrf_input()
+            . '<input type="hidden" name="id" value="' . $pw_user['id'] . '"><div class="dm-field-grid">'
+            . '<div class="dm-field dm-field-wide"><label class="form-label" for="usr_password">' . ui_e($LANG['new_password']) . '</label>'
+            . '<input type="password" name="password" id="usr_password" class="form-control" required autocomplete="new-password"></div>';
+        if ($own) {
+            // Eigenes Konto: Passwortwiederholung wie bisher (Prüfung und Session-Verhalten in user_password.php)
+            echo '<div class="dm-field dm-field-wide"><label class="form-label" for="usr_password_repeat">' . ui_e($LANG['repeat_password']) . '</label>'
+                . '<input type="password" name="password_repeat" id="usr_password_repeat" class="form-control" required autocomplete="new-password"></div>';
+        }
+        echo '</div></form>';
+        if ($own) {
+            echo '<div class="dm-editor-note">' . ui_icon('info-circle') . '<span>' . ui_e($LANG['user_password_own_hint']) . '</span></div>';
+        }
+    } else {
+        $selected = $mode === 'update' ? array_column($edit_user['zones'], 'id') : [];
+        include __DIR__ . '/../templates/user_editor_form.php';
+    }
+    $leftHtml = '';
+    if ($mode === 'update' && $canDelete($edit_user)) {
+        $leftHtml = '<form method="post" action="actions/user_delete.php" class="confirm-delete">' . csrf_input()
+            . '<input type="hidden" name="id" value="' . $edit_user['id'] . '">'
+            . ui_confirm_delete_button($LANG['delete'], ['prompt' => $LANG['confirm_delete_prompt'], 'confirm' => $LANG['confirm_delete_final']])
+            . '</form>';
+    }
+    echo ui_editor_close('pages/users.php', [
+        'formId' => $formId, 'saveLabel' => $mode === 'create' ? $LANG['create_user'] : $LANG['save'],
+        'cancelLabel' => $LANG['cancel'], 'leftHtml' => $leftHtml,
+    ]);
+}
 
-            <?php if ($_SESSION['role'] === 'admin' && $u['active'] && $u['id'] !== $current_user_id && !($u['role'] === 'admin' && $active_admin_count <= 1)): ?>
-            <!-- Deaktivieren-Modal (S27, PR B) -->
-            <div class="modal fade" id="disableModal<?= $u['id'] ?>" tabindex="-1" aria-labelledby="disableModalLabel<?= $u['id'] ?>" aria-hidden="true">
-                <div class="modal-dialog modal-dialog-centered">
-                    <div class="modal-content">
-                        <form method="post" action="actions/user_set_active.php">
-                            <?= csrf_input() ?>
-                            <input type="hidden" name="id" value="<?= $u['id'] ?>">
-                            <input type="hidden" name="active" value="0">
-                            <div class="modal-header">
-                                <h5 class="modal-title" id="disableModalLabel<?= $u['id'] ?>"><?= $LANG['user_disable_confirm_title'] ?></h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?= $LANG['close'] ?>"></button>
-                            </div>
-                            <div class="modal-body">
-                                <?= sprintf($LANG['user_disable_confirm_text'], htmlspecialchars($u['username'])) ?>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
-                                <button type="submit" class="btn btn-sm btn-warning"><?= $LANG['user_disable'] ?></button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-            <?php endif; ?>
-
-            <!-- Passwort-Modal -->
-            <div class="modal fade" id="pwModal<?= $u['id'] ?>" tabindex="-1" aria-labelledby="pwModalLabel<?= $u['id'] ?>" aria-hidden="true">
-                <div class="modal-dialog modal-dialog-centered">
-                    <div class="modal-content">
-                        <form method="post" action="actions/user_password.php">
-                            <?= csrf_input() ?>
-                            <input type="hidden" name="id" value="<?= $u['id'] ?>">
-                            <div class="modal-header">
-                                <h5 class="modal-title" id="pwModalLabel<?= $u['id'] ?>">
-                                    <?= sprintf($LANG['change_password_for'], htmlspecialchars($u['username'])) ?>
-                                </h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
-                            </div>
-                            <div class="modal-body">
-                                <div class="mb-3">
-                                    <label class="form-label"><?= $LANG['new_password'] ?></label>
-                                    <input type="password" name="password" class="form-control" required>
-                                </div>
-                                <?php if ((int)$_SESSION['user_id'] === $u['id']): ?>
-                                    <div class="mb-3">
-                                        <label class="form-label"><?= $LANG['repeat_password'] ?></label>
-                                        <input type="password" name="password_repeat" class="form-control" required>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"><?= $LANG['cancel'] ?></button>
-                                <button type="submit" class="btn btn-sm btn-success"><?= $LANG['save'] ?></button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        <?php endforeach; ?>
-        </tbody>
-    </table>
-</div>
-
-<?php include __DIR__ . '/../templates/layout_footer.php'; ?>
+AssetRegistry::enqueueScript('js/users_editor.js');
+include __DIR__ . '/../templates/layout_footer.php';

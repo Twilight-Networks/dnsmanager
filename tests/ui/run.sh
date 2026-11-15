@@ -147,6 +147,10 @@ if [ "$MODE" = matrix ]; then
   if [ -f $T/app/web/templates/zone_editor_form.php ]; then
     echo "--- U5a"; php $H/u5a.php || rc=1
   fi
+  # U5b: Server, DynDNS, Benutzer (Rollen, No-JS-Passwort/Deaktivierung/Reload, Schutzregeln)
+  if [ -f $T/app/web/templates/user_editor_form.php ]; then
+    echo "--- U5b"; php $H/u5b.php || rc=1
+  fi
   echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
   exit $rc
 fi
