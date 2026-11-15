@@ -7,7 +7,7 @@ Stand: 15.11.2026. Gilt für das Update der ns1-Testinstallation vom installiert
 | | Freigabe |
 |---|---|
 | **G1** | dieses Runbook |
-| **G2** | Start des Deployments (Abschnitte 2–7). Voraussetzung u. a.: DynDNS-Prüfung 1a ohne unbewertete `AMBIGUOUS`-Accounts |
+| **G2** | Start des Deployments (Abschnitte 2–7). Voraussetzung u. a.: DynDNS-Prüfung 2.2 ohne unbewertete `AMBIGUOUS`-Accounts |
 | **G3** | Wechsel von `report-only` auf `enforce` (Abschnitt 8) |
 | **GR** | jede Daten-/DNS-Rückführung (Abschnitt 9.5) |
 
@@ -42,7 +42,7 @@ NEW_TREE=''   # aus der Freigabe G2 eintragen: vollständiger 40-stelliger Tree-
 B=/root/u6-deploy-$(date +%Y%m%d-%H%M)
 R=/usr/share/dnsmanager
 
-# Freigabewerte vollständig prüfen und den Tree mit Git vergleichen (Abschnitte 1, 3 und 4)
+# Freigabewerte vollständig prüfen und den Tree mit Git vergleichen (Abschnitte 1, 2.2, 3 und 4)
 u6_check_new() {
   [[ "$NEW" =~ ^[0-9a-f]{40}$ ]]      || { echo "ABBRUCH: NEW ist kein vollständiger 40-stelliger SHA"; return 1; }
   [[ "$NEW_TREE" =~ ^[0-9a-f]{40}$ ]] || { echo "ABBRUCH: NEW_TREE ist kein vollständiger 40-stelliger SHA"; return 1; }
@@ -53,8 +53,10 @@ u6_check_new() {
 
 # SOA-Serials ALLER Zonen (vollständige Liste aus der Datenbank, inkl. IPv6-Reverse) auf ns1 und ns2
 u6_serials() {
-  local rc=0 z s1 s2
-  for z in $(mariadb -N dnsmanager -e "SELECT name FROM zones ORDER BY id"); do
+  local rc=0 z s1 s2 zones
+  zones=$(mariadb -N dnsmanager -e "SELECT name FROM zones ORDER BY id") || { echo "ABBRUCH: Zonenliste nicht lesbar"; return 1; }
+  [ -n "$zones" ] || { echo "ABBRUCH: keine Zonen in der Datenbank"; return 1; }
+  for z in $zones; do
     s1=$(dig +short @127.0.0.1 "$z" SOA | cut -d' ' -f3); s2=$(dig +short @192.168.53.125 "$z" SOA | cut -d' ' -f3)
     echo "$z ns1=$s1 ns2=$s2"
     { [ -n "$s1" ] && [ "$s1" = "$s2" ]; } || { echo "  ABWEICHUNG"; rc=1; }
@@ -63,7 +65,7 @@ u6_serials() {
 }
 ```
 
-Die Platzhalter sind leere Zeichenketten. Ein nicht ausgefüllter Wert erzeugt daher keinen ungültigen Befehl, sondern bricht in `u6_check_new` ab.
+Die Platzhalter sind leere Zeichenketten. Ein nicht ausgefüllter Wert erzeugt daher keinen ungültigen Befehl, sondern bricht in `u6_check_new` ab. `u6_serials` gibt einen Fehlerstatus zurück, wenn die Zonenliste nicht gelesen werden kann oder leer ist (U6B-R5).
 
 **Abbruchregel:** Weicht ein Prüfergebnis in Abschnitt 1–6 von der Erwartung ab, wird abgebrochen. Ist der Code bereits gewechselt, folgt Abschnitt 9.3; vorher ist nichts zurückzunehmen.
 
@@ -82,7 +84,17 @@ git -C $R fetch -q origin && u6_check_new                   # "geprüft: …", s
 git -C $R diff --stat "$OLD" "$NEW" -- sql agent scripts cron sudoers.d apache fail2ban   # keine Ausgabe
 ```
 
-### 1a. DynDNS-Voraussetzung für G2 (U6B-R1)
+## 2. Sicherungsverzeichnis, DynDNS-Voraussetzung und Sicherung
+
+Reihenfolge (U6B-R4): erst das Sicherungsverzeichnis anlegen, dann die DynDNS-Vorprüfung, dann sichern. Alles geschieht vor jeder Änderung an Anwendungscode oder Konfiguration (Abschnitte 3 und 4).
+
+### 2.1 Sicherungsverzeichnis
+
+```bash
+mkdir -m 700 $B && cd $B && echo "Sicherungsverzeichnis: $B"
+```
+
+### 2.2 DynDNS-Voraussetzung für G2 (U6B-R1)
 
 **Regel:** Kein betrieblich benötigter DynDNS-Account darf unbewertet im Zustand `AMBIGUOUS` sein; DY-1: Die API liefert dort `dnserr`. Abweichungen erfordern eine gesonderte Entscheidung von Thomas vor G2.
 
@@ -99,20 +111,20 @@ php $B/dyndns_check.php $B/newinc dnsmanager
 
 Erwartet: Zeilen `AMBIGUOUS` nur für `dyndnstest` und `n1race`, dazu „read-only, keine Änderung“. Jeder weitere Account in `AMBIGUOUS` stoppt das Deployment bis zur Entscheidung.
 
-## 2. Sicherung
+### 2.3 Sicherung
 
 ```bash
-mkdir -m 700 $B && cd $B
+cd $B
 git -C $R rev-parse HEAD > head-vorher.txt
 mariadb-dump --single-transaction --routines --triggers --events dnsmanager > db-vorher.sql
 mariadb -N dnsmanager -e "CHECKSUM TABLE users, user_zones, zones, zone_servers, servers, records, dyndns_accounts" > db-checksums-vorher.txt
 tar -cpzf etc-dnsmanager.tgz -C / etc/dnsmanager        # mit Eigentümer und Rechten
 tar -cpzf etc-bind.tgz -C / etc/bind
 sha256sum /etc/bind/zones/db.* > zonen-ns1-vorher.sha256
-u6_serials > serials-vorher.txt                         # alle Zonen ns1/ns2
+u6_serials > serials-vorher.txt || { cat serials-vorher.txt; echo "ABBRUCH: Zonenliste/Serials"; }   # alle Zonen ns1/ns2
 sha256sum /etc/dnsmanager/ui_config.php > config-sha-vorher.txt
 ls -la /etc/dnsmanager > config-rechte-vorher.txt
-chmod 600 $B/*
+find $B -maxdepth 1 -type f -exec chmod 600 {} +   # nur Dateien; Unterverzeichnisse (newinc) bleiben 700
 ```
 
 Auf ns2 nur lesend, Ergebnis im Protokoll festhalten: `sha256sum /etc/bind/zones/db.*`. Die SOA-Serials beider Server enthält bereits `serials-vorher.txt`. Der Proxmox-Snapshot ist von innen nicht feststellbar; ob einer vorliegt, klärt Thomas vor G2.
@@ -184,7 +196,8 @@ systemctl restart apache2 && systemctl is-active apache2   # Webdienst: Neustart
 systemctl is-active named                                   # active (kein Neustart)
 rndc status | head -5                                       # „server is up and running“
 named-checkconf && echo checkconf-ok
-u6_serials > $B/serials-nach-update.txt; diff $B/serials-vorher.txt $B/serials-nach-update.txt && echo serials-unveraendert
+u6_serials > $B/serials-nach-update.txt || { cat $B/serials-nach-update.txt; echo "ABBRUCH: Zonenliste/Serials"; }
+diff $B/serials-vorher.txt $B/serials-nach-update.txt && echo serials-unveraendert
 ```
 
 Danach Abschnitt 5 kurz wiederholen (Header, Login 200). Die DNS-Funktion selbst prüfen die bestehenden Funktionstests 7.3 (Veröffentlichung und Verteilung) und 7.4 (DynDNS).
@@ -360,13 +373,13 @@ mariadb -e "SELECT 'neu' k, n.id, n.zone_id, n.name, n.type, n.content FROM dnsm
 | U6-H1 | `GET logout.php` antwortet mit 405 ohne Sicherheitsheader (vorbestehend, ohne Inhalt) |
 | U6-H2 | Breite Tabellen scrollen mobil im Container; die Aktionsspalte ist durch Wischen erreichbar |
 | DY-0 | Mehrdeutig reservierte DynDNS-Records erscheinen wie manuelle Records; Ändern/Löschen wird erst beim Absenden abgelehnt (U6B_DYNDNS.md) |
-| DY-1 | **Funktionsstörung:** Im mehrdeutigen Zustand liefert die DynDNS-API `dnserr`, der Account aktualisiert nicht mehr. Auf ns1 betrifft das nur `dyndnstest`/`n1race` (gemeinsamer Hostname `dyn`, absichtlicher Testzustand, akzeptiert). Für alle übrigen Accounts gilt die G2-Voraussetzung 1a. |
+| DY-1 | **Funktionsstörung:** Im mehrdeutigen Zustand liefert die DynDNS-API `dnserr`, der Account aktualisiert nicht mehr. Auf ns1 betrifft das nur `dyndnstest`/`n1race` (gemeinsamer Hostname `dyn`, absichtlicher Testzustand, akzeptiert). Für alle übrigen Accounts gilt die G2-Voraussetzung 2.2. |
 | DY-2 | Löschmeldung eines DynDNS-Accounts kann „zugehörige Records gelöscht“ melden, obwohl ein nicht zuordenbarer Record bleibt |
 | U6-T1 | Die Zwischenablage-Schaltfläche (DynDNS-URL) braucht HTTPS und eine Browser-Berechtigung; im Testbrowser war die Berechtigung nicht erteilt |
 
 **Akzeptanz (Review U6B-R1):**
 - O1 ist für die absichtlich mehrdeutigen Testkonten `dyndnstest` und `n1race` akzeptiert; die Konten bleiben unangetastet.
-- DY-1 bleibt eine Funktionsstörung. Weitere mehrdeutige Accounts erfordern vor G2 eine gesonderte Entscheidung (1a).
+- DY-1 bleibt eine Funktionsstörung. Weitere mehrdeutige Accounts erfordern vor G2 eine gesonderte Entscheidung (2.2).
 - O2 ist ein optionaler Read-/UI-Folge-PR und behebt DY-1 nicht.
 
 ## Anhang A – Prüfung des Runbooks (15.11.2026, ohne Deployment)
@@ -384,4 +397,4 @@ Auf ns1 wurden die kritischen Befehle **an Kopien bzw. in Wegwerf-Datenbanken** 
 
 Danach unverändert: Konfiguration (SHA-256), Checkout `7cdd9a8`, DB-Prüfsummen. Keine Test-DBs übrig. ns2 wurde nur lesend abgefragt (SOA-Serials ns1 = ns2 für alle Zonen).
 
-Die Review-Korrekturen U6B-R1 bis R3 (DynDNS-Voraussetzung 1a, kein BIND-Neustart, Freigabewerte mit `u6_check_new`, Zonenliste aus der Datenbank in `u6_serials`) sind reine Dokumentationsänderungen. Laut Review ist dafür keine erneute Ausführung auf ns1 erforderlich.
+Die Review-Korrekturen U6B-R1 bis R3 (DynDNS-Voraussetzung, kein BIND-Neustart, Freigabewerte mit `u6_check_new`, Zonenliste aus der Datenbank in `u6_serials`) sind reine Dokumentationsänderungen. Laut Review ist dafür keine erneute Ausführung auf ns1 erforderlich. Dasselbe gilt für R4 (DynDNS-Vorprüfung nach dem Anlegen von `$B`, Abschnitt 2.2) und R5 (Abbruch von `u6_serials` ohne Zonenliste).

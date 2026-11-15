@@ -101,7 +101,7 @@ Für alle mehrdeutigen Fälle gilt dasselbe:
 
 - **O1 akzeptiert** für die vorhandenen, absichtlich mehrdeutigen Testkonten `dyndnstest` und `n1race`. Die Konten bleiben unangetastet.
 - **DY-1 ist eine Funktionsstörung**, nicht ausschließlich eine Einschränkung der Oberfläche.
-- **Voraussetzung für G2:** Kein betrieblich benötigter DynDNS-Account darf unbewertet im Zustand `AMBIGUOUS` sein. Abweichungen erfordern eine gesonderte Entscheidung. Prüfung mit dem Skript in Anhang B (U6_DEPLOY.md, Abschnitt 1a).
+- **Voraussetzung für G2:** Kein betrieblich benötigter DynDNS-Account darf unbewertet im Zustand `AMBIGUOUS` sein. Abweichungen erfordern eine gesonderte Entscheidung. Prüfung mit dem Skript in Anhang B (U6_DEPLOY.md, Abschnitt 2.2).
 - **O2** bleibt ein optionaler Read-/UI-Folge-PR; er behebt DY-1 nicht.
 
 ## Anhang B – Prüfskript (read-only)
@@ -112,7 +112,7 @@ Aufruf: `php dyndns_check.php <Verzeichnis mit web/inc des neuen Codes> <Datenba
 
 ```php
 <?php
-// U6b – read-only DynDNS-Prüfung (U6_DEPLOY.md, Abschnitt 1a)
+// U6b – read-only DynDNS-Prüfung (U6_DEPLOY.md, Abschnitt 2.2)
 [$_, $code, $db] = $argv + [null, null, 'dnsmanager'];
 require $code . '/web/inc/dyndns_guard.php';
 $pdo = new PDO("mysql:unix_socket=/run/mysqld/mysqld.sock;dbname=$db;charset=utf8mb4", 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
