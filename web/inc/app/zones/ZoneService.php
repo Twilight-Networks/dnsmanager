@@ -50,10 +50,10 @@ require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../TopologyLock.php';
 require_once __DIR__ . '/../../validators.php';
 require_once __DIR__ . '/ZoneBuildBackend.php';
+require_once __DIR__ . '/ZoneNameserver.php';
 require_once __DIR__ . '/ZoneEditVersion.php';
 require_once __DIR__ . '/ZoneInput.php';
 require_once __DIR__ . '/ZoneUpdateInput.php';
-require_once __DIR__ . '/ZoneNameserver.php';
 
 final class ZoneService
 {
