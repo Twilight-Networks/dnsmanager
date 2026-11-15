@@ -113,3 +113,42 @@ Alle Actions sind unverändert: Status, Weiterleitung, Toasts, Logs und Datenban
 - DynDNS-Restbefund aus U4 weiterhin offen für die Produktivabnahme.
 - Für U6 vorgemerkt: ergänzender Layoutcheck bei 375 px (Edge headless rendert ab 492 px).
 - Ohne JavaScript bleiben „Token generieren“ und „anzeigen“ sowie die API-IP-Synchronisation nicht verfügbar; der Token ist direkt eingebbar.
+
+## 6. Review-Korrektur U5B-R1 – Bestätigungsfläche in responsiven Tabellen
+
+**Befund (bestätigt, Stand `ccf3cc3`):**
+- Beim letzten Server lag der Bestätigungsbutton des BIND-Reloads unterhalb des Tabellencontainers (Desktop 1440×900: Button 386–432 px, `.table-responsive` endet bei 377 px).
+- Der Grund: Die Rückfrage war absolut positioniert, und `.table-responsive` hat `overflow: auto`. Die Tabelle erhielt dadurch eine innere Scrollleiste.
+- Ein Klick auf die Buttonposition traf nicht den Button (`elementFromPoint` → Seitenhintergrund).
+
+**Korrektur (`d3a7a6a`, nur `assets/css/components.css`):**
+- Die geöffnete Inline-Bestätigung (`.dm-confirm-action`) liegt im normalen Layoutfluss unter der Schaltfläche (`position: static`). Sie vergrößert die Tabellenzeile, ragt nicht über den Tabellenrand und kann nicht abgeschnitten werden.
+- Darstellung im A+-Stil mit Warnfarbe.
+- POST-/CSRF-Vertrag, Markup und Löschbestätigung unverändert.
+
+**Gezielter Browsertest (isolierte Testkopie `d3a7a6a`, CSP Report-Only):** je Fall die Rückfrage am Tabellenende öffnen, dann den Button prüfen und auslösen.
+
+| Fall | Rückfrage ohne POST | Button im Container | Treffer an Buttonposition | Klick löst POST aus |
+|---|---|---|---|---|
+| BIND-Reload letzter Server · JS · 1440×900 | 0 POST | ja (keine innere Scrollleiste) | Button | ja („BIND Reload auf ns2.u0.test erfolgreich“) |
+| Deaktivieren letzte Zeile (u0zone) · JS · 1440×900 | 0 POST | ja | Button | ja („Konto deaktiviert …“) |
+| BIND-Reload · JS · 375×812 | 0 POST | ja, keine Seiten-Scrollleiste | Button | ja |
+| Deaktivieren · JS · 375×812 | 0 POST | ja | Button | ja |
+| BIND-Reload · ohne JS · 1440×900 | 0 POST | ja | Button | ja |
+| Deaktivieren · ohne JS · 1440×900 | 0 POST | ja | Button | ja |
+| BIND-Reload · ohne JS · 375×812 | 0 POST | ja | Button | ja, **echter Mausklick** |
+| Deaktivieren · ohne JS · 375×812 | 0 POST | ja | Button | ja, **echter Mausklick** |
+
+- Nach jedem Deaktivieren wurde das Konto wieder aktiviert; der Endzustand entspricht der Fixture.
+- CSP: 0 Verstöße, keine PHP-Meldungen.
+
+**Hinweise zur Messung:**
+- „Ohne JS“ = Server der Testkopie ohne `<script>`-Elemente (0 Anwendungsskripte); die Messung lief über das Werkzeug des Browsers.
+- Ohne JS mobil scrollt `scrollIntoView` in diesem Layout nicht zuverlässig. Deshalb wurde dort über die Fensterposition gescrollt und echt geklickt.
+
+**Regression auf `d3a7a6a`:**
+- U5b 21/21, U5a 20/20, U4-UI 40/40;
+- Typ-Matrix 104 identisch, 12 dokumentiert, 0 undokumentiert;
+- BIND 73/73; DynDNS 17/17 unter RR und RC;
+- Golden Exit 0 (0 Vertragsabweichungen);
+- Statik 5/5.
