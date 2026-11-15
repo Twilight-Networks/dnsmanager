@@ -9,7 +9,7 @@ Stand: 15.11.2026.
 
 **Abgrenzung:**
 - Keine Code-, Schema- oder Datenänderung.
-- Die Akzeptanz für die Produktivabnahme ist **offen** und liegt bei Thomas.
+- Akzeptanz nach Review U6B-R1: Abschnitt 5.
 
 ## 1. Befund (aus U4, unverändert)
 
@@ -84,7 +84,7 @@ Für alle mehrdeutigen Fälle gilt dasselbe:
 | Datenintegrität | **gewahrt**: Der Service lehnt fail-closed ab, mit vollständigem Rollback und Log. Ein Record kann nicht versehentlich verändert oder entzogen werden. |
 | Sicherheit | kein Risiko: Die Prüfung liegt im RecordService, unabhängig von der Oberfläche |
 | Bedienbarkeit | eingeschränkt: Die Anzeige verspricht Aktionen, die dann scheitern. Die Meldung nennt den Ausweg (DynDNS-Zuweisung entfernen). |
-| Funktion | **DY-1:** Ein betroffener DynDNS-Account aktualisiert nicht mehr (`dnserr`), bis der Zustand aufgelöst ist |
+| Funktion | **DY-1 ist eine Funktionsstörung**, nicht nur eine Einschränkung der Oberfläche: Ein betroffener DynDNS-Account aktualisiert nicht mehr (`dnserr`), bis der Zustand aufgelöst ist |
 | Häufigkeit | Entsteht nur durch Sonderfälle: geteilte Hostnamen, manuelle Records zusätzlich zum DynDNS-Record, Systemrecords am Hostnamen, abweichende Account-IP. Im Normalbetrieb (ein Account, ein Hostname, Updates über die API) tritt er nicht auf. Auf ns1 nur durch den bewussten Testzustand. |
 
 **Handlungsoptionen (Entscheidung bei Thomas):**
@@ -92,7 +92,56 @@ Für alle mehrdeutigen Fälle gilt dasselbe:
 | Option | Inhalt | Aufwand/Risiko |
 |---|---|---|
 | O1 | Für die Produktivabnahme als dokumentierte Einschränkung akzeptieren; Betriebshinweis im Runbook. Erkennung über die Prüfabfrage (Abschnitt 3); Auflösung über die DynDNS-Verwaltung. | kein Code |
-| O2 | Eigener Read-PR: `RecordReadService` liefert zusätzlich „DynDNS-mehrdeutig“ (ohne Hostname/IP). Die Oberfläche blendet dann Löschen aus und zeigt einen Sperrhinweis mit Ausweg. | Core-Read-Erweiterung, eigene Freigabe; keine Verhaltensänderung der Mutationen |
+| O2 | Eigener Read-PR: `RecordReadService` liefert zusätzlich „DynDNS-mehrdeutig“ (ohne Hostname/IP). Die Oberfläche blendet dann Löschen aus und zeigt einen Sperrhinweis mit Ausweg. **Behebt DY-1 nicht.** | Core-Read-Erweiterung, eigene Freigabe; keine Verhaltensänderung der Mutationen |
 | O3 | Zusätzlich DY-2 (Meldungstext) und ein Hinweis in der DynDNS-Verwaltung bei mehrdeutigen Accounts | Core-Änderung, eigene Freigabe |
 
-**Empfehlung:** O1 für die Produktivabnahme, O2 als nachfolgender kleiner PR. Ob der Testzustand `dyndnstest`/`n1race` auf ns1 erhalten bleibt, entscheidet Thomas. Für die DynDNS-Abnahme nutzt das Runbook ein temporäres eigenes Konto (Abschnitt 7.4).
+**Empfehlung:** O1 für die Produktivabnahme, O2 als nachfolgender kleiner PR. Für die DynDNS-Abnahme nutzt das Runbook ein temporäres eigenes Konto (U6_DEPLOY.md, Abschnitt 7.4).
+
+## 5. Entscheidung (Review U6B-R1, 15.11.2026)
+
+- **O1 akzeptiert** für die vorhandenen, absichtlich mehrdeutigen Testkonten `dyndnstest` und `n1race`. Die Konten bleiben unangetastet.
+- **DY-1 ist eine Funktionsstörung**, nicht ausschließlich eine Einschränkung der Oberfläche.
+- **Voraussetzung für G2:** Kein betrieblich benötigter DynDNS-Account darf unbewertet im Zustand `AMBIGUOUS` sein. Abweichungen erfordern eine gesonderte Entscheidung. Prüfung mit dem Skript in Anhang B (U6_DEPLOY.md, Abschnitt 1a).
+- **O2** bleibt ein optionaler Read-/UI-Folge-PR; er behebt DY-1 nicht.
+
+## Anhang B – Prüfskript (read-only)
+
+Gleiche Klassifizierung wie in Abschnitt 3, mit den Funktionen des angegebenen Codestands. Es arbeitet ausschließlich lesend (Sitzung und Transaktion `READ ONLY`) und gibt keine Passwort-Hashes oder Tokens aus.
+
+Aufruf: `php dyndns_check.php <Verzeichnis mit web/inc des neuen Codes> <Datenbank>`.
+
+```php
+<?php
+// U6b – read-only DynDNS-Prüfung (U6_DEPLOY.md, Abschnitt 1a)
+[$_, $code, $db] = $argv + [null, null, 'dnsmanager'];
+require $code . '/web/inc/dyndns_guard.php';
+$pdo = new PDO("mysql:unix_socket=/run/mysqld/mysqld.sock;dbname=$db;charset=utf8mb4", 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$pdo->exec('SET SESSION TRANSACTION READ ONLY');
+$pdo->exec('START TRANSACTION READ ONLY');
+$zones = $pdo->query('SELECT id, name FROM zones ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+$accounts = $pdo->query('SELECT id, username, zone_id, hostname, current_ipv4, current_ipv6 FROM dyndns_accounts ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+$byZone = [];
+foreach ($accounts as $a) { $byZone[(int)$a['zone_id']][] = $a; }
+foreach ($zones as $z) {
+    $zid = (int)$z['id'];
+    if (empty($byZone[$zid])) { continue; }
+    $st = $pdo->prepare("SELECT id, name, type, content, server_id FROM records WHERE zone_id = ? AND type IN ('A', 'AAAA') ORDER BY id");
+    $st->execute([$zid]);
+    $recs = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($byZone[$zid] as $acc) {
+        $host = dyndnsCanonicalName((string)$acc['hostname'], (string)$z['name']);
+        $shared = array_filter($byZone[$zid], fn($o) => (int)$o['id'] !== (int)$acc['id'] && dyndnsCanonicalName((string)$o['hostname'], (string)$z['name']) === $host);
+        $loose = ($host === null || $host === '@') ? [] : (dyndnsFindOwnerReservations($pdo, $zid, (string)$z['name'], (string)$acc['hostname'], $byZone[$zid])['loose'] ?? []);
+        foreach (['A' => 'current_ipv4', 'AAAA' => 'current_ipv6'] as $type => $col) {
+            $state = dyndnsAttributeAddressRecord($recs, (string)$z['name'], (string)$acc['hostname'], $type, $acc[$col])['state'];
+            if ($state === 'MANAGED' && ($shared || $loose)) { $state = 'AMBIGUOUS'; }
+            printf("%-28s #%-4d %-16s %-16s %-4s %s%s\n", $z['name'], $acc['id'], $acc['username'], $acc['hostname'], $type, $state,
+                $shared ? ' (geteilter Hostname)' : ($loose ? ' (loser Treffer)' : ''));
+        }
+    }
+}
+$pdo->exec('ROLLBACK');
+echo "read-only, keine Änderung\n";
+```
+
+Erwartung auf ns1 (Stand 15.11.2026): je A und AAAA `AMBIGUOUS (geteilter Hostname)` für `dyndnstest` und `n1race`, sonst keine `AMBIGUOUS`-Zeile.

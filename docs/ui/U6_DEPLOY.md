@@ -7,7 +7,7 @@ Stand: 15.11.2026. Gilt für das Update der ns1-Testinstallation vom installiert
 | | Freigabe |
 |---|---|
 | **G1** | dieses Runbook |
-| **G2** | Start des Deployments (Abschnitte 2–7) |
+| **G2** | Start des Deployments (Abschnitte 2–7). Voraussetzung u. a.: DynDNS-Prüfung 1a ohne unbewertete `AMBIGUOUS`-Accounts |
 | **G3** | Wechsel von `report-only` auf `enforce` (Abschnitt 8) |
 | **GR** | jede Daten-/DNS-Rückführung (Abschnitt 9.5) |
 
@@ -33,13 +33,37 @@ Stand: 15.11.2026. Gilt für das Update der ns1-Testinstallation vom installiert
 - Keine Migration, kein Agent-Update auf ns2, keine Änderung an sudo oder Apache.
 - Neu ist ausschließlich Web-Code (UI U1–U6a, Record-Core U4) sowie die optionale Einstellung `CSP_MODE`.
 
+Alle Abschnitte laufen als root **in derselben Shell**. Nach einem Neuanmelden sind Variablen und Funktionen erneut zu setzen; `B` dann auf das bestehende Sicherungsverzeichnis setzen, nicht neu erzeugen.
+
 ```bash
 OLD=7cdd9a83bd673cb787d812a087c8d89947ba18be
-NEW=<freigegebener main-SHA>          # 40 Zeichen, aus der Freigabe G2
-NEW_TREE=<zugehöriger Tree>
+NEW=''        # aus der Freigabe G2 eintragen: vollständiger 40-stelliger Commit-SHA (Kleinbuchstaben)
+NEW_TREE=''   # aus der Freigabe G2 eintragen: vollständiger 40-stelliger Tree-SHA
 B=/root/u6-deploy-$(date +%Y%m%d-%H%M)
 R=/usr/share/dnsmanager
+
+# Freigabewerte vollständig prüfen und den Tree mit Git vergleichen (Abschnitte 1, 3 und 4)
+u6_check_new() {
+  [[ "$NEW" =~ ^[0-9a-f]{40}$ ]]      || { echo "ABBRUCH: NEW ist kein vollständiger 40-stelliger SHA"; return 1; }
+  [[ "$NEW_TREE" =~ ^[0-9a-f]{40}$ ]] || { echo "ABBRUCH: NEW_TREE ist kein vollständiger 40-stelliger SHA"; return 1; }
+  git -C "$R" cat-file -e "$NEW^{commit}" 2>/dev/null || { echo "ABBRUCH: Commit $NEW im Checkout unbekannt (git fetch?)"; return 1; }
+  [ "$(git -C "$R" rev-parse "$NEW^{tree}")" = "$NEW_TREE" ] || { echo "ABBRUCH: Tree von $NEW ist nicht $NEW_TREE"; return 1; }
+  echo "geprüft: NEW=$NEW NEW_TREE=$NEW_TREE"
+}
+
+# SOA-Serials ALLER Zonen (vollständige Liste aus der Datenbank, inkl. IPv6-Reverse) auf ns1 und ns2
+u6_serials() {
+  local rc=0 z s1 s2
+  for z in $(mariadb -N dnsmanager -e "SELECT name FROM zones ORDER BY id"); do
+    s1=$(dig +short @127.0.0.1 "$z" SOA | cut -d' ' -f3); s2=$(dig +short @192.168.53.125 "$z" SOA | cut -d' ' -f3)
+    echo "$z ns1=$s1 ns2=$s2"
+    { [ -n "$s1" ] && [ "$s1" = "$s2" ]; } || { echo "  ABWEICHUNG"; rc=1; }
+  done
+  return $rc
+}
 ```
+
+Die Platzhalter sind leere Zeichenketten. Ein nicht ausgefüllter Wert erzeugt daher keinen ungültigen Befehl, sondern bricht in `u6_check_new` ab.
 
 **Abbruchregel:** Weicht ein Prüfergebnis in Abschnitt 1–6 von der Erwartung ab, wird abgebrochen. Ist der Code bereits gewechselt, folgt Abschnitt 9.3; vorher ist nichts zurückzunehmen.
 
@@ -52,13 +76,28 @@ named-checkconf && echo checkconf-ok
 mariadb -N dnsmanager -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all'), IS_FREE_LOCK('dnsmanager_monitoring'), (SELECT COUNT(*) FROM zones WHERE changed=1)"
                                                              # 1 1 0 (nichts unveröffentlicht)
 ls -d /tmp/dnsmgr-uig 2>/dev/null; mariadb -N -e "SHOW DATABASES LIKE 'dnsmgr\_%'"   # beides leer
-for z in example.test zone.example.test 53.168.192.in-addr.arpa; do
-  echo "$z ns1=$(dig +short @127.0.0.1 $z SOA | cut -d' ' -f3) ns2=$(dig +short @192.168.53.125 $z SOA | cut -d' ' -f3)"; done
-                                                             # je ns1 = ns2
+u6_serials                                                   # alle Zonen ns1 = ns2, keine Zeile „ABWEICHUNG“, Rückgabe 0
 journalctl --since "-15 min" --no-pager | grep -E "Monitoring-Run" | tail -2     # zuletzt erfolgreich
-git -C $R fetch -q origin && git -C $R cat-file -e "$NEW^{commit}" && git -C $R rev-parse "$NEW^{tree}"   # = $NEW_TREE
-git -C $R diff --stat $OLD $NEW -- sql agent scripts cron sudoers.d apache fail2ban   # keine Ausgabe
+git -C $R fetch -q origin && u6_check_new                   # "geprüft: …", sonst Abbruch
+git -C $R diff --stat "$OLD" "$NEW" -- sql agent scripts cron sudoers.d apache fail2ban   # keine Ausgabe
 ```
+
+### 1a. DynDNS-Voraussetzung für G2 (U6B-R1)
+
+**Regel:** Kein betrieblich benötigter DynDNS-Account darf unbewertet im Zustand `AMBIGUOUS` sein; DY-1: Die API liefert dort `dnserr`. Abweichungen erfordern eine gesonderte Entscheidung von Thomas vor G2.
+
+**Bereits akzeptiert (O1):** die absichtlich mehrdeutigen Testkonten `dyndnstest` und `n1race` (gemeinsamer Hostname `dyn` in `example.test`). Sie bleiben unangetastet.
+
+Prüfung read-only mit dem neuen Code, ohne ihn zu installieren:
+- Prüfskript aus [U6B_DYNDNS.md](U6B_DYNDNS.md), Anhang B, nach `$B/dyndns_check.php` übernehmen.
+- Danach:
+
+```bash
+u6_check_new && mkdir -m 700 $B/newinc && git -C $R archive "$NEW" web/inc | tar -x -C $B/newinc
+php $B/dyndns_check.php $B/newinc dnsmanager
+```
+
+Erwartet: Zeilen `AMBIGUOUS` nur für `dyndnstest` und `n1race`, dazu „read-only, keine Änderung“. Jeder weitere Account in `AMBIGUOUS` stoppt das Deployment bis zur Entscheidung.
 
 ## 2. Sicherung
 
@@ -70,13 +109,13 @@ mariadb -N dnsmanager -e "CHECKSUM TABLE users, user_zones, zones, zone_servers,
 tar -cpzf etc-dnsmanager.tgz -C / etc/dnsmanager        # mit Eigentümer und Rechten
 tar -cpzf etc-bind.tgz -C / etc/bind
 sha256sum /etc/bind/zones/db.* > zonen-ns1-vorher.sha256
-for z in example.test zone.example.test 53.168.192.in-addr.arpa; do echo "$z $(dig +short @127.0.0.1 $z SOA)"; done > serials-vorher.txt
+u6_serials > serials-vorher.txt                         # alle Zonen ns1/ns2
 sha256sum /etc/dnsmanager/ui_config.php > config-sha-vorher.txt
 ls -la /etc/dnsmanager > config-rechte-vorher.txt
 chmod 600 $B/*
 ```
 
-Auf ns2 nur lesend, Ergebnis im Protokoll festhalten: `sha256sum /etc/bind/zones/db.*` und SOA-Serials. Der Proxmox-Snapshot ist von innen nicht feststellbar; ob einer vorliegt, klärt Thomas vor G2.
+Auf ns2 nur lesend, Ergebnis im Protokoll festhalten: `sha256sum /etc/bind/zones/db.*`. Die SOA-Serials beider Server enthält bereits `serials-vorher.txt`. Der Proxmox-Snapshot ist von innen nicht feststellbar; ob einer vorliegt, klärt Thomas vor G2.
 
 **Sicherung prüfen (Restore-Probe in eine Wegwerf-DB):**
 
@@ -101,7 +140,7 @@ stat -c '%a %U:%G' /etc/dnsmanager/ui_config.php                       # 640 roo
 php -l /etc/dnsmanager/ui_config.php
 sudo -u www-data php -r 'require "/etc/dnsmanager/ui_config.php"; echo CSP_MODE, "\n";'   # report-only (für www-data lesbar)
 # Wirksamkeit mit dem NEUEN Code prüfen, ohne ihn zu installieren (nur csp.php in ein eigenes Unterverzeichnis)
-mkdir -m 700 $B/newcode && git -C $R archive $NEW web/inc/web/csp.php | tar -x -C $B/newcode
+u6_check_new && mkdir -m 700 $B/newcode && git -C $R archive "$NEW" web/inc/web/csp.php | tar -x -C $B/newcode
 php -r 'require "/etc/dnsmanager/ui_config.php"; require $argv[1]; echo csp_mode(), "\n", csp_header_line(), "\n";' $B/newcode/web/inc/web/csp.php
 ```
 
@@ -114,8 +153,8 @@ php -r 'require "/etc/dnsmanager/ui_config.php"; require $argv[1]; echo csp_mode
 ## 4. Code-Update
 
 ```bash
-git -C $R checkout -q --detach $NEW
-git -C $R rev-parse HEAD "HEAD^{tree}"            # = $NEW, $NEW_TREE
+u6_check_new && git -C $R checkout -q --detach "$NEW"     # nur nach erfolgreicher Prüfung
+[ "$(git -C $R rev-parse HEAD)" = "$NEW" ] && [ "$(git -C $R rev-parse 'HEAD^{tree}')" = "$NEW_TREE" ] && echo checkout-ok
 git -C $R status --short                          # keine Ausgabe
 ls -l $R/web/config/ui_config.php                 # Symlink auf /etc/dnsmanager/ui_config.php unverändert
 systemctl reload apache2                          # OPcache/mod_php: neuer Code sofort wirksam
@@ -136,17 +175,19 @@ tail -n 50 /var/log/apache2/error.log                                           
 journalctl --since "-6 min" --no-pager | grep -E "Monitoring-Run"                                # "erfolgreich beendet"
 ```
 
-## 6. Wiederanlauf
+## 6. Wiederanlauf des Webdienstes, Kontrolle des DNS-Dienstes
 
-Zweck: Neustart ohne Zustandsverlust, Sitzungen bleiben gültig.
+Das Update betrifft nur Web-Code. **BIND wird nicht neu gestartet** (U6B-R2), der laufende Dienst wird nur kontrolliert. Damit gibt es keine Unterbrechung des DNS-Betriebs. MariaDB wird ebenfalls nicht neu gestartet.
 
 ```bash
-systemctl restart apache2 && systemctl is-active apache2
-systemctl restart named && systemctl is-active named && rndc status | head -3
-for z in example.test zone.example.test 53.168.192.in-addr.arpa; do echo "$z $(dig +short @127.0.0.1 $z SOA | cut -d' ' -f3)"; done   # = serials-vorher
+systemctl restart apache2 && systemctl is-active apache2   # Webdienst: Neustart ohne Zustandsverlust, Sitzungen bleiben gültig
+systemctl is-active named                                   # active (kein Neustart)
+rndc status | head -5                                       # „server is up and running“
+named-checkconf && echo checkconf-ok
+u6_serials > $B/serials-nach-update.txt; diff $B/serials-vorher.txt $B/serials-nach-update.txt && echo serials-unveraendert
 ```
 
-Danach Abschnitt 5 kurz wiederholen (Header, Login 200). MariaDB wird nicht neu gestartet; der Dienst ist durch das Update nicht betroffen.
+Danach Abschnitt 5 kurz wiederholen (Header, Login 200). Die DNS-Funktion selbst prüfen die bestehenden Funktionstests 7.3 (Veröffentlichung und Verteilung) und 7.4 (DynDNS).
 
 ## 7. Funktionsabnahme (Thomas, Browser; Report-Only aktiv)
 
@@ -177,6 +218,7 @@ dig +short @192.168.53.125 zone.example.test SOA | cut -d' ' -f3    # = ns1
 dig +short @127.0.0.1      u6-abnahme.zone.example.test TXT          # "u6 <Datum>"
 dig +short @192.168.53.125 u6-abnahme.zone.example.test TXT          # "u6 <Datum>"
 grep -c u6-abnahme /etc/bind/zones/db.zone.example.test             # 1
+u6_serials                                                           # alle übrigen Zonen weiterhin ns1 = ns2
 journalctl --since "-10 min" --no-pager | grep -iE "publish|rndc|agent" | tail -5   # Erfolg, keine Fehler
 ```
 
@@ -187,13 +229,13 @@ Der Hostname `dyn` ist auf ns1 durch zwei Testkonten mehrdeutig (siehe [U6B_DYND
 1. In der DynDNS-Verwaltung ein Konto `u6abn` mit Hostname `u6abn` in `example.test` anlegen (eigenes Testpasswort, nicht protokollieren).
 2. Aufrufen: `curl -sk -u u6abn https://127.0.0.1/dnsmanager-ui/api/v1/dyndns/update.php?myip=192.0.2.66` (Passwort interaktiv).
 3. Erwartung: `good 192.0.2.66`, Record als „DynDNS“ gekennzeichnet (nur TTL änderbar).
-4. `dig +short @127.0.0.1 u6abn.example.test A` und dasselbe `@192.168.53.125` liefern `192.0.2.66`; Serials ns1 = ns2.
+4. `dig +short @127.0.0.1 u6abn.example.test A` und dasselbe `@192.168.53.125` liefern `192.0.2.66`; `u6_serials` ohne Abweichung.
 5. Ein zweiter Aufruf mit derselben IP liefert `nochg`.
 
 ### 7.5 Aufräumen der Abnahmedaten
 - Record `u6-abnahme` löschen. Konto `u6abn` löschen; das entfernt seine Records, Meldung „… und zugehörige A/AAAA-Records gelöscht“.
 - Danach „Veröffentlichen“.
-- Erwartung: `dig` auf ns1 und ns2 liefert für beide Namen nichts mehr; Serials ns1 = ns2.
+- Erwartung: `dig` auf ns1 und ns2 liefert für beide Namen nichts mehr; `u6_serials` ohne Abweichung.
 - Datenbestand prüfen:
 
 ```bash
@@ -306,7 +348,7 @@ mariadb -e "SELECT 'neu' k, n.id, n.zone_id, n.name, n.type, n.content FROM dnsm
 - **Vollständiger Restore von `db-vorher.sql`** nur, wenn die Zwischenänderungen bekannt sind und bewusst verworfen oder danach erneut erfasst werden.
 
 **4. DNS nach jeder Datenkorrektur aus der Datenbank neu verteilen:**
-- „Veröffentlichen“, dann Serials ns1 = ns2 und `dig`-Stichproben (wie 7.3).
+- „Veröffentlichen“, dann `u6_serials` ohne Abweichung und `dig`-Stichproben (wie 7.3).
 - **Zonendateien nie direkt auf ns2 kopieren.** `etc-bind.tgz` nur im Notfall auf ns1 zurückspielen und danach sofort aus der DB veröffentlichen.
 
 **5. Temporäre Vergleichsdatenbanken danach löschen:** `mariadb -e "DROP DATABASE dnsmgr_u6_alt; DROP DATABASE dnsmgr_u6_neu"`.
@@ -318,11 +360,14 @@ mariadb -e "SELECT 'neu' k, n.id, n.zone_id, n.name, n.type, n.content FROM dnsm
 | U6-H1 | `GET logout.php` antwortet mit 405 ohne Sicherheitsheader (vorbestehend, ohne Inhalt) |
 | U6-H2 | Breite Tabellen scrollen mobil im Container; die Aktionsspalte ist durch Wischen erreichbar |
 | DY-0 | Mehrdeutig reservierte DynDNS-Records erscheinen wie manuelle Records; Ändern/Löschen wird erst beim Absenden abgelehnt (U6B_DYNDNS.md) |
-| DY-1 | Im mehrdeutigen Zustand liefert die DynDNS-API `dnserr`. Auf ns1 betrifft das `dyndnstest`/`n1race` (gemeinsamer Hostname `dyn`, Testzustand). |
+| DY-1 | **Funktionsstörung:** Im mehrdeutigen Zustand liefert die DynDNS-API `dnserr`, der Account aktualisiert nicht mehr. Auf ns1 betrifft das nur `dyndnstest`/`n1race` (gemeinsamer Hostname `dyn`, absichtlicher Testzustand, akzeptiert). Für alle übrigen Accounts gilt die G2-Voraussetzung 1a. |
 | DY-2 | Löschmeldung eines DynDNS-Accounts kann „zugehörige Records gelöscht“ melden, obwohl ein nicht zuordenbarer Record bleibt |
 | U6-T1 | Die Zwischenablage-Schaltfläche (DynDNS-URL) braucht HTTPS und eine Browser-Berechtigung; im Testbrowser war die Berechtigung nicht erteilt |
 
-Akzeptanz von DY-0 bis DY-2 für die Produktivabnahme: offen (Entscheidung Thomas, Optionen in U6B_DYNDNS.md).
+**Akzeptanz (Review U6B-R1):**
+- O1 ist für die absichtlich mehrdeutigen Testkonten `dyndnstest` und `n1race` akzeptiert; die Konten bleiben unangetastet.
+- DY-1 bleibt eine Funktionsstörung. Weitere mehrdeutige Accounts erfordern vor G2 eine gesonderte Entscheidung (1a).
+- O2 ist ein optionaler Read-/UI-Folge-PR und behebt DY-1 nicht.
 
 ## Anhang A – Prüfung des Runbooks (15.11.2026, ohne Deployment)
 
@@ -338,3 +383,5 @@ Auf ns1 wurden die kritischen Befehle **an Kopien bzw. in Wegwerf-Datenbanken** 
 | 1 Ausgangsprüfung | Locks frei, keine unveröffentlichten Zonen. Der neue Commit ist im ns1-Checkout noch nicht geholt; `git fetch` in Abschnitt 1 holt ihn. |
 
 Danach unverändert: Konfiguration (SHA-256), Checkout `7cdd9a8`, DB-Prüfsummen. Keine Test-DBs übrig. ns2 wurde nur lesend abgefragt (SOA-Serials ns1 = ns2 für alle Zonen).
+
+Die Review-Korrekturen U6B-R1 bis R3 (DynDNS-Voraussetzung 1a, kein BIND-Neustart, Freigabewerte mit `u6_check_new`, Zonenliste aus der Datenbank in `u6_serials`) sind reine Dokumentationsänderungen. Laut Review ist dafür keine erneute Ausführung auf ns1 erforderlich.
