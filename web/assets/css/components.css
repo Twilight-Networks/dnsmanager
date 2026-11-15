@@ -220,8 +220,9 @@ html.no-js .toast .btn-close { display: none; }
 @media (max-width: 575.98px) { .dm-kpis.dm-kpis-5 { grid-template-columns: minmax(0, 1fr); } }
 .dm-table .dm-col-num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dm-zones-table .dm-col-name { white-space: nowrap; }
-/* Überlange Zonennamen (über 36 Zeichen, <wbr> nach jedem Punkt) umbrechen nur an Labelgrenzen und behalten mindestens 36 Zeichen Breite */
-.dm-zones-table .dm-col-name-long { white-space: normal; min-width: 36ch; }
+/* Überlange Zonennamen (über 36 Zeichen, <wbr> nach jedem Punkt) umbrechen nur an Labelgrenzen; 32ch Mindestbreite:
+   ip6.arpa-/124-Namen in drei Zeilen, die Mindestbreite der Tabelle wächst dabei nur um etwa 35px */
+.dm-zones-table .dm-col-name-long { white-space: normal; min-width: 32ch; }
 .dm-zones-table .dm-col-name a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--dm-border); }
 .dm-zones-table .dm-col-name a:hover { color: var(--dm-accent-text); }
 .dm-zones-table .dm-col-status { white-space: nowrap; }
