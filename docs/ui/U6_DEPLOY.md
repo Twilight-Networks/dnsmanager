@@ -121,7 +121,11 @@ mariadb -N dnsmanager -e "CHECKSUM TABLE users, user_zones, zones, zone_servers,
 tar -cpzf etc-dnsmanager.tgz -C / etc/dnsmanager        # mit Eigentümer und Rechten
 tar -cpzf etc-bind.tgz -C / etc/bind
 sha256sum /etc/bind/zones/db.* > zonen-ns1-vorher.sha256
-u6_serials > serials-vorher.txt || { cat serials-vorher.txt; echo "ABBRUCH: Zonenliste/Serials"; }   # alle Zonen ns1/ns2
+u6_serials > "$B/serials-vorher.txt" || {             # alle Zonen ns1/ns2
+    cat "$B/serials-vorher.txt"
+    echo >&2 "ABBRUCH: Zonenliste/Serials"
+    exit 1
+}
 sha256sum /etc/dnsmanager/ui_config.php > config-sha-vorher.txt
 ls -la /etc/dnsmanager > config-rechte-vorher.txt
 find $B -maxdepth 1 -type f -exec chmod 600 {} +   # nur Dateien; Unterverzeichnisse (newinc) bleiben 700
@@ -196,7 +200,11 @@ systemctl restart apache2 && systemctl is-active apache2   # Webdienst: Neustart
 systemctl is-active named                                   # active (kein Neustart)
 rndc status | head -5                                       # „server is up and running“
 named-checkconf && echo checkconf-ok
-u6_serials > $B/serials-nach-update.txt || { cat $B/serials-nach-update.txt; echo "ABBRUCH: Zonenliste/Serials"; }
+u6_serials > "$B/serials-nach-update.txt" || {
+    cat "$B/serials-nach-update.txt"
+    echo >&2 "ABBRUCH: Zonenliste/Serials"
+    exit 1
+}
 diff $B/serials-vorher.txt $B/serials-nach-update.txt && echo serials-unveraendert
 ```
 
