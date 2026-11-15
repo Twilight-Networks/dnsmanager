@@ -6,7 +6,8 @@
 #   run.sh compare <Commit-SHA> <basis.json> [ausnahmen.json]
 #                                                Ergebnis erzeugen und mit der Basis vergleichen (Exit 1 bei Vertragsabweichung)
 #   run.sh serve   <Commit-SHA>                 Testkopie je Rolle lokal ausliefern (Screenshots, siehe README)
-#   UIG_CSP_REPORT_ONLY=1 run.sh serve <SHA>    zusätzlich CSP Report-Only nur in der Testkopie (U2, siehe README)
+#   UIG_CSP_REPORT_ONLY=1 run.sh serve <SHA>    CSP Report-Only über die U2-Einstellung, nur in der Testkopie (siehe README)
+#   UIG_CSP_MODE=<modus> run.sh serve <SHA>     CSP_MODE enforce|report-only|off nur in der Testkopie (U6; ohne: Standard)
 #   run.sh matrix  <Commit-SHA>                 Record-Typ-Matrix (U4-Core, tests/ui/records, siehe README)
 #   UIG_RECORDS_MATRIX=1 run.sh serve <SHA>     Testkopie zusätzlich mit der Matrix-Fixture (Erfassung der JS-Daten)
 #
@@ -23,7 +24,11 @@ OUT_DIR=${OUT_DIR:-/root/dnsmgr-uig-results}
 REPO=${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}
 [[ "$MODE" =~ ^(record|compare|serve|matrix)$ ]] && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Aufruf: run.sh record|compare|serve|matrix <40-stelliger Commit-SHA> [basis.json] [ausnahmen.json]"; exit 2; }
 [ "$MODE" = compare ] && [ ! -f "$BASELINE" ] && { echo "Basisdatei fehlt: $BASELINE"; exit 2; }
-[ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ] && [ "$MODE" != serve ] && { echo "UIG_CSP_REPORT_ONLY nur im Modus serve (Golden-Läufe ohne CSP-Header)"; exit 2; }
+[ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ] && [ "$MODE" != serve ] && { echo "UIG_CSP_REPORT_ONLY nur im Modus serve (Golden-Läufe im CSP-Standardmodus)"; exit 2; }
+CSPM=${UIG_CSP_MODE:-}
+[ -z "$CSPM" ] || { [[ "$CSPM" =~ ^(enforce|report-only|off)$ ]] && [ "$MODE" = serve ]; } || { echo "UIG_CSP_MODE nur im Modus serve und nur enforce|report-only|off"; exit 2; }
+CSP_RO=0
+if [ "$CSPM" = report-only ] || { [ -z "$CSPM" ] && [ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ]; }; then CSP_RO=1; fi
 [ "$(id -u)" = 0 ] || { echo "als root ausführen (php-cgi läuft per sudo als www-data)"; exit 2; }
 
 cleanup() {
@@ -52,14 +57,22 @@ sed -i -E -e "s/define\('DB_NAME', *'[^']*'\)/define('DB_NAME', 'dnsmgr_uig_app'
   -e "s/define\('DB_PASS', *'[^']*'\)/define('DB_PASS', '$PW')/" -e "s/define\('LOG_TARGET', *'[^']*'\)/define('LOG_TARGET', 'apache')/" \
   -e "s/define\('DEFAULT_LANGUAGE', *'[^']*'\)/define('DEFAULT_LANGUAGE', 'de')/" $c
 for k in "DB_NAME', 'dnsmgr_uig_app" "DB_USER', 'uigweb" "LOG_TARGET', 'apache" "DEFAULT_LANGUAGE', 'de"; do grep -q "define('$k')" $c || { echo "ABBRUCH: Konfiguration ($k)"; exit 1; }; done
+if [ -n "$CSPM" ]; then
+  # U6: CSP_MODE ausschließlich in dieser Testkopie (generierte Konfiguration), nie in der installierten Anwendung
+  sed -i -e "s#^// define('CSP_MODE', 'enforce');#define('CSP_MODE', '$CSPM');#" $c
+  grep -q "^define('CSP_MODE', '$CSPM');" $c || { echo "ABBRUCH: CSP_MODE in der Testkonfiguration"; exit 1; }
+  echo "CSP_MODE: $CSPM (nur Testkopie $c)"
+fi
 if [ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ]; then
-  # U2: Report-Only ausschließlich in dieser Testkopie (generierte Konfiguration), nie in der installierten Anwendung
+  # U2: Report-Only-Einstellung ausschließlich in dieser Testkopie, nie in der installierten Anwendung
+  sed -i -e "s#^// define('CSP_REPORT_ONLY', true);#define('CSP_REPORT_ONLY', true);#" $c
+  grep -q "^define('CSP_REPORT_ONLY', true);" $c || { echo "ABBRUCH: CSP_REPORT_ONLY in der Testkonfiguration"; exit 1; }
+fi
+if [ $CSP_RO = 1 ]; then
   # Ratenstatus des Endpunkts in einem eigenen Verzeichnis der Testkopie (wird mit $T entfernt)
   install -d -m 700 -o www-data -g www-data $T/csp-state
-  sed -i -e "s#^// define('CSP_REPORT_ONLY', true);#define('CSP_REPORT_ONLY', true);#" \
-         -e "s#^// define('CSP_REPORT_STATE_DIR', '[^']*');#define('CSP_REPORT_STATE_DIR', '$T/csp-state');#" $c
-  grep -q "^define('CSP_REPORT_ONLY', true);" $c && grep -q "^define('CSP_REPORT_STATE_DIR', '$T/csp-state');" $c \
-    || { echo "ABBRUCH: CSP-Einstellungen in der Testkonfiguration"; exit 1; }
+  sed -i -e "s#^// define('CSP_REPORT_STATE_DIR', '[^']*');#define('CSP_REPORT_STATE_DIR', '$T/csp-state');#" $c
+  grep -q "^define('CSP_REPORT_STATE_DIR', '$T/csp-state');" $c || { echo "ABBRUCH: CSP-Ratenstatus in der Testkonfiguration"; exit 1; }
   echo "CSP Report-Only: aktiv (nur Testkopie $c, Ratenstatus $T/csp-state)"
 fi
 f=$T/app/web/inc/deploy/CurlUpdateFeed.php
@@ -115,7 +128,7 @@ if [ "$MODE" = serve ]; then
   done
   sleep 1; echo "Screenshot-Server: $(ss -ltn | grep -cE ' 127\.0\.0\.1:186[01][123] ')/6 (admin 18601/18611, zoneadmin 18602/18612, anonym 18603/18613; 1861x ohne JS) – Stopp: touch $T/stop"
   for i in $(seq 1 $(( ${MAX_MINUTES:-30} * 12 ))); do [ -e $T/stop ] && break; sleep 5; done
-  if [ "${UIG_CSP_REPORT_ONLY:-0}" = 1 ]; then
+  if [ $CSP_RO = 1 ]; then
     mkdir -p -m 700 "$OUT_DIR"; CSPLOG="$OUT_DIR/csp-${SHA:0:7}-$(date +%Y%m%d-%H%M%S).log"
     grep -E 'event=csp_' $T/app.log > "$CSPLOG"; chmod 600 "$CSPLOG"
     echo "CSP-Berichte im Log: $(grep -c 'event=csp_violation' "$CSPLOG") Verstöße, $(grep -c 'event=csp_report_rate_limited' "$CSPLOG") Ratenbegrenzungen → $CSPLOG"
@@ -150,6 +163,10 @@ if [ "$MODE" = matrix ]; then
   # U5b: Server, DynDNS, Benutzer (Rollen, No-JS-Passwort/Deaktivierung/Reload, Schutzregeln)
   if [ -f $T/app/web/templates/user_editor_form.php ]; then
     echo "--- U5b"; php $H/u5b.php || rc=1
+  fi
+  # U6: CSP-Modi und exakte Headerwerte je Antworttyp (Seite, Login, Redirect, 403, DynDNS-API, Report-Endpunkt)
+  if grep -q "CSP_MODE" $T/app/web/inc/web/csp.php; then
+    echo "--- U6"; php $H/u6.php || rc=1
   fi
   echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
   exit $rc
