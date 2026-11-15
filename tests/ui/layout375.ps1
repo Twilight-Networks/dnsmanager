@@ -122,6 +122,8 @@ $measure = @'
     }
     d.open = false;
   }
+  // Ausgangslage wiederherstellen (Treffertests scrollen auch Tabellen- und Editor-Container)
+  for (const el of document.querySelectorAll('*')) { if (el.scrollLeft || el.scrollTop) { el.scrollLeft = 0; el.scrollTop = 0; } }
   scrollTo({ left: 0, top: 0, behavior: 'instant' });
   // CSP-Positivkontrolle (nur wenn die Testkopie vorübergehend ein Element #u6-csp-probe mit style-Attribut enthält)
   const probe = document.getElementById('u6-csp-probe');
@@ -236,7 +238,8 @@ try {
         $shot = ''
         if ($OutDir -ne '' -and ($Shots -contains 'all' -or $Shots -contains $pg[0])) {
             $lm = (Invoke-Cdp 'Page.getLayoutMetrics') | ConvertFrom-Json
-            $h = [Math]::Ceiling($lm.result.cssContentSize.height)
+            # Offener Editor (fester Dialog in Viewporthöhe): nur den Viewport aufnehmen, sonst die ganze Seite
+            $h = $(if ($m.editor) { 812 } else { [Math]::Ceiling($lm.result.cssContentSize.height) })
             $raw = Invoke-Cdp 'Page.captureScreenshot' @{ format = 'png'; captureBeyondViewport = $true; clip = @{ x = 0; y = 0; width = 375; height = $h; scale = 1 } }
             if ($raw -match '"data":"([^"]+)"') {
                 $shot = Join-Path (Resolve-Path $OutDir) ('u6-' + $pg[0] + $suffix + '.png')
