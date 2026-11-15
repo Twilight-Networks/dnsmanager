@@ -96,14 +96,15 @@ foreach ($expect as $page => $byRole) {
 $ok($rFail === [], 'R01', 'Rollenmatrix 6 Seiten × 3 Rollen: Status, Anlage/Löschen nur admin, fremde Zonen ohne Formular, Serverzuweisung nur admin als Eingabe, edit_version/CSRF vorhanden' . ($rFail ? ': ' . implode(' | ', $rFail) : ''));
 $add = formFor(cgi('GET', 'pages/zones.php?add_new=1', '', $sess['admin'])['body'], 'actions/zone_add.php');
 $fieldsAdd = array_map(fn($f) => explode(':', $f)[0], $add['fields'] ?? []);
-$ok($add !== null && array_diff(['csrf_token', 'zone_prefix', 'type', 'prefix_length', 'ttl', 'soa_domain', 'soa_mail', 'soa_refresh', 'soa_retry', 'soa_expire',
-    'soa_minimum', 'server_ids[]', 'master_server_id', 'allow_dyndns', 'description'], $fieldsAdd) === [], 'R02', 'Anlageformular enthält alle bisherigen Felder (' . count($fieldsAdd) . ')');
+$ok($add !== null && array_diff(['csrf_token', 'zone_prefix', 'type', 'prefix_length', 'ttl', 'soa_mail', 'soa_refresh', 'soa_retry', 'soa_expire',
+    'soa_minimum', 'server_ids[]', 'master_server_id', 'allow_dyndns', 'description'], $fieldsAdd) === [] && !in_array('soa_domain', $fieldsAdd, true),
+    'R02', 'Anlageformular enthält alle bisherigen Felder außer dem entfallenen soa_domain (D6) (' . count($fieldsAdd) . ')');
 
 // ---------- T: No-JS-Typübernahme ----------
 resetDb();
 $c = session('admin');
 cgi('GET', 'pages/zones.php?add_new=1', '', $c);
-$typed = [['zone_prefix', '10.10'], ['type', 'reverse_ipv4'], ['prefix_length', ''], ['ttl', '7200'], ['soa_domain', 'u0.test'], ['soa_mail', 'hostmaster.u0.test.'],
+$typed = [['zone_prefix', '10.10'], ['type', 'reverse_ipv4'], ['prefix_length', ''], ['ttl', '7200'], ['soa_mail', 'hostmaster.u0.test.'],
     ['soa_refresh', '3601'], ['soa_retry', '1201'], ['soa_expire', '1209601'], ['soa_minimum', '3601'], ['server_ids[]', '1'], ['server_ids[]', '2'],
     ['master_server_id', '2'], ['allow_dyndns', '1'], ['description', 'Typwechsel <ohne> JS'], ['apply_type', '1']];
 $r = cgi('POST', 'pages/zones.php?add_new=1', $enc($typed), $c);
@@ -115,11 +116,11 @@ $v = $f['values'] ?? [];
 $ok($r['status'] === 200 && snap() === $s0 && toasts($c) === [] && array_filter(logSince($off), fn($l) => str_contains($l, 'php_error')) === [], 'T02',
     'Typübernahme: 200, Datenbank unverändert, keine Toasts, keine PHP-Meldungen');
 $ok(($v['zone_prefix'] ?? '') === '10.10' && ($v['type'] ?? '') === 'reverse_ipv4' && ($v['prefix_length'] ?? '') === '24' && ($v['ttl'] ?? '') === '7200'
-    && ($v['soa_domain'] ?? '') === 'u0.test' && ($v['soa_mail'] ?? '') === 'hostmaster.u0.test.' && ($v['soa_refresh'] ?? '') === '3601'
+    && !array_key_exists('soa_domain', $v) && ($v['soa_mail'] ?? '') === 'hostmaster.u0.test.' && ($v['soa_refresh'] ?? '') === '3601'
     && ($v['soa_minimum'] ?? '') === '3601' && ($v['server_ids'] ?? []) === ['1', '2'] && ($v['master_server_id'] ?? '') === '2' && ($v['allow_dyndns'] ?? '') === '1'
     && ($v['description'] ?? '') === 'Typwechsel <ohne> JS', 'T03', 'alle Werte erhalten (Präfixlänge leer → Vorgabe 24), Reverse-Felder sichtbar: ' . json_encode($v, JSON_UNESCAPED_UNICODE));
-$ok(!preg_match('#data-dm-zone-reverse-only hidden#', $r['body']) && preg_match('#data-dm-zone-forward-only hidden#', $r['body']) && str_contains($r['body'], '.in-addr.arpa'),
-    'T04', 'Reverse-Felder serverseitig eingeblendet, Forward-Anzeige ausgeblendet, Suffix .in-addr.arpa');
+$ok(!preg_match('#data-dm-zone-reverse-only hidden#', $r['body']) && preg_match('#id="zf_soa_ns" class="[^"]*" value="ns2\.u0\.test\."#', $r['body']) && str_contains($r['body'], '.in-addr.arpa'),
+    'T04', 'Reverse-Felder serverseitig eingeblendet, SOA-NS-Anzeige = FQDN des gewählten Masters (auch Reverse, D1), Suffix .in-addr.arpa');
 
 // ---------- A: No-JS-Anlage und -Bearbeitung ----------
 // Forward direkt
@@ -138,12 +139,12 @@ $c = session('admin');
 cgi('GET', 'pages/zones.php?add_new=1', '', $c);
 $r = postPairs('pages/zones.php?add_new=1', [['zone_prefix', '10.10'], ['type', 'reverse_ipv4'], ['ttl', '7200'], ['soa_mail', 'hostmaster.u0.test.'], ['apply_type', '1']], $c);
 $f = formFor($r['body'], 'actions/zone_add.php');
-$pairs = formPairs($f, ['soa_domain' => 'u0.test', 'server_ids' => ['1'], 'master_server_id' => '1']);
+$pairs = formPairs($f, ['server_ids' => ['1'], 'master_server_id' => '1']);
 $r = postPairs('actions/zone_add.php', $pairs, $c);
 $z = $q("SELECT id FROM DB.zones WHERE name = '10.10.in-addr.arpa'")->fetchColumn();
 $row = $z ? zoneRow((int)$z) : false;
-$ok($r['status'] === 302 && $row && $row['type'] === 'reverse' && (int)$row['prefix_length'] === 24 && (int)$row['ttl'] === 7200 && $row['soa_ns'] === 'ns1.u0.test.u0.test.',
-    'A02', 'No-JS-Anlage Reverse nach Typübernahme: ' . json_encode($row ? [$row['name'], $row['prefix_length'], $row['ttl'], $row['soa_ns']] : null));
+$ok($r['status'] === 302 && $row && $row['type'] === 'reverse' && (int)$row['prefix_length'] === 24 && (int)$row['ttl'] === 7200 && $row['soa_ns'] === 'ns1.u0.test.',
+    'A02', 'No-JS-Anlage Reverse nach Typübernahme, SOA-NS = FQDN des Masters (D1): ' . json_encode($row ? [$row['name'], $row['prefix_length'], $row['ttl'], $row['soa_ns']] : null));
 // Bearbeitung admin (No-JS-Formular): TTL und Serverzuweisung
 resetDb();
 $c = session('admin');
