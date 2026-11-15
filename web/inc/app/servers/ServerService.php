@@ -45,6 +45,7 @@ require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../TopologyLock.php';
 require_once __DIR__ . '/../zones/ZoneBuildBackend.php';
+require_once __DIR__ . '/../zones/SoaMname.php';
 require_once __DIR__ . '/../../validators.php';
 require_once __DIR__ . '/ServerControlBackend.php';
 require_once __DIR__ . '/ServerInput.php';
@@ -140,6 +141,9 @@ final class ServerService
     /**
      * Ändert einen Server (nur admin). Bei Änderung von Name oder DNS-IP: NS/Glue-Neuaufbau aller Zonen, denen
      * der Server zugewiesen ist. Reaktivierung setzt system_status.bind_dirty = 1.
+     * Umbenennung: In Zonen, in denen der Server Master ist und deren SOA-NS dem bisherigen Servernamen entspricht
+     * (SoaMname::sameName), wird der SOA-NS auf den neuen FQDN gesetzt – in derselben Transaktion wie der
+     * NS/Glue-Neuaufbau. Abweichende SOA-NS-Werte und Slave-Zonen bleiben unverändert.
      *
      * Codes: access_denied, invalid_input (errors), not_found, unchanged, lock_acquire_error, topology_locked,
      *        master_deactivation_blocked, failed (detail), zone_rebuild_error / zone_rebuild_warning (zoneId,
@@ -249,7 +253,7 @@ final class ServerService
             }
 
             // Zielzeile sperren (serialisiert parallele Änderungen desselben Servers)
-            $stmt = $this->pdo->prepare('SELECT id, api_token FROM servers WHERE id = ? FOR UPDATE');
+            $stmt = $this->pdo->prepare('SELECT id, name, api_token FROM servers WHERE id = ? FOR UPDATE');
             $stmt->execute([$serverId]);
             $lockedRow = $stmt->fetch(PDO::FETCH_ASSOC);
             $stmt->closeCursor();
@@ -309,6 +313,28 @@ final class ServerService
                 foreach ($zone_ids as $zid) {
                     $stmtLock->execute([$zid]);
                     $stmtLock->closeCursor();
+                }
+
+                // Umbenennung: SOA-NS der Master-Zonen nachführen, sofern er dem bisherigen Namen entsprach. Sperrendes
+                // Lesen (die Zonenzeilen sind bereits gesperrt): aktueller Stand auch unter REPEATABLE READ. Der
+                // anschließende NS/Glue-Neuaufbau prüft die Zonendatei mit dem neuen Wert; ein Fehler rollt alles zurück.
+                if ((string)$lockedRow['name'] !== (string)$update_data['name']) {
+                    $stmt = $this->pdo->prepare('
+                        SELECT z.id, z.soa_ns
+                        FROM zones z
+                        JOIN zone_servers zs ON zs.zone_id = z.id AND zs.server_id = ? AND zs.is_master = 1
+                        ORDER BY z.id
+                        FOR UPDATE
+                    ');
+                    $stmt->execute([$serverId]);
+                    $masterZones = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    $stmt->closeCursor();
+                    $stmtSoa = $this->pdo->prepare('UPDATE zones SET soa_ns = ? WHERE id = ?');
+                    foreach ($masterZones as $mz) {
+                        if (SoaMname::sameName((string)$mz['soa_ns'], (string)$lockedRow['name'])) {
+                            $stmtSoa->execute([SoaMname::fromServerName((string)$update_data['name']), (int)$mz['id']]);
+                        }
+                    }
                 }
 
                 foreach ($zone_ids as $zid) {

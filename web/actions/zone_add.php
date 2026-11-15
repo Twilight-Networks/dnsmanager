@@ -44,7 +44,6 @@ $input = new ZoneInput(
     $_POST['soa_retry'] ?? null,
     $_POST['soa_expire'] ?? null,
     $_POST['soa_minimum'] ?? null,
-    $_POST['soa_domain'] ?? null,
     isset($_POST['allow_dyndns']) && $_POST['allow_dyndns'] === '1',
     $_POST['server_ids'] ?? null,
     $_POST['master_server_id'] ?? null

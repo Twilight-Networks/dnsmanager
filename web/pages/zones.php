@@ -17,6 +17,7 @@ require_once __DIR__ . '/../common.php';
 require_once __DIR__ . '/../inc/app/Actor.php';
 require_once __DIR__ . '/../inc/app/ZoneAccess.php';
 require_once __DIR__ . '/../inc/app/zones/ZoneReadService.php';
+require_once __DIR__ . '/../inc/app/zones/SoaMname.php';
 require_once __DIR__ . '/../inc/web/web_adapter.php';
 require_once __DIR__ . '/../inc/web/zone_view.php';
 include __DIR__ . '/../templates/layout.php';
@@ -73,7 +74,7 @@ if ($showAdd) {
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['apply_type'] ?? '') === '1') {
         verify_csrf_token();
-        foreach (['zone_prefix', 'type', 'prefix_length', 'ttl', 'soa_domain', 'soa_mail', 'soa_refresh', 'soa_retry', 'soa_expire',
+        foreach (['zone_prefix', 'type', 'prefix_length', 'ttl', 'soa_mail', 'soa_refresh', 'soa_retry', 'soa_expire',
                   'soa_minimum', 'allow_dyndns', 'master_server_id', 'description'] as $k) {
             if (isset($_POST[$k]) && is_string($_POST[$k])) {
                 $zoneValues[$k] = $_POST[$k];

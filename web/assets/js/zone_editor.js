@@ -3,12 +3,12 @@
  * Zweck: Progressive Verbesserung des Zoneneditors (U5a) in pages/zones.php; ersetzt zone_add_form.js,
  *        zone_edit_form.js und zones.js. Ohne JavaScript bleibt alles bedienbar (Typwechsel über „Typ übernehmen“).
  *
- * - Anlage: Typwechsel blendet die typabhängigen Felder ein/aus (Präfixlänge, SOA-Domain, angezeigter Primary NS),
- *   setzt Suffix, Platzhalter und – solange nicht selbst geändert – die Vorgabe der Präfixlänge. Alle Felder bleiben
- *   gesendet; eingegebene Werte gehen beim Typwechsel nicht verloren.
- * - Anlage (Forward): SOA-Mail aus dem Zonennamen vorbelegen, solange nicht selbst geändert; angezeigter Primary NS
- *   aus dem gewählten Master.
- * - Bearbeitung (Forward): SOA-NS folgt dem gewählten Master, solange nicht selbst geändert (wie bisher).
+ * - Anlage: Typwechsel blendet die typabhängigen Felder ein/aus (Präfixlänge), setzt Suffix, Platzhalter und –
+ *   solange nicht selbst geändert – die Vorgabe der Präfixlänge. Alle Felder bleiben gesendet; eingegebene Werte
+ *   gehen beim Typwechsel nicht verloren.
+ * - Anlage (Forward): SOA-Mail aus dem Zonennamen vorbelegen, solange nicht selbst geändert.
+ * - SOA-NS (Forward und Reverse) ist nur Anzeige: FQDN des gewählten Masters; bei der Bearbeitung zeigt die Rückkehr
+ *   zum bisherigen Master wieder den gespeicherten Wert. Maßgeblich ist der ZoneService.
  * - Serverzuweisung: Prüfung vor dem Absenden (mindestens ein Server, Master gewählt und zugewiesen) nur als
  *   Bedienhilfe mit Hinweis im Formular; maßgeblich ist die Prüfung im ZoneService. Ohne Eingabefelder (zoneadmin)
  *   keine Prüfung.
@@ -84,14 +84,15 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         form.querySelectorAll('input[name="master_server_id"]').forEach(function (r) { r.addEventListener('change', updateSoa); });
         applyType();
-    } else if (form.getAttribute('data-zone-type') === 'forward') {
-        const soaNs = form.querySelector('[name="soa_ns"]');
-        markChanged(soaNs);
+    } else {
+        const soaNs = form.querySelector('#zf_soa_ns');
+        const initial = form.querySelector('input[name="master_server_id"]:checked');
+        const initialId = initial ? initial.value : '';
         form.querySelectorAll('input[name="master_server_id"]').forEach(function (r) {
             r.addEventListener('change', function () {
                 const fqdn = masterFqdn();
-                if (soaNs && !soaNs.dataset.changed && fqdn !== '') {
-                    soaNs.value = fqdn;
+                if (soaNs && fqdn !== '') {
+                    soaNs.value = r.value === initialId ? (soaNs.getAttribute('data-dm-soa-stored') || fqdn) : fqdn;
                 }
             });
         });

@@ -46,7 +46,6 @@ $input = new ZoneUpdateInput(
     $_POST['description'] ?? null,
     isset($_POST['allow_dyndns']),
     $_POST['soa_mail'] ?? null,
-    $_POST['soa_ns'] ?? null,
     $_POST['soa_refresh'] ?? null,
     $_POST['soa_retry'] ?? null,
     $_POST['soa_expire'] ?? null,
@@ -54,7 +53,9 @@ $input = new ZoneUpdateInput(
     $_POST['server_ids'] ?? null,
     $_POST['master_server_id'] ?? null,
     $_POST['type'] ?? null,
-    $_POST['edit_version'] ?? null
+    $_POST['edit_version'] ?? null,
+    // Ausdrückliche SOA-Übernahme aus dem Master: nur admin und nur exakt "1" (der Service prüft die Rolle erneut)
+    ($_SESSION['role'] ?? '') === 'admin' && ($_POST['soa_ns_from_master'] ?? '') === '1'
 );
 
 $zoneService = new ZoneService($pdo, new BindZoneBuildBackend($pdo), new TopologyLock($pdo));
