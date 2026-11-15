@@ -258,6 +258,7 @@ hr { border-color: var(--dm-border); opacity: 1; }
 
 .content {
     flex-grow: 1; padding: 24px 28px 40px; max-width: 1400px; width: 100%;
+    margin-inline: auto; /* in der Arbeitsfläche rechts der Sidebar zentriert, sobald die Maximalbreite greift */
     min-width: 0;        /* breite Tabellen scrollen im Inhalt statt die Seite zu verbreitern */
     overflow-x: auto;
 }
