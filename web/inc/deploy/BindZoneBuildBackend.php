@@ -21,6 +21,7 @@
  */
 
 require_once __DIR__ . '/../app/zones/ZoneBuildBackend.php';
+require_once __DIR__ . '/../app/zones/ZoneNameserver.php';
 require_once __DIR__ . '/bind_file_generator.php';
 require_once __DIR__ . '/BindWorkDir.php';
 
@@ -142,16 +143,15 @@ final class BindZoneBuildBackend implements ZoneBuildBackend
         foreach ($servers as $srv) {
             $sid     = $srv['id'];
             $fqdn    = rtrim($srv['name'], '.') . '.';
-            $is_glue = $type === 'forward' && str_ends_with($fqdn, '.' . $zone_name . '.');
+            // Adressrecords für einen Nameserver in der eigenen Forward-Zone (auch am Apex, ZoneNameserver)
+            $host_part = $type === 'forward' ? ZoneNameserver::inZoneHost($fqdn, $zone_name) : null;
 
             // TTL für NS-Record holen oder Fallback
             $ns_ttl = $ttl_map['NS']['@'] ?? 3600;
             $stmt_ns->execute([$zoneId, $fqdn, $ns_ttl, $sid]);
 
-            // Glue-Records nur bei Forward-Zonen und wenn FQDN in der Zone liegt
-            if ($is_glue) {
-                $host_part = rtrim(str_replace('.' . $zone_name . '.', '', $fqdn), '.');
-
+            // Adressrecords nur bei Forward-Zonen und wenn der FQDN in der Zone liegt (Apex: '@')
+            if ($host_part !== null) {
                 if (!empty($srv['dns_ip4'])) {
                     $a_ttl = $ttl_map['A'][strtolower($host_part)] ?? 300;
                     $stmt_a->execute([$zoneId, $host_part, $srv['dns_ip4'], $a_ttl, $sid]);

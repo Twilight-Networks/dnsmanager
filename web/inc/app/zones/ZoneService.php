@@ -53,6 +53,7 @@ require_once __DIR__ . '/ZoneBuildBackend.php';
 require_once __DIR__ . '/ZoneEditVersion.php';
 require_once __DIR__ . '/ZoneInput.php';
 require_once __DIR__ . '/ZoneUpdateInput.php';
+require_once __DIR__ . '/ZoneNameserver.php';
 
 final class ZoneService
 {
@@ -199,12 +200,12 @@ final class ZoneService
                 }
 
                 $ns_fqdn = rtrim($srv['name'], '.') . '.';
-                $is_glue = $type === 'forward' && str_ends_with($ns_fqdn, '.' . $zone_base . '.');
+                // Adressrecords für einen Nameserver in der eigenen Forward-Zone (auch am Apex, ZoneNameserver)
+                $host_part = $type === 'forward' ? ZoneNameserver::inZoneHost($ns_fqdn, $zone_base) : null;
 
                 $stmt_ns->execute([$zone_id, $ns_fqdn, $ttl_ns, $sid]);
 
-                if ($is_glue) {
-                    $host_part = rtrim(str_replace('.' . $zone_base . '.', '', $ns_fqdn), '.');
+                if ($host_part !== null) {
                     if (!empty($srv['dns_ip4'])) {
                         $stmt_a->execute([$zone_id, $host_part, $srv['dns_ip4'], $ttl_glue, $sid]);
                     }
