@@ -9,7 +9,8 @@
 /* ---------- 1. Seitenkopf ---------- */
 .dm-page-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
 .dm-page-head-text { min-width: 0; }
-.dm-page-title { font-size: 22px; font-weight: 500; letter-spacing: -.01em; margin: 0; color: var(--dm-text); }
+.dm-page-title { font-size: 22px; font-weight: 500; letter-spacing: -.01em; margin: 0; color: var(--dm-text);
+    overflow-wrap: break-word; }   /* überlange Wörter (z. B. ip6.arpa-Zonennamen) umbrechen statt überzustehen */
 .dm-page-sub { color: var(--dm-muted); font-size: 13px; margin-top: 4px; }
 .dm-page-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 
