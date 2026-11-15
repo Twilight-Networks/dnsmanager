@@ -133,8 +133,14 @@ postN('actions/zone_add.php', pairsN($form, ['type' => 'reverse_ipv4', 'zone_pre
 $z = zoneId('40.10.in-addr.arpa');
 $ok($z > 0 && addrRows($z) === [], 'N6', 'Reverse-Zone: keine Adressrecords (unverändert)');
 
-// ---------- B: NS-/Glue-Neuaufbau ----------
+// ---------- B: NS-/Glue-Neuaufbau (setzt die Zonen aus N voraus) ----------
 $zb = zoneId('case.test');
+if ($zb === 0 || zoneId('apex.test') === 0) {
+    $ok(false, 'B0', 'Ausgangszonen case.test/apex.test fehlen (Neuanlage abgelehnt) – B und K nicht ausführbar');
+    printf("Ergebnis NS-Apex: %d bestanden, %d fehlgeschlagen, %d Beobachtungen
+", $pass, $fail, $info);
+    exit(1);
+}
 sqlx("INSERT INTO DB.records (zone_id, name, type, content, ttl, server_id) VALUES ($zb, 'www', 'A', '198.51.100.10', 300, NULL)");
 $f = formFor(cgi('GET', "pages/zones.php?edit_id=$zb", '', $c)['body'], 'actions/zone_update.php', "editForm_$zb");
 postN('actions/zone_update.php', pairsN($f, ['server_ids' => ['6', '5'], 'master_server_id' => '6']), $c);
