@@ -235,12 +235,14 @@ hr { border-color: var(--dm-border); opacity: 1; }
 .app-theme-switch .btn { --bs-btn-padding-y: 2px; --bs-btn-padding-x: 8px; border: 1px solid var(--dm-border); color: var(--dm-muted); background: transparent; }
 .app-theme-switch .btn[aria-pressed="true"] { background: var(--dm-accent-soft); color: var(--dm-accent-text); border-color: var(--dm-border); }
 
-.app-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.app-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+    --dm-content-max: 1400px; }   /* Maximalbreite des Inhalts, gemeinsam für .content und den Breadcrumb */
 .app-pagebar {
     height: 52px; align-items: center; gap: 16px; padding: 0 28px;
     border-bottom: 1px solid var(--dm-border-soft); background: var(--dm-bg);
 }
-.app-crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dm-muted); }
+.app-crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dm-muted);
+    width: 100%; max-width: calc(var(--dm-content-max) - 56px); margin-inline: auto; }   /* fluchtet mit dem Text von .content (Innenabstand je 28px) */
 .app-crumbs .sep { opacity: .5; }
 .app-crumbs a { color: var(--dm-muted); }
 .app-crumbs a:hover { color: var(--dm-text); }
@@ -257,7 +259,7 @@ hr { border-color: var(--dm-border); opacity: 1; }
 .app-menu-toggle { display: inline-flex; align-items: center; gap: .4rem; color: var(--dm-text); border: 1px solid var(--dm-border); }
 
 .content {
-    flex-grow: 1; padding: 24px 28px 40px; max-width: 1400px; width: 100%;
+    flex-grow: 1; padding: 24px 28px 40px; max-width: var(--dm-content-max); width: 100%;
     margin-inline: auto; /* in der Arbeitsfläche rechts der Sidebar zentriert, sobald die Maximalbreite greift */
     min-width: 0;        /* breite Tabellen scrollen im Inhalt statt die Seite zu verbreitern */
     overflow-x: auto;
