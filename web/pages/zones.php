@@ -122,7 +122,11 @@ if ($zones === []) {
         foreach ($group as $z) {
             $isCurrent = $edit_id === $z['id'] && $zone_edit !== null;
             echo '<tr' . ($isCurrent ? ' class="dm-current"' : '') . '>';
-            echo '<td class="dm-mono dm-col-name"><a href="pages/records.php?zone_id=' . $z['id'] . '">' . ui_e($z['name']) . '</a>'
+            // Überlange Namen (z. B. ip6.arpa) dürfen nur an Labelgrenzen umbrechen: <wbr> nach jedem Punkt, erst nach
+            // der HTML-Kodierung eingefügt; Text, Link und Kopierinhalt bleiben unverändert. Kürzere Namen wie bisher.
+            $longName = strlen($z['name']) > 36;
+            $nameHtml = $longName ? str_replace('.', '.<wbr>', ui_e($z['name'])) : ui_e($z['name']);
+            echo '<td class="dm-mono dm-col-name' . ($longName ? ' dm-col-name-long' : '') . '"><a href="pages/records.php?zone_id=' . $z['id'] . '">' . $nameHtml . '</a>'
                 . ($type === 'reverse' && $z['prefixLength'] !== null ? ' <span class="dm-muted">/' . (int)$z['prefixLength'] . '</span>' : '') . '</td>';
             echo '<td class="dm-col-status">' . zoneViewStatusHtml($z) . '</td>';
             echo '<td class="dm-col-num">' . (int)$z['recordCount'] . '</td>';
