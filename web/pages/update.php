@@ -7,6 +7,7 @@
  * - Diese Seite übersetzt das Ergebnis in Meldungen (aktuell / Update verfügbar / Fehler) und stellt sie dar.
  * - Nur für Administratoren (S36a): requireRole() vor dem Abruf und vor jeder Ausgabe.
  * - Antwortfelder werden im UpdateCheckService geprüft (S36b): Links nur als absolute HTTPS-URL, sonst entfallen sie.
+ * - Abschluss über layout_footer.php wie auf allen Layout-Seiten (U6-B1).
  */
 
 require_once __DIR__ . '/../common.php';
@@ -76,4 +77,6 @@ if ($error) {
 } else {
     echo ui_notice('ok', strip_tags(sprintf($LANG['update_current'], $current_version)));
 }
-?>
+
+// U6-B1: Layout-Abschluss wie auf allen Layout-Seiten (Bootstrap-JS für das Mobilmenü, schließende Elemente)
+include __DIR__ . '/../templates/layout_footer.php';
