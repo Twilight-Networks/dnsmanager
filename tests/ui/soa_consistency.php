@@ -279,17 +279,39 @@ sqlx('UPDATE DB.zones SET changed = 0');
 $T = new PDO('mysql:unix_socket=/run/mysqld/mysqld.sock;dbname=' . DB . ';charset=utf8mb4', 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $T->exec("SET SESSION TRANSACTION ISOLATION LEVEL $isoSql");
 
-// K1: Umbenennung wartet auf die Zonenzeile; der dazwischen geänderte SOA wird sperrend gelesen (nicht überschrieben)
-$T->beginTransaction();
-$T->query("SELECT id FROM zones WHERE id = $k1 FOR UPDATE")->fetchAll();
-$w = worker($iso, ['rename', '3', 'ns1.k.test']);
-$waited = waitForLockWait();
-$T->exec("UPDATE zones SET soa_ns = 'ns1.example.test.manuell.' WHERE id = $k1");
-$T->commit();
-$res = workerResult($w);
-$ok($waited && $res['ok'] && zrow($k1)['soa_ns'] === 'ns1.example.test.manuell.' && $q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn() === 'ns1.k.test'
-    && in_array('ns1.k.test.', nsOf($k1), true), 'K1',
-    'Umbenennung wartet nachweislich auf die gesperrte Zonenzeile (LOCK WAIT); der zwischenzeitlich abweichend gesetzte SOA bleibt erhalten (sperrendes Lesen), NS umgestellt: ' . json_encode($res['codes']));
+// K1: Umbenennung wartet auf die gesperrte Zonenzeile, die dazwischen einen abweichenden SOA erhält. Kein Lost Update:
+//     entweder Erfolg mit erhaltenem SOA (sperrendes Lesen; RC und RR ohne Snapshot-Isolationsprüfung) oder – MariaDB
+//     ab 11.6 unter RR mit innodb_snapshot_isolation = ON – Ablehnung (Fehler 1020) mit vollständigem Rollback.
+$k1run = function (string $wIso, string $newName) use ($T, $k1, $q, $ok) {
+    $srvBefore = $q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn();
+    // Ausgangslage je Lauf: SOA = aktueller Master-FQDN (sonst greift die Bedingung der Umbenennung gar nicht)
+    $GLOBALS['root']->prepare('UPDATE `' . DB . '`.zones SET soa_ns = ? WHERE id = ?')->execute([SoaName((string)$srvBefore), $k1]);
+    $nsBefore = nsOf($k1);
+    $T->beginTransaction();
+    $T->query("SELECT id FROM zones WHERE id = $k1 FOR UPDATE")->fetchAll();
+    $w = worker($wIso, ['rename', '3', $newName]);
+    $waited = waitForLockWait();
+    usleep(1500000); // Leseansicht des wartenden Prozesses liegt sicher vor der Änderung (wie Zonen-Editor parallel)
+    $manual = 'manuell.' . $newName . '.';
+    $T->exec("UPDATE zones SET soa_ns = " . $T->quote($manual) . " WHERE id = $k1");
+    $T->commit();
+    $res = workerResult($w);
+    $srv = $q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn();
+    $soaKept = zrow($k1)['soa_ns'] === $manual;
+    if ($res['ok']) {
+        $ok($waited && $soaKept && $srv === $newName && in_array(SoaName($newName), nsOf($k1), true), "K1-$wIso",
+            "Umbenennung wartet (LOCK WAIT), danach erfolgreich; zwischenzeitlich gesetzter SOA erhalten (kein Lost Update), NS umgestellt");
+    } else {
+        $ok($waited && $soaKept && $srv === $srvBefore && nsOf($k1) === $nsBefore && str_contains((string)($res['detail'] ?? ''), '1020') && locksFree(), "K1-$wIso",
+            'Umbenennung wartet (LOCK WAIT), dann Snapshot-Konflikt (1020) → vollständiges Rollback, SOA erhalten, Server/NS unverändert, Sperren frei');
+    }
+    return $res['ok'];
+};
+function SoaName(string $n): string { return rtrim($n, '.') . '.'; }
+$k1run($iso, 'ns1.k.test');
+if ($iso === 'RR') { $k1run('RR0', 'ns1.k0.test'); }
+// aktueller Master-FQDN von Server 3 (je nach Ausgang von K1)
+$m3 = SoaName((string)$q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn());
 
 // K2: Topologie-Lock belegt → Übernahme und Umbenennung abgelehnt, nichts geändert; danach Übernahme erfolgreich
 $T->query("SELECT GET_LOCK('dnsmanager_publish_all', 0)")->fetchColumn();
@@ -300,10 +322,10 @@ $ok(!$r1['ok'] && in_array('zone.update.topology_locked', $r1['codes'], true) &&
     'K2', 'Topologie-Lock belegt: Übernahme und Umbenennung abgelehnt, nichts geändert: ' . json_encode([$r1['codes'], $r2['codes']]));
 $T->query("SELECT RELEASE_LOCK('dnsmanager_publish_all')")->fetchColumn();
 $r3 = workerResult(worker($iso, ['adopt', (string)$k2]));
-$ok($r3['ok'] && zrow($k2)['soa_ns'] === 'ns1.k.test.', 'K3', 'nach Freigabe: Übernahme setzt den aktuellen Master-FQDN ns1.k.test.: ' . json_encode($r3['codes']));
+$ok($r3['ok'] && zrow($k2)['soa_ns'] === $m3, 'K3', "nach Freigabe: Übernahme setzt den aktuellen Master-FQDN $m3: " . json_encode($r3['codes']));
 
 // K4: Übernahme wartet auf die Zonenzeile; Änderung dazwischen → optimistische Versionsprüfung lehnt ab
-sqlx("UPDATE DB.zones SET soa_ns = 'ns1.k.test.alt.' WHERE id = $k2");
+sqlx("UPDATE DB.zones SET soa_ns = 'alt.example.test.' WHERE id = $k2");
 $T->beginTransaction();
 $T->query("SELECT id FROM zones WHERE id = $k2 FOR UPDATE")->fetchAll();
 $w = worker($iso, ['adopt', (string)$k2]);
@@ -311,7 +333,7 @@ $waited = waitForLockWait();
 $T->exec("UPDATE zones SET ttl = 7200 WHERE id = $k2");
 $T->commit();
 $res = workerResult($w);
-$ok($waited && !$res['ok'] && in_array('zone.update.conflict', $res['codes'], true) && zrow($k2)['soa_ns'] === 'ns1.k.test.alt.', 'K4',
+$ok($waited && !$res['ok'] && in_array('zone.update.conflict', $res['codes'], true) && zrow($k2)['soa_ns'] === 'alt.example.test.', 'K4',
     'Übernahme wartet (LOCK WAIT), Zone dazwischen geändert → Konflikt, SOA unverändert: ' . json_encode($res['codes']));
 // K5: gleiche Lage ohne Änderung dazwischen → nach der Wartezeit erfolgreich
 $T->beginTransaction();
@@ -320,7 +342,7 @@ $w = worker($iso, ['adopt', (string)$k2]);
 $waited = waitForLockWait();
 $T->commit();
 $res = workerResult($w);
-$ok($waited && $res['ok'] && zrow($k2)['soa_ns'] === 'ns1.k.test.', 'K5', 'Übernahme wartet (LOCK WAIT) und gelingt danach: ' . json_encode($res['codes']));
+$ok($waited && $res['ok'] && zrow($k2)['soa_ns'] === $m3, 'K5', 'Übernahme wartet (LOCK WAIT) und gelingt danach: ' . json_encode($res['codes']));
 // K6: Masterwechsel als eigener Prozess
 $res = workerResult(worker($iso, ['master', (string)$k1, '4', '3,4']));
 $ok($res['ok'] && zrow($k1)['soa_ns'] === 'ns2.example.test.' && locksFree() && openTrx() === 0, 'K6', 'Masterwechsel (eigener Prozess): SOA ns2.example.test., Sperren frei: ' . json_encode($res['codes']));
@@ -339,7 +361,7 @@ if ($webCases) {
     postF('actions/publish_all.php', [], $a);
     $after = [zrow($k1), zrow($k2)];
     $ok((int)$after[0]['changed'] === 0 && (int)$after[1]['changed'] === 0 && $after[0]['soa_serial'] > $before[0]['soa_serial'] && $after[1]['soa_serial'] > $before[1]['soa_serial']
-        && $after[0]['soa_ns'] === 'ns2.example.test.' && $after[1]['soa_ns'] === 'ns1.k.test.', 'K8',
+        && $after[0]['soa_ns'] === 'ns2.example.test.' && $after[1]['soa_ns'] === $m3, 'K8',
         'Publish danach: Zonen veröffentlicht (changed 0), Serial nach bisheriger Strategie erhöht, SOA-Werte erhalten (' . (toasts($a)[0] ?? '-') . ')');
 }
 printf("Ergebnis SOA-Konsistenz [%s]: %d bestanden, %d fehlgeschlagen\n", $iso, $pass, $fail);

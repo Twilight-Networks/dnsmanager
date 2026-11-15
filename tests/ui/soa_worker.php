@@ -3,10 +3,11 @@
  * Datei: tests/ui/soa_worker.php
  * Zweck: Führt eine Server-/Zonenoperation der Testkopie in einem eigenen Prozess mit eigener Datenbankverbindung und
  *        gewählter Isolationsstufe aus (für die Nebenläufigkeitsfälle in soa_consistency.php) und gibt das Ergebnis
- *        als JSON aus: {"ok": bool, "codes": [...]}.
- * Aufruf: php soa_worker.php RR|RC rename <serverId> <neuerName>
- *         php soa_worker.php RR|RC adopt <zoneId>
- *         php soa_worker.php RR|RC master <zoneId> <masterId> <serverId,serverId,...>
+ *        als JSON aus: {"ok": bool, "codes": [...], "detail": "..."}. RR0 = REPEATABLE READ mit
+ *        innodb_snapshot_isolation = OFF.
+ * Aufruf: php soa_worker.php RR|RR0|RC rename <serverId> <neuerName>
+ *         php soa_worker.php RR|RR0|RC adopt <zoneId>
+ *         php soa_worker.php RR|RR0|RC master <zoneId> <masterId> <serverId,serverId,...>
  */
 require __DIR__ . '/lib.php';
 require APP . '/web/inc/logging.php';
@@ -22,6 +23,10 @@ if (!defined('LOG_LEVEL')) { define('LOG_LEVEL', 'error'); }
 [$_, $iso, $op] = $argv + [null, 'RR', ''];
 $pdo = new PDO('mysql:unix_socket=/run/mysqld/mysqld.sock;dbname=' . DB . ';charset=utf8mb4', 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $pdo->exec('SET SESSION TRANSACTION ISOLATION LEVEL ' . ($iso === 'RC' ? 'READ COMMITTED' : 'REPEATABLE READ'));
+if ($iso === 'RR0') {
+    // REPEATABLE READ ohne Snapshot-Isolationsprüfung (Verhalten älterer MariaDB-/MySQL-Versionen)
+    $pdo->exec('SET SESSION innodb_snapshot_isolation = OFF');
+}
 $admin = new Actor(1, 'u0admin', 'admin', '127.0.0.1', 'cli');
 $build = new BindZoneBuildBackend($pdo);
 
@@ -51,4 +56,6 @@ $result = match ($op) {
     default => null,
 };
 if ($result === null) { fwrite(STDERR, "unbekannte Operation\n"); exit(2); }
-echo json_encode(['ok' => $result->ok, 'codes' => array_map(fn($m) => $m->code, $result->messages)]), "\n";
+echo json_encode(['ok' => $result->ok, 'codes' => array_map(fn($m) => $m->code, $result->messages),
+    'detail' => implode(' | ', array_filter(array_map(fn($m) => (string)($m->context['detail'] ?? ''), $result->messages)))], JSON_UNESCAPED_UNICODE), "
+";
