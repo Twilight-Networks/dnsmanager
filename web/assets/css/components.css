@@ -245,7 +245,12 @@ html.no-js .toast .btn-close { display: none; }
 
 /* ---------- Server, DynDNS, Benutzer, Systemstatus (U5b) ---------- */
 .dm-confirm-action > summary { white-space: nowrap; }
-.dm-confirm-action .dm-confirm-pop { white-space: normal; min-width: 280px; max-width: 420px; }
+.dm-confirm-action[open] > summary { background: var(--dm-warn-soft); }
+/* U5B-R1: Rückfrage im normalen Layoutfluss statt absolut positioniert – sie vergrößert die Tabellenzeile und kann in
+   .table-responsive (overflow) bzw. .dm-card nicht abgeschnitten werden; der Bestätigungsbutton bleibt sichtbar. */
+.dm-confirm.dm-confirm-action[open] { display: block; margin: 4px 0; }
+.dm-confirm-action .dm-confirm-pop { position: static; z-index: auto; margin: 6px 0 0 auto; width: fit-content; max-width: 18rem;
+    white-space: normal; flex-wrap: wrap; justify-content: flex-end; text-align: right; box-shadow: none; border-color: var(--dm-warn-line); }
 .dm-info-card > summary { cursor: pointer; list-style: none; }
 .dm-info-card > summary::-webkit-details-marker { display: none; }
 .dm-info-card > summary .bi { width: 16px; height: 16px; color: var(--dm-info); }
