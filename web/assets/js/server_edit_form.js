@@ -85,7 +85,8 @@ document.addEventListener('DOMContentLoaded', function () {
             sameIp6Checkbox.checked = false;
         }
 
-        [apiIpField, sameIpCheckbox, sameIp6Checkbox].forEach(field => {
+        // API-IP: Darstellung über .form-control[readonly] mit den Theme-Variablen (kein bg-light, im Dark Mode hell)
+        [sameIpCheckbox, sameIp6Checkbox].forEach(field => {
             field.classList.toggle('bg-light', disabled);
             field.classList.toggle('text-muted', disabled);
         });
