@@ -4,7 +4,8 @@
  * Zweck: Empfang von CSP-Verstoßberichten im Report-Only-Modus (U2, Leitfaden docs/UI_GUIDELINES.md, Abschnitt 4).
  *
  * Verhalten:
- * - Nur aktiv bei CSP_REPORT_ONLY === true (ui_config.php); sonst 404 ohne Protokollierung.
+ * - Nur aktiv im CSP-Modus 'report-only' (CSP_MODE bzw. Kompatibilitätsfall CSP_REPORT_ONLY === true, siehe
+ *   inc/web/csp.php); bei 'enforce' und 'off' 404 ohne Protokollierung (U6, E2).
  * - Ausschließlich POST (sonst 405), Inhaltstyp application/csp-report, application/json oder
  *   application/reports+json (sonst 415), höchstens 8 KiB (sonst 413).
  * - Ratenbegrenzung ohne Session: je Quelladresse und insgesamt je Zeitfenster (sonst 429; die erste

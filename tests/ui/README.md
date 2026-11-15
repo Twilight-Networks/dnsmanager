@@ -148,11 +148,25 @@ Im Modus `serve` liefert der Router zusätzlich die Testseiten aus `tests/ui/sho
 generierten Konfiguration der Testkopie** unter `/tmp/dnsmgr-uig`; die installierte Anwendung bleibt unberührt.
 - Die Seiten senden dann `Content-Security-Policy-Report-Only` mit der Zielrichtlinie, und Verstoßberichte gehen an
   `csp_report.php` der Testkopie (Log `event=csp_violation`).
-- Nur im Modus `serve` zulässig; Golden-Läufe (`record`/`compare`) laufen ohne CSP-Header, damit der Headervertrag
-  unverändert bleibt.
+- Nur im Modus `serve` zulässig; Golden-Läufe (`record`/`compare`) laufen im Standardmodus (ab U6 `enforce`).
 - Der Ratenstatus des Endpunkts liegt in `/tmp/dnsmgr-uig/csp-state` (0700, www-data; `CSP_REPORT_STATE_DIR` der
   Testkopie) und wird mit der Testkopie entfernt; andere Dateien im temporären Verzeichnis bleiben unberührt.
 - Beim Beenden werden die CSP-Logzeilen nach `$OUT_DIR/csp-<SHA>-<Zeit>.log` gesichert und gezählt.
+
+## CSP-Durchsetzung und 375-px-Prüfung (U6)
+
+- **Modi:** `UIG_CSP_MODE=enforce|report-only|off bash run.sh serve <App-SHA>` setzt `CSP_MODE` nur in der Testkopie
+  (ohne Angabe: Standard `enforce`). `report-only` legt zusätzlich den Ratenstatus an und sichert die CSP-Logzeilen.
+- **`u6.php`** (über `run.sh matrix`): Zielrichtlinie unverändert; je Konfigurationsvariante (ohne Einstellung,
+  `enforce`, `report-only`, `off`, nur `CSP_REPORT_ONLY`, Vorrang von `CSP_MODE`, ungültiger Wert) exakte Headerwerte
+  für Seite, Login, Redirects, 403 und DynDNS-API; Report-Endpunkt nur bei `report-only`; Status und Weiterleitungen
+  in allen Varianten gleich. Die Konfiguration der Testkopie wird danach wiederhergestellt.
+- **Golden:** `run.sh compare <SHA> baseline/golden-1e37515.json baseline/exceptions-u6.json`. Der Schlüssel
+  `headers+` gibt nur das Hinzukommen der unter `_headers_added` exakt genannten Headerzeile frei (U6-V1).
+- **`layout375.ps1`** (Windows, gegen `run.sh serve`): Edge headless über das DevTools-Protokoll mit Gerätemetrik
+  375 × 812. Je Seite: kein seitliches Scrollen, keine überstehenden Elemente außerhalb eines Scroll-Containers,
+  Treffertest aller Bedienelemente und der clientseitig geöffneten Bestätigungen (ohne Klick), CSP-Verstöße.
+  `-NoJs` nutzt die Ports 1861x, `-ColorScheme dark`, `-Shots all|name,…` mit `-OutDir` speichert Aufnahmen.
 
 ## Rollenmatrix
 

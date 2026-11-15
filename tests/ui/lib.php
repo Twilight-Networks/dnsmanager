@@ -85,7 +85,8 @@ function cgi(string $method, string $path, string $body, array &$cookies, array 
     if (preg_match_all('/^Set-Cookie: ([^=]+)=([^;\r\n]*)/mi', $head, $mm, PREG_SET_ORDER)) {
         foreach ($mm as $c) { $cookies[$c[1]] = $c[2]; }
     }
-    preg_match_all('/^(Content-type|X-Content-Type-Options|X-Frame-Options|Referrer-Policy|Content-Security-Policy|Allow): (.*)$/mi', $head, $hh, PREG_SET_ORDER);
+    // U6: auch Content-Security-Policy-Report-Only (Golden-Läufe nutzen den Standardmodus 'enforce', dort nie vorhanden)
+    preg_match_all('/^(Content-type|X-Content-Type-Options|X-Frame-Options|Referrer-Policy|Content-Security-Policy-Report-Only|Content-Security-Policy|Allow): (.*)$/mi', $head, $hh, PREG_SET_ORDER);
     $hdr = array_map(fn($x) => strtolower($x[1]) . ': ' . trim($x[2]), $hh); sort($hdr);
     return ['status' => $status, 'location' => $loc, 'body' => $resp, 'headers' => $hdr];
 }

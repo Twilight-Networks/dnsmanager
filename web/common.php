@@ -46,15 +46,17 @@ require_once __DIR__ . '/inc/asset_registry.php';
 // Wichtig: Verhindert Encoding-Probleme bei Umlauten, Toasts, dynamischen Ausgaben usw.
 if (!headers_sent()) {
     header('Content-Type: text/html; charset=UTF-8');
-    // Sicherheitsheader für alle PHP-Antworten (SP3-E6); noch keine durchgesetzte Content-Security-Policy (U6)
+    // Sicherheitsheader für alle PHP-Antworten (SP3-E6)
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: same-origin');
-    // U2: CSP nur als Report-Only und nur bei ausdrücklich gesetzter Testkonfiguration CSP_REPORT_ONLY === true
+    // U6: Content-Security-Policy nach CSP_MODE (Standard 'enforce'; 'report-only'; 'off' = kein CSP-Header)
     require_once __DIR__ . '/inc/web/csp.php';
-    if (csp_report_only_enabled()) {
-        header('Content-Security-Policy-Report-Only: ' . csp_report_only_header_value());
+    $cspHeader = csp_header_line();
+    if ($cspHeader !== null) {
+        header($cspHeader);
     }
+    unset($cspHeader);
 }
 
 // PHP-Error-Reporting steuern (abhängig von Entwicklungsmodus)

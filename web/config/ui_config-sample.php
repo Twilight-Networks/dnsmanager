@@ -150,10 +150,15 @@ define('LOG_LEVEL', 'info'); // Zulässige Werte: debug, info, warning, error
 define('PHP_ERR_REPORT', false); // true = Entwicklungsmodus, false = Produktivmodus
 
 /** ---------------------------------------
- *  Content-Security-Policy (Report-Only, U2)
- *  Nur für freigegebene Testumgebungen: sendet die Zielrichtlinie als Content-Security-Policy-Report-Only
- *  und nimmt Verstoßberichte unter csp_report.php an (Log: event=csp_violation). Ohne Eintrag kein Header.
+ *  Content-Security-Policy (U2, U6)
+ *  CSP_MODE:
+ *    'enforce'      Standard (auch ohne Eintrag): Content-Security-Policy mit der Zielrichtlinie
+ *    'report-only'  Content-Security-Policy-Report-Only; Verstoßberichte unter csp_report.php
+ *                   (Log: event=csp_violation), z. B. für die Erprobung nach einem Update
+ *    'off'          kein CSP-Header (Notschalter)
+ *  Ein gesetztes CSP_MODE hat Vorrang. CSP_REPORT_ONLY = true (U2) wirkt nur ohne CSP_MODE wie 'report-only'.
  * --------------------------------------- */
+// define('CSP_MODE', 'enforce');
 // define('CSP_REPORT_ONLY', true);
 // Optional: eigenes Verzeichnis für den Ratenstatus des Endpunkts (absolut; wird mit 0700 angelegt, muss dem
 // Webserver-Benutzer gehören). Ohne Eintrag: privates Unterverzeichnis im temporären Verzeichnis.
