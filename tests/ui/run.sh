@@ -168,6 +168,8 @@ if [ "$MODE" = matrix ]; then
   if grep -q "CSP_MODE" $T/app/web/inc/web/csp.php; then
     echo "--- U6"; php $H/u6.php || rc=1
   fi
+  # NS am Zonen-Apex und Groß-/Kleinschreibung (PR C): Neuanlage, Neuaufbau, manuelle Apex-Records, Fixture-Zonendateien
+  echo "--- NS-Apex"; php $H/ns_apex.php "$OUT_DIR/nsapex-${SHA:0:7}-$(date +%Y%m%d-%H%M%S)" || rc=1
   echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
   exit $rc
 fi
