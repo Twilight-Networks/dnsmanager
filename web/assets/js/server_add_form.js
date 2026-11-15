@@ -74,14 +74,13 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         // Bei lokalem Server => API-IP fest auf 127.0.0.1 setzen und readonly
+        // (Darstellung über .form-control[readonly] mit den Theme-Variablen; kein bg-light, das im Dark Mode hell bleibt)
         if (disabled) {
             apiIpField.readOnly = true;
             apiIpField.value = '127.0.0.1';
-            apiIpField.classList.add('bg-light', 'text-muted');
         } else {
             apiIpField.readOnly = false;
             apiIpField.value = '';
-            apiIpField.classList.remove('bg-light', 'text-muted');
         }
 
         // API-Key bleibt IMMER editierbar (auch für lokale Server)
