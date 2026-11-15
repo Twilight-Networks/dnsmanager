@@ -1,4 +1,9 @@
 {
+  "_db_changes": {
+    "zone/add_admin": [
+      {"table": "zones", "id": "4", "column": "soa_ns", "field": 6, "from": "ns1.u0.test.neu.u0.test.", "to": "ns1.u0.test."}
+    ]
+  },
   "_headers_added": ["content-security-policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"],
   "api/dyndns_update_badauth": ["headers+"],
   "api/dyndns_update_ok": ["headers+"],
@@ -108,7 +113,7 @@
   "user/password_zoneadmin_own": ["headers+"],
   "user/set_inactive_admin": ["headers+"],
   "user/update_admin": ["headers+"],
-  "zone/add_admin": ["db", "headers+"],
+  "zone/add_admin": ["db~", "headers+"],
   "zone/add_zoneadmin_denied": ["headers+"],
   "zone/delete_admin": ["headers+"],
   "zone/delete_zoneadmin_denied": ["headers+"],
