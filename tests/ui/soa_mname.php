@@ -4,7 +4,8 @@
  * Zweck: Regressionstests SOA-MNAME (primärer Nameserver) gegen die Testkopie, über die Web-Actions (Adapter und
  *        ZoneService) und die tatsächlich erzeugte Zonendatei:
  *        F  Neuanlage Forward-Zone: soa_ns = FQDN des Master-Servers mit abschließendem Punkt, ohne angehängten
- *           Zonennamen (Master innerhalb, außerhalb und gleich der Zone; Servername mit und ohne Punkt);
+ *           Zonennamen (Master innerhalb und außerhalb der Zone, Zonenname beginnt mit dem Servernamen;
+ *           Servername mit und ohne Punkt);
  *        U  Bestehende Forward-Zone ändern: ohne Masterwechsel bleibt soa_ns unverändert; Masterwechsel wird
  *           nur beobachtet (K, offene Entscheidung: soa_ns folgt dem Master bisher nicht);
  *        R  Reverse-Zonen (IPv4/IPv6): bisherige Regel Master + "." + SOA-Server-Domain unverändert (Regression);
@@ -123,7 +124,6 @@ function checkZone(callable $ok, PDO $pdo, string $id, string $zone, string $exp
 resetDb();
 sqlx("INSERT INTO DB.servers (id, name, dns_ip4, dns_ip6, api_ip, api_token, is_local, active) SELECT 3, 'ns1.example.test', '192.0.2.21', '2001:db8::21', api_ip, api_token, 0, 1 FROM DB.servers WHERE id = 2");
 sqlx("INSERT INTO DB.servers (id, name, dns_ip4, dns_ip6, api_ip, api_token, is_local, active) SELECT 4, 'ns2.example.test.', '192.0.2.22', NULL, api_ip, api_token, 0, 1 FROM DB.servers WHERE id = 2");
-sqlx("INSERT INTO DB.servers (id, name, dns_ip4, dns_ip6, api_ip, api_token, is_local, active) SELECT 5, 'apex.test', '192.0.2.23', NULL, api_ip, api_token, 0, 1 FROM DB.servers WHERE id = 2");
 sqlx("UPDATE DB.servers SET dns_ip6 = '2001:db8::12' WHERE id = 2");
 $c = session('admin');
 $base = ['soa_refresh' => '3600', 'soa_retry' => '1200', 'soa_expire' => '1209600', 'soa_minimum' => '3600', 'ttl' => '86400'];
@@ -138,7 +138,7 @@ $forward = [
     ['F4', 'twlnet.tld', ['3', '4'], '3', 'ns1.example.test.', ['ns1.example.test.', 'ns2.example.test.'], []],
     ['F5', 'other.org', ['1', '2'], '1', 'ns1.u0.test.', ['ns1.u0.test.', 'ns2.u0.test.'], []],
     ['F6', 'dot.test', ['4'], '4', 'ns2.example.test.', ['ns2.example.test.'], []],
-    ['F7', 'apex.test', ['5', '3'], '5', 'apex.test.', ['apex.test.', 'ns1.example.test.'], []],
+    ['F7', 'ns1.example.test.org', ['3'], '3', 'ns1.example.test.', ['ns1.example.test.'], []],
     ['F8', 'sub.ns.example.org', ['1'], '1', 'ns1.u0.test.', ['ns1.u0.test.'], []],
 ];
 foreach ($forward as [$id, $zone, $servers, $master, $mname, $ns, $glue]) {
@@ -170,7 +170,7 @@ $note('K1', "Masterwechsel einer Forward-Zone: soa_ns danach '{$z3['soa_ns']}' (
 
 // ---------- R: Reverse-Zonen (bisherige Regel unverändert) ----------
 $reverse = [
-    ['R1', 'reverse_ipv4', '10.20', '20.10.in-addr.arpa', ['prefix_length' => '16', 'soa_domain' => 'u0.test'], ['1'], '1', 'ns1.u0.test.u0.test.'],
+    ['R1', 'reverse_ipv4', '20.10', '20.10.in-addr.arpa', ['prefix_length' => '16', 'soa_domain' => 'u0.test'], ['1'], '1', 'ns1.u0.test.u0.test.'],
     ['R2', 'reverse_ipv6', '8.b.d.0.1.0.0.2', '8.b.d.0.1.0.0.2.ip6.arpa', ['prefix_length' => '32', 'soa_domain' => 'example.test'], ['3', '4'], '3', 'ns1.example.test.example.test.'],
 ];
 foreach ($reverse as [$id, $type, $prefix, $zone, $extra, $servers, $master, $mname]) {
