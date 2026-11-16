@@ -30,6 +30,9 @@ final class RecordReadService
     public const DEFAULT_LIMIT = 500;
     public const MAX_LIMIT = 1000;
 
+    /** Höchstzahl der Records je Abfrage beim losen DynDNS-Namensvergleich (dyndnsReservedRecordIds) */
+    private const LOOSE_BATCH = 500;
+
     private PDO $pdo;
     private ZoneAccess $zoneAccess;
 
@@ -350,25 +353,35 @@ final class RecordReadService
             }
         }
 
-        // Lose Treffer über die Collation (wie dyndnsFindOwnerReservations), in einer Anweisung mit Zonenberechtigung
-        $parts = [];
-        $params = [];
-        foreach ($looseCandidates as $rid => $name) {
-            $forms = dyndnsLooseNameForms($name, $zoneName);
-            $in = implode(',', array_fill(0, count($forms), '?'));
-            $parts[] = 'SELECT ? AS rid FROM dyndns_accounts a JOIN zones z ON z.id = a.zone_id'
+        // Lose Treffer über die Collation (wie dyndnsFindOwnerReservations): je Kandidat derselbe Vergleich
+        // (hostname IN (Formen) OR TRIM(TRAILING '.' FROM TRIM(hostname)) IN (Formen)) als Aggregat über die Accounts
+        // der Zone. Eine Anweisung mit Zonenberechtigung je Block von höchstens LOOSE_BATCH Kandidaten statt einer
+        // Teilabfrage je Record: Größe und Aufwand wachsen linear mit der Zahl der Records.
+        foreach (array_chunk($looseCandidates, self::LOOSE_BATCH, true) as $batch) {
+            $cols = [];
+            $params = [];
+            foreach ($batch as $name) {
+                $forms = dyndnsLooseNameForms($name, $zoneName);
+                $in = implode(',', array_fill(0, count($forms), '?'));
+                $cols[] = "MAX(a.hostname IN ($in) OR TRIM(TRAILING '.' FROM TRIM(a.hostname)) IN ($in))";
+                array_push($params, ...$forms, ...$forms);
+            }
+            array_push($params, $zoneId, ...$access['params']);
+            $stmt = $this->pdo->prepare(
+                'SELECT ' . implode(', ', $cols) . ' FROM dyndns_accounts a'
+                . ' JOIN zones z ON z.id = a.zone_id'
                 . ' WHERE z.id = ? AND ' . $access['sql']
-                . " AND (a.hostname IN ($in) OR TRIM(TRAILING '.' FROM TRIM(a.hostname)) IN ($in))";
-            $params = array_merge($params, [$rid, $zoneId], $access['params'], $forms, $forms);
-        }
-        if ($parts !== []) {
-            $stmt = $this->pdo->prepare(implode(' UNION ALL ', $parts));
+            );
             foreach ($params as $i => $v) {
                 $stmt->bindValue($i + 1, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
             }
             $stmt->execute();
-            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $rid) {
-                $reserved[(int)$rid] = true;
+            $row = $stmt->fetch(PDO::FETCH_NUM) ?: [];
+            $ids = array_keys($batch);
+            foreach ($row as $i => $hit) {
+                if ((int)$hit === 1) {
+                    $reserved[$ids[$i]] = true;
+                }
             }
         }
 

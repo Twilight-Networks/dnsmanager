@@ -96,6 +96,20 @@ scenario('Y12', ["INSERT INTO DB.dyndns_accounts (username, password_hash, zone_
 scenario('Y13', ["UPDATE DB.records SET content = '192.0.2.99', name = 'mail' WHERE id = 6", "UPDATE DB.dyndns_accounts SET hostname = 'mail' WHERE id = 1"], [6],
     'Hostname-Wechsel: mail verwaltet, dyn nicht mehr');
 
+// Große Zone: der lose Vergleich läuft in Blöcken (RecordReadService::LOOSE_BATCH = 500); lose Treffer im ersten und im
+// letzten Block (AAAA wird nach allen A-Records sortiert), strikter Konflikt, 1.100 unbeteiligte Records
+$bulk = [];
+for ($i = 0; $i < 1100; $i++) { $bulk[] = sprintf("(1, 'h%04d', 'A', '198.51.100.%d', 3600)", $i, $i % 250 + 1); }
+$bigSql = ['INSERT INTO DB.records (zone_id, name, type, content, ttl) VALUES ' . implode(',', $bulk),
+    "INSERT INTO DB.records (id, zone_id, name, type, content, ttl) VALUES (950, 1, 'dýn', 'A', '192.0.2.98', 300), (951, 1, 'dÝn', 'AAAA', '2001:db8::98', 300),"
+    . " (952, 1, 'DYN.u0.test.', 'AAAA', '2001:db8::97', 300), (953, 1, 'zz', 'AAAA', '2001:db8::96', 300)"];
+scenario('Y17', $bigSql, [8], 'große Zone (1.100 + 4 Records, mehrere Blöcke): verwaltet [8], Reservierungen = Schutz');
+$reservedOf = fn(?array $v) => array_values(array_map(fn($r) => $r['id'], array_filter($v['records'] ?? [], fn($r) => $r['isDyndnsReserved'])));
+$rA = $reservedOf($svc->getZoneRecordView($admin, 1)); $rZ = $reservedOf($svc->getZoneRecordView($zoneadmin, 1));
+sort($rA); sort($rZ);
+$ok($rA === [950, 951, 952] && $rZ === $rA, 'Y18', 'große Zone: reserviert [950 lose/erster Block, 951 lose/letzter Block, 952 strikt] für admin und zoneadmin: '
+    . json_encode($rA) . ' / ' . json_encode($rZ));
+
 // Rechte und keine Account-Daten
 resetDb();
 sqlx("INSERT INTO DB.dyndns_accounts (username, password_hash, zone_id, hostname, current_ipv4) VALUES ('u0app', 'x', 2, 'app', '192.0.2.81')");
