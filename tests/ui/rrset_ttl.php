@@ -8,8 +8,9 @@
  *           unabhängige Auswertung mit named-checkzone -D;
  *        R  systemgenerierte und identische manuelle Records, Neuaufbau, geänderte manuelle TTL, veränderte
  *           Reihenfolge: effektive TTL unabhängig von der Reihenfolge;
- *        P  Vorschau (actions/record_preview.php) und Record-Liste zeigen die veröffentlichte TTL; Abweichung zur
- *           gespeicherten TTL als Hinweis.
+ *        P  Vorschau (actions/record_preview.php, No-JS) und Record-Liste zeigen die veröffentlichte TTL; Abweichung zur
+ *           gespeicherten TTL als Hinweis; „unverändert“ bezieht sich auf die Zonendateizeile; gespeicherte TTL NULL
+ *           wird als vererbte Zonen-TTL angezeigt.
  * Aufruf (über run.sh matrix): php rrset_ttl.php [Ausgabeverzeichnis]
  */
 require __DIR__ . '/lib.php';
@@ -201,5 +202,29 @@ $ok(preg_match('#192\.0\.2\.4</span></td><td class="dm-col-ttl">[^<]*<span class
     'Record-Liste: gespeicherte TTL 3600 mit Kennzeichnung der veröffentlichten TTL 300');
 $ok(preg_match('#192\.0\.2\.1</span></td><td class="dm-col-ttl">[^<]*</td>#', $page) === 1, 'P6', 'Record-Liste: konsistenter Record ohne Kennzeichnung');
 
+// P7–P9: Record-Liste mit gespeicherter TTL NULL (Zonen-TTL 7200) und mit expliziter TTL
+$cell = function (string $content) use ($page): ?string {
+    return preg_match('#' . preg_quote($content, '#') . '</span></td><td class="dm-col-ttl">(.*?)</td>#', $page, $m) ? $m[1] : null;
+};
+$ok($cell('192.0.2.16') === 'Zonen-TTL (7200 Sekunden)', 'P7', 'TTL NULL, RRset konsistent: Anzeige der vererbten Zonen-TTL statt 0, keine Kennzeichnung: ' . json_encode($cell('192.0.2.16')));
+$ok(preg_match('#^Zonen-TTL \(7200 Sekunden\) <span class="dm-ttl-effective"[^>]*>→ 3600 Sekunden</span>$#', (string)$cell('192.0.2.12')) === 1, 'P8',
+    'TTL NULL in einem RRset mit niedrigerer TTL: Zonen-TTL und Kennzeichnung der veröffentlichten TTL 3600: ' . json_encode($cell('192.0.2.12'), JSON_UNESCAPED_UNICODE));
+$ok($cell('192.0.2.1') === '10 Minuten' && preg_match('#^9000 Sekunden <span class="dm-ttl-effective"[^>]*>→ 7200 Sekunden</span>$#', (string)$cell('192.0.2.15')) === 1, 'P9',
+    'explizite TTL unverändert dargestellt (600 → „10 Minuten“; 9000 mit Kennzeichnung der veröffentlichten Zonen-TTL 7200): '
+    . json_encode([$cell('192.0.2.1'), $cell('192.0.2.15')], JSON_UNESCAPED_UNICODE));
+// P10–P11: geänderte gespeicherte TTL bei unveränderter veröffentlichter RRset-TTL (3600 → 600, RRset bleibt 300)
+$pairsP = [['id', (string)$big], ['zone_id', (string)$zt], ['type', 'A'], ['ttl', '600'], ['name', 'mixed'], ['content', '192.0.2.4']];
+sqlx("UPDATE DB.records SET ttl = 3600 WHERE id = $big");
+$r = postT('actions/record_preview.php', $pairsP, $c);
+$j = json_decode($r['body'], true) ?? [];
+$ok(($j['oldLine'] ?? '') === "mixed\t300\tIN\tA\t192.0.2.4" && ($j['newLine'] ?? '') === "mixed\t300\tIN\tA\t192.0.2.4" && ($j['unchanged'] ?? false) === true
+    && count($j['hints'] ?? []) === 1, 'P10', 'Vorschau (JS-Endpunkt) 3600 → 600 bei RRset-TTL 300: gleiche Zonendateizeile, unchanged, Hinweis auf die RRset-TTL');
+$r = postT("pages/records.php?zone_id=$zt&edit_id=$big", array_merge($pairsP, [['preview', '1']]), $c);
+$ok(str_contains($r['body'], 'Die erzeugte Zeile der Zonendatei bleibt unverändert.') && !str_contains($r['body'], 'gespeicherten Eintrag')
+    && str_contains($r['body'], 'niedrigsten TTL von 300 s'), 'P11',
+    'Vorschau ohne JavaScript: Meldung bezieht sich auf die Zonendateizeile, RRset-Hinweis sichtbar');
+$jsTexts = cgi('GET', "pages/records.php?zone_id=$zt&edit_id=$big", '', $c)['body'];
+$ok(str_contains($jsTexts, 'Die erzeugte Zeile der Zonendatei bleibt unverändert.') && !str_contains($jsTexts, 'gegenüber dem gespeicherten Eintrag'), 'P12',
+    'Texte für die JS-Vorschau (records.php) enthalten die neue Meldung');
 printf("Ergebnis RRset-TTL: %d bestanden, %d fehlgeschlagen\n", $pass, $fail);
 exit($fail === 0 ? 0 : 1);

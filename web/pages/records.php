@@ -175,7 +175,11 @@ if ($records === []) {
             echo '<td class="dm-mono dm-col-content" title="' . ui_e($r['content']) . '"><span class="dm-truncate">' . ui_e($r['content']) . '</span></td>';
             $ownTtl = $r['ttl'] === null ? (int)$zoneData['ttl'] : (int)$r['ttl'];
             $effTtl = $rrsetTtls[zone_file_rrset_key((string)$r['name'], (string)$r['type'], (string)$zoneData['name'])] ?? $ownTtl;
-            echo '<td class="dm-col-ttl">' . ui_e(recordEditorTtlLabel($r['type'], (int)$r['ttl']))
+            // Gespeicherte TTL NULL: es gilt die Zonen-TTL (wie in der Zonendatei); explizite TTLs unverändert dargestellt
+            $ttlLabel = $r['ttl'] === null
+                ? sprintf($LANG['record_ttl_zone_default'], (int)$zoneData['ttl'] . ' ' . $LANG['seconds'])
+                : recordEditorTtlLabel($r['type'], (int)$r['ttl']);
+            echo '<td class="dm-col-ttl">' . ui_e($ttlLabel)
                 . ($effTtl !== $ownTtl ? ' <span class="dm-ttl-effective" title="' . ui_e(sprintf($LANG['record_ttl_effective_title'], $effTtl)) . '">→ '
                     . ui_e($effTtl . ' ' . $LANG['seconds']) . '</span>' : '') . '</td>';
             echo '<td class="dm-col-origin">' . recordEditorOriginHtml($r) . '</td>';
