@@ -287,6 +287,7 @@ $k1run = function (string $wIso, string $newName) use ($T, $k1, $q, $ok) {
     // Ausgangslage je Lauf: SOA = aktueller Master-FQDN (sonst greift die Bedingung der Umbenennung gar nicht)
     $GLOBALS['root']->prepare('UPDATE `' . DB . '`.zones SET soa_ns = ? WHERE id = ?')->execute([SoaName((string)$srvBefore), $k1]);
     $nsBefore = nsOf($k1);
+    $snap0 = snap();
     $T->beginTransaction();
     $T->query("SELECT id FROM zones WHERE id = $k1 FOR UPDATE")->fetchAll();
     $w = worker($wIso, ['rename', '3', $newName]);
@@ -302,14 +303,63 @@ $k1run = function (string $wIso, string $newName) use ($T, $k1, $q, $ok) {
         $ok($waited && $soaKept && $srv === $newName && in_array(SoaName($newName), nsOf($k1), true), "K1-$wIso",
             "Umbenennung wartet (LOCK WAIT), danach erfolgreich; zwischenzeitlich gesetzter SOA erhalten (kein Lost Update), NS umgestellt");
     } else {
-        $ok($waited && $soaKept && $srv === $srvBefore && nsOf($k1) === $nsBefore && str_contains((string)($res['detail'] ?? ''), '1020') && locksFree(), "K1-$wIso",
-            'Umbenennung wartet (LOCK WAIT), dann Snapshot-Konflikt (1020) → vollständiges Rollback, SOA erhalten, Server/NS unverändert, Sperren frei');
+        // Keine teilweise übernommene Änderung: alles wie vorher, nur der SOA von k1 trägt die Änderung der anderen Transaktion
+        $snap1 = snap();
+        $zonesExpected = array_map(fn($row) => str_starts_with($row, "$k1|") ? preg_replace('/^((?:[^|]*\|){6})[^|]*/', '${1}' . $manual, $row) : $row, $snap0['zones']);
+        $unchanged = $snap1['servers'] === $snap0['servers'] && $snap1['records'] === $snap0['records'] && $snap1['zone_servers'] === $snap0['zone_servers']
+            && $snap1['zones'] === $zonesExpected;
+        $ok($waited && $soaKept && $srv === $srvBefore && nsOf($k1) === $nsBefore && $unchanged && str_contains((string)($res['detail'] ?? ''), '1020')
+            && in_array('server.update.failed', $res['codes'], true) && locksFree() && openTrx() === 0, "K1-$wIso",
+            'Umbenennung wartet (LOCK WAIT), dann Snapshot-Konflikt (1020, Code server.update.failed) → vollständiges Rollback ohne Teiländerung, '
+            . 'nur die Änderung der anderen Transaktion bleibt, Sperren frei, keine offene Transaktion');
+        // Erneute Ausführung nach Auflösung des Konflikts (keine automatische Wiederholung in der Anwendung)
+        $retry = workerResult(worker($wIso, ['rename', '3', $newName]));
+        $ok($retry['ok'] && $q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn() === $newName && zrow($k1)['soa_ns'] === $manual
+            && in_array(SoaName($newName), nsOf($k1), true) && locksFree() && openTrx() === 0, "K1-$wIso-retry",
+            'erneute Ausführung gelingt: Server umbenannt, NS umgestellt, abweichender SOA (andere Transaktion) bleibt erhalten, Sperren frei');
+        return true;
     }
     return $res['ok'];
 };
 function SoaName(string $n): string { return rtrim($n, '.') . '.'; }
 $k1run($iso, 'ns1.k.test');
 if ($iso === 'RR') { $k1run('RR0', 'ns1.k0.test'); }
+
+// K1W: derselbe Konflikt über den Web-Weg (server_update.php, Standard-Isolationsstufe der Anwendung): verständliche
+//      Fehlermeldung, vollständiges Rollback, danach erfolgreiche erneute Ausführung über dieselbe Action
+if ($webCases) {
+    $srvBefore = (string)$q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn();
+    $GLOBALS['root']->prepare('UPDATE `' . DB . '`.zones SET soa_ns = ? WHERE id = ?')->execute([SoaName($srvBefore), $k1]);
+    $nsBefore = nsOf($k1);
+    $snap0 = snap();
+    cgi('GET', 'pages/servers.php', '', $a);
+    $child = "require '" . __DIR__ . "/lib.php'; \$c = json_decode(\$argv[1], true);"
+        . " \$f = formFor(cgi('GET', 'pages/servers.php?edit_id=3', '', \$c)['body'], 'actions/server_update.php');"
+        . " \$p = []; foreach (\$f['values'] as \$n => \$v) { if (\$n === 'csrf_token' || \$n === 'name') continue; foreach ((array)\$v as \$x) \$p[] = [is_array(\$v) ? \$n . '[]' : \$n, \$x]; }"
+        . " \$p[] = ['name', 'ns1.web.test']; \$p[] = ['csrf_token', csrfFromSession(\$c)];"
+        . " \$r = cgi('POST', 'actions/server_update.php', implode('&', array_map(fn(\$x) => rawurlencode(\$x[0]) . '=' . rawurlencode(\$x[1]), \$p)), \$c);"
+        . " echo json_encode(['status' => \$r['status'], 'toasts' => toasts(\$c)], JSON_UNESCAPED_UNICODE);";
+    $T->beginTransaction();
+    $T->query("SELECT id FROM zones WHERE id = $k1 FOR UPDATE")->fetchAll();
+    $proc = proc_open(['php', '-r', $child, json_encode($a)], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pp);
+    $waited = waitForLockWait();
+    usleep(1500000);
+    $T->exec("UPDATE zones SET soa_ns = 'manuell.web.' WHERE id = $k1");
+    $T->commit();
+    $out = json_decode(trim(stream_get_contents($pp[1])), true) ?? []; $err = stream_get_contents($pp[2]); proc_close($proc);
+    $t = $out['toasts'][0] ?? ('-' . trim($err));
+    $snap1 = snap();
+    $zonesExpected = array_map(fn($row) => str_starts_with($row, "$k1|") ? preg_replace('/^((?:[^|]*\|){6})[^|]*/', '${1}manuell.web.', $row) : $row, $snap0['zones']);
+    $ok($waited && str_starts_with($t, 'error: Beim Speichern des Servers ist ein Fehler aufgetreten.') && $snap1['servers'] === $snap0['servers']
+        && $snap1['records'] === $snap0['records'] && $snap1['zones'] === $zonesExpected && nsOf($k1) === $nsBefore && locksFree() && openTrx() === 0,
+        'K1W', "Web-Weg unter dem Konflikt: Fehlermeldung „$t“, vollständiges Rollback, Sperren frei");
+    $sf = formFor(cgi('GET', 'pages/servers.php?edit_id=3', '', $a)['body'], 'actions/server_update.php');
+    postF('actions/server_update.php', pairs($sf, ['name' => 'ns1.web.test']), $a);
+    $t = toasts($a);
+    $ok($q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn() === 'ns1.web.test' && in_array('ns1.web.test.', nsOf($k1), true)
+        && zrow($k1)['soa_ns'] === 'manuell.web.' && str_starts_with((string)($t[0] ?? ''), 'success') && locksFree(), 'K1W-retry',
+        'erneute Ausführung über die Action gelingt (' . ($t[0] ?? '-') . '), abweichender SOA bleibt erhalten');
+}
 // aktueller Master-FQDN von Server 3 (je nach Ausgang von K1)
 $m3 = SoaName((string)$q('SELECT name FROM DB.servers WHERE id = 3')->fetchColumn());
 
