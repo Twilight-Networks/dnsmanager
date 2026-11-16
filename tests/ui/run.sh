@@ -164,6 +164,8 @@ if [ "$MODE" = matrix ]; then
   if [ -f $T/app/web/templates/user_editor_form.php ]; then
     echo "--- U5b"; php $H/u5b.php || rc=1
   fi
+  # RRset-TTL-Konsistenz (RFC 2181 §5.2): Zonendatei, Neuaufbau/Reihenfolge, Vorschau und Record-Liste
+  echo "--- RRset-TTL"; php $H/rrset_ttl.php "$OUT_DIR/rrsetttl-${SHA:0:7}-$(date +%Y%m%d-%H%M%S)" || rc=1
   # U6: CSP-Modi und exakte Headerwerte je Antworttyp (Seite, Login, Redirect, 403, DynDNS-API, Report-Endpunkt)
   if grep -q "CSP_MODE" $T/app/web/inc/web/csp.php; then
     echo "--- U6"; php $H/u6.php || rc=1
