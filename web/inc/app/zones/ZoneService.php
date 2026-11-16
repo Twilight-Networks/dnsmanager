@@ -137,20 +137,20 @@ final class ZoneService
             return self::fail($m, 'error', 'zone.create.master_not_found', ['masterId' => $master_id]);
         }
 
-        // SOA-NS zusammensetzen (unverändert)
+        // SOA-NS zusammensetzen
+        // Forward: vollständiger FQDN des Master-Servers mit abschließendem Punkt (Servernamen sind FQDN mit
+        // mindestens zwei Labels, ServerService::validate); der Zonenname wird nicht angehängt (wie bei den
+        // NS-Records). Reverse: unverändert Master + "." + SOA-Server-Domain.
         $zone_base   = rtrim($name, '.');
         $master_name = rtrim($master['name'], '.');
         $soa_domain  = rtrim($post['soa_domain'] ?? '', '.');
         $soa_ns      = ($type === 'reverse')
             ? $master_name . '.' . $soa_domain . '.'
-            : (
-                str_ends_with($master_name, '.' . $zone_base)
-                    ? $master_name . '.'
-                    : $master_name . '.' . $zone_base . '.'
-            );
+            : $master_name . '.';
 
-        // S17: zusammengesetzter SOA-NS von Reverse-Zonen (freie Eingabe soa_domain)
-        if ($type === 'reverse' && !isValidSoaName($soa_ns)) {
+        // S17: zusammengesetzter SOA-NS von Reverse-Zonen (freie Eingabe soa_domain); Forward: ungültige oder
+        // unvollständige Master-Namen (nur aus Altbeständen möglich) ablehnen statt sie zu vervollständigen
+        if (!isValidSoaName($soa_ns) || ($type === 'forward' && substr_count($master_name, '.') < 1)) {
             return self::fail($m, 'error', 'zone.create.invalid_soa_ns', []);
         }
 

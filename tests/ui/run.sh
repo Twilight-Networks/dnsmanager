@@ -168,6 +168,9 @@ if [ "$MODE" = matrix ]; then
   if grep -q "CSP_MODE" $T/app/web/inc/web/csp.php; then
     echo "--- U6"; php $H/u6.php || rc=1
   fi
+  # SOA-MNAME: Neuanlage/Änderung Forward und Reverse, erzeugte Zonendatei, unabhängige Auswertung (für jeden Stand)
+  SOA_OUT="$OUT_DIR/soa-${SHA:0:7}-$(date +%Y%m%d-%H%M%S)"
+  echo "--- SOA-MNAME"; php $H/soa_mname.php "$SOA_OUT" || rc=1
   echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
   exit $rc
 fi
