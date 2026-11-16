@@ -370,15 +370,25 @@ function recordEditorClassify(array $rec): array
 /** Schutz nach den Regeln des RecordService: nicht löschbar (Glue, geschützter NS, DynDNS verwaltet) */
 function recordEditorDeletable(array $rec): bool
 {
-    return !$rec['isGlue'] && !$rec['isProtectedNs'] && !$rec['isDyndns'];
+    return !$rec['isGlue'] && !$rec['isProtectedNs'] && !$rec['isDyndns'] && empty($rec['isDyndnsReserved']);
 }
 
 /**
- * Herkunftskennzeichen (HTML): System bzw. Manuell, jeweils mit Glue; Schloss bei Schutz; DynDNS nur bei isDyndns.
+ * Herkunftskennzeichen (HTML): System bzw. Manuell, jeweils mit Glue; Schloss bei Schutz. Eindeutig von DynDNS
+ * verwaltet (isDyndns): nur das Kennzeichen „DynDNS“; an einem reservierten Namen ohne eindeutige Zuordnung
+ * (isDyndnsReserved): „DynDNS · Konflikt“. Systemrecords unverändert.
  */
 function recordEditorOriginHtml(array $rec): string
 {
     global $LANG;
+    if (!$rec['systemManaged'] && $rec['isDyndns']) {
+        return '<span class="dm-origin"><span title="' . ui_e($LANG['record_lock_dyndns']) . '">'
+            . ui_chip($LANG['record_origin_dyndns'], 'info', 'shield-lock') . '</span></span>';
+    }
+    if (!$rec['systemManaged'] && !empty($rec['isDyndnsReserved'])) {
+        return '<span class="dm-origin"><span title="' . ui_e($LANG['record_lock_dyndns_conflict']) . '">'
+            . ui_chip($LANG['record_origin_dyndns_conflict'], 'info', 'shield-lock') . '</span></span>';
+    }
     $protected = $rec['isGlue'] || $rec['isProtectedNs'];
     if ($rec['systemManaged']) {
         $label = $rec['isGlue'] ? $LANG['record_origin_system_glue'] : $LANG['record_origin_system'];
