@@ -12,6 +12,8 @@
  *   keine Datenbankänderung, keine Veröffentlichung, keine Toasts, keine Sitzungsänderung.
  * - Die Vorschau ist nicht autoritativ: Duplikate, DynDNS-Reservierungen und die Zonendateiprüfung bewertet
  *   weiterhin der RecordService beim Speichern.
+ * - Die Zeilen zeigen die veröffentlichte TTL: je RRset (Name und Typ) die niedrigste TTL (RFC 2181 §5.2, wie
+ *   generate_zone_file()); weicht sie von der eingegebenen ab, erklärt ein Hinweis die Vereinheitlichung.
  */
 
 require_once __DIR__ . '/../ttl_defaults.php';
@@ -121,13 +123,15 @@ function recordEditorPreview(PDO $pdo, Actor $actor, ZoneAccess $zoneAccess, arr
     if ($zone === null) {
         return $result;
     }
+    // Records der Zone (lesend): für die Bearbeitung und für die TTL-Vereinheitlichung je RRset
+    $view = (new RecordReadService($pdo, $zoneAccess))->getZoneRecordView($actor, $zoneId);
+    $zoneRecords = $view['records'] ?? [];
 
     $rawType = (string)($post['type'] ?? '');
     $existing = null;
     $existingView = null;
     if ($mode === 'update') {
-        $view = (new RecordReadService($pdo, $zoneAccess))->getZoneRecordView($actor, $zoneId);
-        foreach ($view['records'] ?? [] as $rec) {
+        foreach ($zoneRecords as $rec) {
             if ($rec['id'] === $recordId) {
                 $existingView = $rec;
                 break;
@@ -137,7 +141,10 @@ function recordEditorPreview(PDO $pdo, Actor $actor, ZoneAccess $zoneAccess, arr
             return $result;
         }
         $existing = ['name' => $existingView['name'], 'type' => $existingView['type'], 'content' => $existingView['content']];
-        $result['oldLine'] = zone_file_record_line($existingView, $zone['ttl']);
+        $result['oldLine'] = zone_file_record_line(
+            zone_file_record_with_rrset_ttl($existingView, zone_file_rrset_ttls($zoneRecords, $zone['ttl'], (string)$zone['name']), $zone['ttl'], (string)$zone['name']),
+            $zone['ttl']
+        );
     }
 
     $result['status'] = 'invalid';
@@ -196,10 +203,21 @@ function recordEditorPreview(PDO $pdo, Actor $actor, ZoneAccess $zoneAccess, arr
     }
 
     $result['status'] = 'ok';
-    $result['newLine'] = zone_file_record_line(
-        ['name' => $built['name'], 'type' => $built['type'], 'content' => $built['content'], 'ttl' => $ttl],
-        $zone['ttl']
-    );
+    // Veröffentlichte TTL: niedrigste TTL des RRsets aus den übrigen Records und dem neuen Stand dieses Records
+    $newRecord = ['name' => $built['name'], 'type' => $built['type'], 'content' => $built['content'], 'ttl' => $ttl];
+    $others = array_values(array_filter($zoneRecords, static fn(array $r): bool => $mode !== 'update' || $r['id'] !== $recordId));
+    $rrsetTtls = zone_file_rrset_ttls(array_merge($others, [$newRecord]), $zone['ttl'], (string)$zone['name']);
+    $result['newLine'] = zone_file_record_line(zone_file_record_with_rrset_ttl($newRecord, $rrsetTtls, $zone['ttl'], (string)$zone['name']), $zone['ttl']);
+    $rrsetKey = zone_file_rrset_key($built['name'], $built['type'], (string)$zone['name']);
+    $memberTtls = [];
+    foreach (array_merge($others, [$newRecord]) as $r) {
+        if (zone_file_rrset_key((string)$r['name'], (string)$r['type'], (string)$zone['name']) === $rrsetKey) {
+            $memberTtls[isset($r['ttl']) ? (int)$r['ttl'] : (int)$zone['ttl']] = true;
+        }
+    }
+    if (count($memberTtls) > 1) {
+        $result['hints'][] = recordEditorPlainText(sprintf((string)$LANG['record_preview_rrset_ttl'], $built['name'], $built['type'], $rrsetTtls[$rrsetKey]));
+    }
     $result['unchanged'] = $result['oldLine'] !== null && $result['oldLine'] === $result['newLine'];
     if ($mode === 'create' && ($post['auto_ptr'] ?? '') === 'on' && in_array($built['type'], ['A', 'AAAA'], true)) {
         $result['hints'][] = recordEditorPlainText((string)$LANG['record_preview_autoptr']);

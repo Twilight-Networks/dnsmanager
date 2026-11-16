@@ -52,6 +52,8 @@ if ($zoneData === null || $recordView === null) {
 $zone = ['id' => $zoneData['id'], 'name' => $zoneData['name'], 'type' => $zoneData['type']];
 $zoneUrl = 'pages/records.php?zone_id=' . (int)$zone['id'];
 $records = $recordView['records'];
+// Veröffentlichte TTL je RRset (RFC 2181 §5.2, wie generate_zone_file()); gespeicherte Werte bleiben unverändert
+$rrsetTtls = zone_file_rrset_ttls($records, $zoneData['ttl'], (string)$zoneData['name']);
 $recordsById = array_column($records, null, 'id');
 
 // Editor: Bearbeitung (edit_id) oder Anlage (add_new)
@@ -171,7 +173,15 @@ if ($records === []) {
             }
             echo '</td>';
             echo '<td class="dm-mono dm-col-content" title="' . ui_e($r['content']) . '"><span class="dm-truncate">' . ui_e($r['content']) . '</span></td>';
-            echo '<td class="dm-col-ttl">' . ui_e(recordEditorTtlLabel($r['type'], (int)$r['ttl'])) . '</td>';
+            $ownTtl = $r['ttl'] === null ? (int)$zoneData['ttl'] : (int)$r['ttl'];
+            $effTtl = $rrsetTtls[zone_file_rrset_key((string)$r['name'], (string)$r['type'], (string)$zoneData['name'])] ?? $ownTtl;
+            // Gespeicherte TTL NULL: es gilt die Zonen-TTL (wie in der Zonendatei); explizite TTLs unverändert dargestellt
+            $ttlLabel = $r['ttl'] === null
+                ? sprintf($LANG['record_ttl_zone_default'], (int)$zoneData['ttl'] . ' ' . $LANG['seconds'])
+                : recordEditorTtlLabel($r['type'], (int)$r['ttl']);
+            echo '<td class="dm-col-ttl">' . ui_e($ttlLabel)
+                . ($effTtl !== $ownTtl ? ' <span class="dm-ttl-effective" title="' . ui_e(sprintf($LANG['record_ttl_effective_title'], $effTtl)) . '">→ '
+                    . ui_e($effTtl . ' ' . $LANG['seconds']) . '</span>' : '') . '</td>';
             echo '<td class="dm-col-origin">' . recordEditorOriginHtml($r) . '</td>';
             echo '<td class="dm-col-actions"><a class="btn btn-sm btn-outline-secondary" href="' . ui_e($zoneUrl . '&edit_id=' . $r['id']) . '">'
                 . ui_e($LANG['edit']) . '</a>';
@@ -197,7 +207,9 @@ if ($editorMode !== null) {
         ? (string)($postedValues['type'] ?? ($_GET['type'] ?? ''))
         : (string)$editRec['type'];
     $previewUrl = $zoneUrl . ($editorMode === 'update' ? '&edit_id=' . $editRec['id'] : '&add_new=1');
-    $storedLine = $editorMode === 'update' ? zone_file_record_line($editRec, $zoneData['ttl']) : null;
+    $storedLine = $editorMode === 'update'
+        ? zone_file_record_line(zone_file_record_with_rrset_ttl($editRec, $rrsetTtls, $zoneData['ttl'], (string)$zoneData['name']), $zoneData['ttl'])
+        : null;
 
     $title = $editorMode === 'update' ? $LANG['record_editor_title_edit'] : $LANG['add_record'];
     echo ui_editor_open($title, $zoneUrl, [
