@@ -58,6 +58,11 @@ $recordsById = array_column($records, null, 'id');
 
 // Editor: Bearbeitung (edit_id) oder Anlage (add_new)
 $editRec = ($edit_record_id !== null && isset($recordsById[$edit_record_id])) ? $recordsById[$edit_record_id] : null;
+// DynDNS-reservierter Record ohne eindeutige Zuordnung: der RecordService lehnt jede Änderung ab – kein Editor, nur Hinweis
+$conflictRec = ($editRec !== null && !empty($editRec['isDyndnsReserved'])) ? $editRec : null;
+if ($conflictRec !== null) {
+    $editRec = null;
+}
 $editorMode = $editRec !== null ? 'update' : ($show_add_form ? 'create' : null);
 
 // No-JS-Vorschau: POST des Editorformulars auf diese Seite (nur passend zu Zone und Editor der URL)
@@ -113,6 +118,9 @@ echo ui_page_header(sprintf($LANG['dns_records_for'], rtrim($zone['name'], '.'))
     'subtitle' => sprintf($LANG['records_count'], count($records)),
     'actionsHtml' => $zoneSelect . $addButton,
 ]);
+if ($conflictRec !== null) {
+    echo ui_notice('info', sprintf($LANG['record_dyndns_conflict_notice'], $conflictRec['name']), ['icon' => 'shield-lock']);
+}
 
 // Zonendiagnosen dieser Zone (ZoneReadService, Berechtigung in derselben Abfrage)
 $diagnostics = [];
@@ -183,6 +191,11 @@ if ($records === []) {
                 . ($effTtl !== $ownTtl ? ' <span class="dm-ttl-effective" title="' . ui_e(sprintf($LANG['record_ttl_effective_title'], $effTtl)) . '">→ '
                     . ui_e($effTtl . ' ' . $LANG['seconds']) . '</span>' : '') . '</td>';
             echo '<td class="dm-col-origin">' . recordEditorOriginHtml($r) . '</td>';
+            if (!empty($r['isDyndnsReserved'])) {
+                // Keine Aktionen, die der RecordService ablehnen würde; Hinweis auf die Klärung in der DynDNS-Verwaltung
+                echo '<td class="dm-col-actions"><span class="dm-muted">' . ui_e($LANG['record_dyndns_conflict_action']) . '</span></td></tr>';
+                continue;
+            }
             echo '<td class="dm-col-actions"><a class="btn btn-sm btn-outline-secondary" href="' . ui_e($zoneUrl . '&edit_id=' . $r['id']) . '">'
                 . ui_e($LANG['edit']) . '</a>';
             if ($deletable) {

@@ -11,7 +11,8 @@
  *   ohne Berechtigung werden weder Records noch Zonendaten geliefert. Keine Transaktionen, keine Sperren.
  * - Expliziter Read-Contract (kein SELECT *): server_id wird nicht ausgegeben, sondern nur als
  *   Kennzeichen systemManaged (automatisch verwaltete NS-/Glue-Records); DynDNS-Accounts nur als Kennzeichen
- *   isDyndns (eindeutige Zuordnung nach den DynDNS-Regeln), ohne Hostnamen, IPs oder Account-Daten.
+ *   isDyndns (eindeutige Zuordnung nach den DynDNS-Regeln) und isDyndnsReserved (manueller A/AAAA-Record an einem für
+ *   DynDNS reservierten Namen ohne eindeutige Zuordnung), ohne Hostnamen, IPs oder Account-Daten.
  * - Stabile Sortierung (Typ, Name, ID) und begrenzte Ergebnismengen.
  *
  * Fehlerfälle:
@@ -180,6 +181,7 @@ final class RecordReadService
         }
 
         $dyndnsIds = $this->dyndnsManagedRecordIds($zoneId, $zoneName, $records, $access);
+        $reservedIds = $this->dyndnsReservedRecordIds($zoneId, $zoneName, $records, $access);
 
         foreach ($records as $i => $r) {
             $records[$i]['isDkim'] = $r['type'] === 'TXT'
@@ -189,6 +191,8 @@ final class RecordReadService
             $records[$i]['isProtectedNs'] = $r['type'] === 'NS'
                 && isProtectedNsRecordForServers($r, $records, $zoneName, $serverNames);
             $records[$i]['isDyndns'] = isset($dyndnsIds[$r['id']]);
+            // Reserviert, aber nicht eindeutig verwaltet: der DynDNS-Schutz lehnt jede Änderung ab (AMBIGUOUS_RECORD)
+            $records[$i]['isDyndnsReserved'] = !$records[$i]['isDyndns'] && isset($reservedIds[$r['id']]);
         }
 
         return [
@@ -295,6 +299,80 @@ final class RecordReadService
         }
 
         return array_fill_keys(array_keys($candidates), true);
+    }
+
+    /**
+     * IDs der manuellen A/AAAA-Records, deren Name nach den bestehenden DynDNS-Regeln für einen Account reserviert ist
+     * (wie dyndnsFindOwnerReservations(): kanonisch gleicher Hostname = strict, sonst Treffer über die Collation =
+     * loose, letzteres nicht am Apex). Systemrecords werden nicht betrachtet. Accounts werden nur mit der
+     * Zonenberechtigung gelesen und nicht ausgegeben.
+     *
+     * @param array<int, array> $records Records der Zone (id, name, type, systemManaged)
+     * @param array{sql: string, params: array<int, int>} $access Berechtigungsbedingung (ZoneAccess, Alias z.id)
+     *
+     * @return array<int, true>
+     */
+    private function dyndnsReservedRecordIds(int $zoneId, string $zoneName, array $records, array $access): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT a.hostname FROM dyndns_accounts a'
+            . ' JOIN zones z ON z.id = a.zone_id'
+            . ' WHERE z.id = ? AND ' . $access['sql']
+        );
+        $this->bindZoneAndAccess($stmt, $zoneId, $access['params']);
+        $stmt->execute();
+        $hostnames = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        if ($hostnames === []) {
+            return [];
+        }
+        $hosts = [];
+        foreach ($hostnames as $hostname) {
+            $canonical = dyndnsCanonicalName((string)$hostname, $zoneName);
+            if ($canonical !== null) {
+                $hosts[$canonical] = true;
+            }
+        }
+
+        $reserved = [];
+        $looseCandidates = [];
+        foreach ($records as $r) {
+            if ($r['systemManaged'] || !in_array(strtoupper($r['type']), ['A', 'AAAA'], true)) {
+                continue;
+            }
+            $owner = dyndnsCanonicalName($r['name'], $zoneName);
+            if ($owner === null) {
+                continue;
+            }
+            if (isset($hosts[$owner])) {
+                $reserved[$r['id']] = true;
+            } elseif ($owner !== '@') {
+                $looseCandidates[$r['id']] = $r['name'];
+            }
+        }
+
+        // Lose Treffer über die Collation (wie dyndnsFindOwnerReservations), in einer Anweisung mit Zonenberechtigung
+        $parts = [];
+        $params = [];
+        foreach ($looseCandidates as $rid => $name) {
+            $forms = dyndnsLooseNameForms($name, $zoneName);
+            $in = implode(',', array_fill(0, count($forms), '?'));
+            $parts[] = 'SELECT ? AS rid FROM dyndns_accounts a JOIN zones z ON z.id = a.zone_id'
+                . ' WHERE z.id = ? AND ' . $access['sql']
+                . " AND (a.hostname IN ($in) OR TRIM(TRAILING '.' FROM TRIM(a.hostname)) IN ($in))";
+            $params = array_merge($params, [$rid, $zoneId], $access['params'], $forms, $forms);
+        }
+        if ($parts !== []) {
+            $stmt = $this->pdo->prepare(implode(' UNION ALL ', $parts));
+            foreach ($params as $i => $v) {
+                $stmt->bindValue($i + 1, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+            }
+            $stmt->execute();
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $rid) {
+                $reserved[(int)$rid] = true;
+            }
+        }
+
+        return $reserved;
     }
 
     /**
