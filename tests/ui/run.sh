@@ -171,6 +171,10 @@ if [ "$MODE" = matrix ]; then
   # SOA-MNAME: Neuanlage/Änderung Forward und Reverse, erzeugte Zonendatei, unabhängige Auswertung (für jeden Stand)
   SOA_OUT="$OUT_DIR/soa-${SHA:0:7}-$(date +%Y%m%d-%H%M%S)"
   echo "--- SOA-MNAME"; php $H/soa_mname.php "$SOA_OUT" || rc=1
+  # SOA-Konsistenz (PR B): Übernahme, Masterwechsel, Umbenennung, Rollback, Nebenläufigkeit (RR und RC)
+  if [ -f $T/app/web/inc/app/zones/SoaMname.php ]; then
+    for iso in RR RC; do echo "--- SOA-Konsistenz $iso"; php $H/soa_consistency.php $iso || rc=1; done
+  fi
   echo "Publish-Sperre danach frei: $(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")"
   exit $rc
 fi

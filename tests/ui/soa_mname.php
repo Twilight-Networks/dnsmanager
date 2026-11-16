@@ -6,9 +6,10 @@
  *        F  Neuanlage Forward-Zone: soa_ns = FQDN des Master-Servers mit abschließendem Punkt, ohne angehängten
  *           Zonennamen (Master innerhalb und außerhalb der Zone, Zonenname beginnt mit dem Servernamen;
  *           Servername mit und ohne Punkt);
- *        U  Bestehende Forward-Zone ändern: ohne Masterwechsel bleibt soa_ns unverändert; Masterwechsel wird
- *           nur beobachtet (K, offene Entscheidung: soa_ns folgt dem Master bisher nicht);
- *        R  Reverse-Zonen (IPv4/IPv6): bisherige Regel Master + "." + SOA-Server-Domain unverändert (Regression);
+ *        U  Bestehende Forward-Zone ändern: ohne Masterwechsel bleibt soa_ns unverändert; bei Masterwechsel
+ *           = FQDN des neuen Masters (D2);
+ *        R  Reverse-Zonen (IPv4/IPv6): soa_ns = FQDN des Masters wie bei Forward (D1); eine gesendete
+ *           SOA-NS-Eingabe wird ignoriert (D5);
  *        X  Ungültige oder unvollständige Master-Namen werden abgelehnt, ohne Zone anzulegen.
  *        Je Zone: gespeicherter Wert, SOA-Zeile der erzeugten Datei, unabhängige Auswertung mit named-checkzone -D
  *        (MNAME, RNAME, Serial, Refresh/Retry/Expire/Minimum, TTL), NS-, Glue- und übrige Records, named-checkzone.
@@ -166,27 +167,31 @@ $r = postForm('actions/zone_update.php', pairsOf($form, ['master_server_id' => '
 $z3 = zoneRow('zone.example.test');
 $master = $q("SELECT s.name FROM DB.zone_servers zs JOIN DB.servers s ON s.id = zs.server_id WHERE zs.zone_id = {$z['id']} AND zs.is_master = 1")->fetchColumn();
 $ok($r['status'] === 302 && $master === 'ns2.example.test.', 'U2-assign', "Masterwechsel gespeichert (Master jetzt $master)");
-$note('K1', "Masterwechsel einer Forward-Zone: soa_ns danach '{$z3['soa_ns']}' (vorher '{$z2['soa_ns']}'); bisherige Regel: soa_ns folgt dem Master nicht (offene Entscheidung, nicht Teil des Fixes)");
+$ok($z3['soa_ns'] === 'ns2.example.test.' && (int)$z3['soa_serial'] === (int)$z2['soa_serial'] && (int)$z3['changed'] === 1, 'U2',
+    "Masterwechsel: soa_ns '{$z2['soa_ns']}' → '{$z3['soa_ns']}' (FQDN des neuen Masters, D2), Serial unverändert, Zone ausstehend");
+checkZone($ok, $pdo, 'U2z', 'zone.example.test', 'ns2.example.test.', ['ns1.example.test.', 'ns2.example.test.'], [], $outDir);
 
 // ---------- R: Reverse-Zonen (bisherige Regel unverändert) ----------
 $reverse = [
-    ['R1', 'reverse_ipv4', '20.10', '20.10.in-addr.arpa', ['prefix_length' => '16', 'soa_domain' => 'u0.test'], ['1'], '1', 'ns1.u0.test.u0.test.'],
-    ['R2', 'reverse_ipv6', '8.b.d.0.1.0.0.2', '8.b.d.0.1.0.0.2.ip6.arpa', ['prefix_length' => '32', 'soa_domain' => 'example.test'], ['3', '4'], '3', 'ns1.example.test.example.test.'],
+    ['R1', 'reverse_ipv4', '20.10', '20.10.in-addr.arpa', ['prefix_length' => '16'], ['1'], '1', 'ns1.u0.test.'],
+    ['R2', 'reverse_ipv6', '8.b.d.0.1.0.0.2', '8.b.d.0.1.0.0.2.ip6.arpa', ['prefix_length' => '32'], ['3', '4'], '3', 'ns1.example.test.'],
 ];
 foreach ($reverse as [$id, $type, $prefix, $zone, $extra, $servers, $master, $mname]) {
     $r = createZone($c, $base + $extra + ['type' => $type, 'zone_prefix' => $prefix, 'soa_mail' => 'hostmaster.u0.test.', 'server_ids' => $servers, 'master_server_id' => $master]);
     $row = zoneRow($zone);
-    $ok($r['status'] === 302 && $row !== false && $row['soa_ns'] === $mname, "$id-db", "$zone: gespeicherter soa_ns '" . ($row['soa_ns'] ?? '?') . "' nach bisheriger Reverse-Regel Master + SOA-Server-Domain");
+    $ok($r['status'] === 302 && $row !== false && $row['soa_ns'] === $mname, "$id-db", "$zone: gespeicherter soa_ns '" . ($row['soa_ns'] ?? '?') . "' = FQDN des Masters (D1)");
     if ($row) {
         $zf = zoneFile($pdo, (int)$row['id'], $zone, $outDir);
         $ok(!isset($zf['error']) && $zf['checkOk'] && ($zf['soa']['mname'] ?? '') === $mname && $zf['glue'] === [], "$id-zf", "$zone: SOA-MNAME der Datei '" . ($zf['soa']['mname'] ?? '?') . "', named-checkzone OK, kein Glue");
     }
 }
-// R3: Reverse-Zone ändern ohne Serveränderung → soa_ns wie eingegeben (editierbar, bisheriges Verhalten)
+// R3: Reverse-Zone ändern mit manipuliert gesendetem SOA-NS → ignoriert (D5), übrige Änderung gespeichert
 $z = zoneRow('20.10.in-addr.arpa');
 $form = formFor(cgi('GET', "pages/zones.php?edit_id={$z['id']}", '', $c)['body'], 'actions/zone_update.php', "editForm_{$z['id']}");
-$r = postForm('actions/zone_update.php', pairsOf($form, ['soa_ns' => 'ns1.u0.test.']), $c);
-$ok($r['status'] === 302 && zoneRow('20.10.in-addr.arpa')['soa_ns'] === 'ns1.u0.test.', 'R3', 'Reverse ändern: soa_ns wie eingegeben übernommen');
+$r = postForm('actions/zone_update.php', pairsOf($form, ['soa_ns' => 'evil.example.', 'ttl' => '7200']), $c);
+$z2 = zoneRow('20.10.in-addr.arpa');
+$ok($r['status'] === 302 && $z2['soa_ns'] === 'ns1.u0.test.' && (int)$z2['ttl'] === 7200 && !array_key_exists('soa_ns', $form['values']), 'R3',
+    "Reverse ändern: Formular ohne Feld soa_ns, gesendeter Wert ignoriert (soa_ns '{$z2['soa_ns']}'), TTL gespeichert");
 
 // ---------- X: ungültige oder unvollständige Master-Namen ----------
 // Nur per SQL erzeugbar (ServerService lehnt solche Namen ab); die Neuanlage darf keine Zone anlegen.

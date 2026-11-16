@@ -29,8 +29,9 @@
  *   "<operation>.failed" bzw. dem bisherigen Fehlercode der Phase. Keine automatischen Wiederholungen.
  *
  * Sicherheit (PR #43/#44, Plan §11 A1/A2):
- * - SOA-NS von Reverse-Zonen wird wie bisher mit isValidSoaName() geprüft (Anlage: zusammengesetzt aus
- *   Master und soa_domain; Änderung: Eingabe, sofern verwendet), vor Lock und Transaktion.
+ * - SOA-NS (Forward und Reverse) = FQDN des Master-Servers (SoaMname, S17-Prüfung mit isValidSoaName() und
+ *   mindestens zwei Labels); nie aus der Eingabe. Anlage: vor Lock und Transaktion; Änderung (Masterwechsel,
+ *   ausdrückliche Übernahme durch admin): in der Transaktion unter Topologie-Lock.
  * - Zonendatei-Erzeugung über ZoneBuildBackend; die Generatorprüfungen (SOA- und Record-Felder) wirken
  *   unverändert mit.
  *
@@ -53,6 +54,7 @@ require_once __DIR__ . '/ZoneBuildBackend.php';
 require_once __DIR__ . '/ZoneEditVersion.php';
 require_once __DIR__ . '/ZoneInput.php';
 require_once __DIR__ . '/ZoneUpdateInput.php';
+require_once __DIR__ . '/SoaMname.php';
 
 final class ZoneService
 {
@@ -137,22 +139,13 @@ final class ZoneService
             return self::fail($m, 'error', 'zone.create.master_not_found', ['masterId' => $master_id]);
         }
 
-        // SOA-NS zusammensetzen
-        // Forward: vollständiger FQDN des Master-Servers mit abschließendem Punkt (Servernamen sind FQDN mit
-        // mindestens zwei Labels, ServerService::validate); der Zonenname wird nicht angehängt (wie bei den
-        // NS-Records). Reverse: unverändert Master + "." + SOA-Server-Domain.
-        $zone_base   = rtrim($name, '.');
-        $master_name = rtrim($master['name'], '.');
-        $soa_domain  = rtrim($post['soa_domain'] ?? '', '.');
-        $soa_ns      = ($type === 'reverse')
-            ? $master_name . '.' . $soa_domain . '.'
-            : $master_name . '.';
-
-        // S17: zusammengesetzter SOA-NS von Reverse-Zonen (freie Eingabe soa_domain); Forward: ungültige oder
-        // unvollständige Master-Namen (nur aus Altbeständen möglich) ablehnen statt sie zu vervollständigen
-        if (!isValidSoaName($soa_ns) || ($type === 'forward' && substr_count($master_name, '.') < 1)) {
+        // SOA-NS = FQDN des Master-Servers (SoaMname; Forward und Reverse gleich). Ungültige oder unvollständige
+        // Master-Namen (nur aus Altbeständen möglich) werden abgelehnt statt ergänzt (S17).
+        $zone_base = rtrim($name, '.');
+        if (!SoaMname::isValidServerName((string)$master['name'])) {
             return self::fail($m, 'error', 'zone.create.invalid_soa_ns', []);
         }
+        $soa_ns = SoaMname::fromServerName((string)$master['name']);
 
         // Topologie-Lock (Try-Lock) vor jeder Transaktion
         if (!$this->acquireLock('create', $m)) {
@@ -260,6 +253,10 @@ final class ZoneService
     /**
      * Ändert Metadaten einer Zone; admin zusätzlich die Serverzuweisung (NS/Glue-Neuaufbau).
      *
+     * SOA-NS (SOA-MNAME) wird nie aus der Eingabe übernommen. admin: Bei Masterwechsel und bei ausdrücklicher
+     * Übernahme (soaNsFromMaster) = FQDN des Masters (SoaMname), in derselben Transaktion unter Topologie-Lock;
+     * sonst bleibt der gespeicherte Wert unverändert. Für zoneadmin wird soaNsFromMaster ignoriert.
+     *
      * Codes: access_denied (reason: role|assignment|db_role|db_assignment), not_found, invalid_input
      *        (errors), invalid_prefix_length, no_servers, master_not_in_list, master_inactive,
      *        invalid_soa_ns, lock_acquire_error, topology_locked, lock_release_unconfirmed,
@@ -326,7 +323,7 @@ final class ZoneService
         // Vorphase Serverzuweisung (admin), ungesperrt wie bisher
         $active_ids = [];
         $preChanged = false;
-        $soa_ns_input = null; // geprüfter SOA-NS aus der Eingabe (nur Reverse ohne Serveränderung)
+        $adoptSoa = $adminPath && $input->soaNsFromMaster === true; // ausdrückliche Übernahme (nur admin)
         if ($adminPath) {
             if (!is_array($server_ids) || count($server_ids) < 1) {
                 return self::fail($m, 'error', 'zone.update.no_servers', ['zoneId' => $id]);
@@ -346,20 +343,10 @@ final class ZoneService
             $stmt->execute([$id]);
             $preChanged = self::assignmentDiff($stmt->fetchAll(PDO::FETCH_KEY_PAIR), $server_ids, $master_id, $active_ids)['changed'];
 
-            if (!$preChanged) {
-                if ($type !== 'forward') {
-                    $soa_ns_input = trim($input->soaNs ?? '');
-                    if (!isValidSoaName($soa_ns_input)) {
-                        return self::fail($m, 'error', 'zone.update.invalid_soa_ns', ['zoneId' => $id]);
-                    }
-                }
-            } elseif (!$this->acquireLock('update', $m)) {
+            // Topologie-Lock bei Änderung der Zuweisung und bei ausdrücklicher SOA-Übernahme: Der Master-Name darf
+            // sich bis zum Commit nicht ändern (Serverumbenennung hält denselben Lock).
+            if (($preChanged || $adoptSoa) && !$this->acquireLock('update', $m)) {
                 return self::fail($m, 'warning', 'zone.update.topology_locked', ['zoneId' => $id]);
-            }
-        } elseif ($type !== 'forward') {
-            $soa_ns_input = trim($input->soaNs ?? '');
-            if (!isValidSoaName($soa_ns_input)) {
-                return self::fail($m, 'error', 'zone.update.invalid_soa_ns', ['zoneId' => $id]);
             }
         }
 
@@ -435,7 +422,7 @@ final class ZoneService
                     $serverListChanged = $diff['listChanged'];
                     $masterChanged = $diff['masterChanged'];
 
-                    if ($diff['changed'] && !$this->lock->isHeld()) {
+                    if (($diff['changed'] || $adoptSoa) && !$this->lock->isHeld()) {
                         // Zuweisung hat sich ohne gehaltenen Topologie-Lock verändert: keine Schreiboperation
                         $this->rollbackIfActive();
                         return self::fail($m, 'warning', 'zone.update.topology_locked', ['zoneId' => $id]);
@@ -457,20 +444,21 @@ final class ZoneService
                         if ($result['status'] === 'warning') {
                             $m[] = new ServiceMessage('warning', 'zone.update.ns_glue_warning', ['zoneId' => $id, 'output' => $result['output']]);
                         }
-                        $soa_ns = (string)$old['soa_ns']; // NS/Glue-Neuaufbau ändert soa_ns nicht
-                    } else {
-                        if ($type === 'forward') {
-                            $soa_ns = (string)$old['soa_ns'];
-                        } else {
-                            // Vorphase sah eine Änderung, gesperrter Stand nicht: Eingabe jetzt wie bisher prüfen
-                            $soa_ns_input ??= trim($input->soaNs ?? '');
-                            if (!isValidSoaName($soa_ns_input)) {
-                                $this->rollbackIfActive();
-                                $this->releaseLock('update', $m);
-                                return self::fail($m, 'error', 'zone.update.invalid_soa_ns', ['zoneId' => $id]);
-                            }
-                            $soa_ns = $soa_ns_input;
+                    }
+
+                    // SOA-NS: bei Masterwechsel oder ausdrücklicher Übernahme = FQDN des (neuen) Masters, sonst unverändert
+                    $soa_ns = (string)$old['soa_ns'];
+                    if ($masterChanged || $adoptSoa) {
+                        $stmt = $this->pdo->prepare("SELECT name FROM servers WHERE id = ?");
+                        $stmt->execute([$diff['newMaster']]);
+                        $masterName = $stmt->fetchColumn();
+                        $stmt->closeCursor();
+                        if ($masterName === false || !SoaMname::isValidServerName((string)$masterName)) {
+                            $this->rollbackIfActive();
+                            $this->releaseLock('update', $m);
+                            return self::fail($m, 'error', 'zone.update.invalid_soa_ns', ['zoneId' => $id]);
                         }
+                        $soa_ns = SoaMname::fromServerName((string)$masterName);
                     }
                 } catch (Throwable $e) {
                     $this->rollbackIfActive();
@@ -478,7 +466,7 @@ final class ZoneService
                     return self::fail($m, 'error', 'zone.update.server_assignment_failed', ['zoneId' => $id, 'detail' => $e->getMessage()]);
                 }
             } else {
-                $soa_ns = $type === 'forward' ? (string)$old['soa_ns'] : (string)$soa_ns_input;
+                $soa_ns = (string)$old['soa_ns']; // zoneadmin: SOA-NS unverändert
             }
 
             // ---- Änderungserkennung auf gesperrtem Altstand (unverändert) ----

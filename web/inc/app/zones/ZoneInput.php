@@ -13,7 +13,7 @@
  * - zonePrefix:     Zonenname (forward) bzw. Präfix ohne Reverse-Suffix
  * - prefixLength:   nur Reverse
  * - ttl, soa*:      wie Formular
- * - soaDomain:      nur Reverse: Domain des primären Nameservers (SOA-NS = Master + Domain)
+ * - SOA-NS:         wird nicht übergeben; der Service bildet ihn für Forward und Reverse aus dem Master (SoaMname)
  * - allowDyndns:    bereits ausgewertet (Formular: allow_dyndns === '1')
  * - serverIds:      Liste der Server-IDs (Rohwert; Struktur prüft der Service)
  * - masterServerId: Master-Server-ID (Rohwert)
@@ -32,7 +32,6 @@ final class ZoneInput
         public readonly mixed $soaRetry = null,
         public readonly mixed $soaExpire = null,
         public readonly mixed $soaMinimum = null,
-        public readonly mixed $soaDomain = null,
         public readonly bool $allowDyndns = false,
         public readonly mixed $serverIds = null,
         public readonly mixed $masterServerId = null
@@ -57,7 +56,6 @@ final class ZoneInput
             'soa_retry'     => $this->soaRetry,
             'soa_expire'    => $this->soaExpire,
             'soa_minimum'   => $this->soaMinimum,
-            'soa_domain'    => $this->soaDomain,
         ], static fn ($v): bool => $v !== null);
     }
 }

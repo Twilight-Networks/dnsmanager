@@ -5,13 +5,15 @@
  *
  * - Ziele, Feldnamen, CSRF und edit_version (S21) unverändert gegenüber den bisherigen Formularen
  *   (zone_add_form.php, zone_edit_form.php).
- * - Anlage: Typabhängige Felder (Präfixlänge, SOA-Domain, angezeigter Primary NS) werden je Zonentyp ein- bzw.
- *   ausgeblendet, aber wie bisher immer gesendet; der ZoneService wertet sie nur für Reverse-Zonen aus. Ohne
+ * - Anlage: Typabhängige Felder (Präfixlänge) werden je Zonentyp ein- bzw. ausgeblendet, aber wie bisher immer
+ *   gesendet; der ZoneService wertet sie nur für Reverse-Zonen aus. Ohne
  *   JavaScript übernimmt „Typ übernehmen“ den gewählten Typ per POST auf pages/zones.php (keine Schreiboperation)
  *   und alle eingegebenen Werte bleiben erhalten.
  * - Bearbeitung: Serverzuweisung nur für admin als Eingabe (server_ids[], master_server_id); zoneadmin sieht die
  *   vorhandene Zuweisung nur als Anzeige (der ZoneService ignoriert Serverangaben eines zoneadmin).
  * - Die Prüfung der Master-Auswahl im Browser (zone_editor.js) ist nur eine Bedienhilfe; maßgeblich ist der ZoneService.
+ * - SOA-NS (SOA-MNAME) ist für Forward und Reverse nur Anzeige (FQDN des Masters, vom ZoneService gebildet). Bearbeitung:
+ *   admin kann ihn ausdrücklich aus dem Master übernehmen (soa_ns_from_master), nur wenn er vom Master-FQDN abweicht.
  *
  * Variablen aus pages/zones.php:
  * - $zoneEditorMode 'create'|'update', $zoneFormId, $isAdmin
@@ -66,6 +68,16 @@ if ($isCreate && !in_array($type, ['forward', 'reverse_ipv4', 'reverse_ipv6'], t
     $type = 'forward';
 }
 $isReverseCreate = $isCreate && $type !== 'forward';
+
+// SOA-NS-Anzeige: FQDN des gewählten (Anlage) bzw. zugewiesenen (Bearbeitung) Masters
+$masterName = '';
+foreach ($servers as $srv) {
+    if ($masterChecked((int)$srv['id'])) {
+        $masterName = (string)$srv['name'];
+    }
+}
+$masterSoa = $masterName === '' ? '' : SoaMname::fromServerName($masterName);
+$soaDiffers = !$isCreate && $isAdmin && $masterSoa !== '' && !SoaMname::sameName((string)$zone_edit['soa_ns'], $masterSoa);
 $suffix = ['forward' => '', 'reverse_ipv4' => '.in-addr.arpa', 'reverse_ipv6' => '.ip6.arpa'][$type] ?? '';
 $prefixPlaceholder = ['forward' => 'example.com', 'reverse_ipv4' => '1.168.192', 'reverse_ipv6' => 'b.a.9.8.7'][$type] ?? 'example.com';
 $prefixLength = $val('prefix_length');
@@ -123,18 +135,26 @@ if ($isReverseCreate && $prefixLength === '') {
         <legend class="dm-editor-section-label"><?= ui_e($LANG['soa_settings']) ?></legend>
         <div class="dm-field-grid">
             <?php if ($isCreate): ?>
-                <?= $field('soa_ns_display', $LANG['soa_ns'], '', ['id' => 'zf_soa_ns', 'placeholder' => $LANG['auto_filled'], 'readonly' => true, 'mono' => true,
-                    'wrap' => ' data-dm-zone-forward-only' . ($isReverseCreate ? ' hidden' : '')]) ?>
-                <?= $field('soa_domain', $LANG['soa_domain'], $val('soa_domain'), ['placeholder' => $LANG['zone_prefix_placeholder'], 'mono' => true,
-                    'wrap' => ' data-dm-zone-reverse-only' . ($isReverseCreate ? '' : ' hidden')]) ?>
+                <?= $field('soa_ns_display', $LANG['soa_ns'], $masterSoa, ['id' => 'zf_soa_ns', 'placeholder' => $LANG['auto_filled'], 'readonly' => true, 'mono' => true,
+                    'hint' => $LANG['zone_soa_ns_hint']]) ?>
                 <?= $field('soa_mail', $LANG['soa_mail'], $val('soa_mail'), ['required' => true, 'placeholder' => $LANG['for_example'] . ' hostmaster.example.com.', 'mono' => true]) ?>
                 <?= $field('soa_refresh', $LANG['soa_refresh'], $val('soa_refresh', '3600'), ['type' => 'number']) ?>
                 <?= $field('soa_retry', $LANG['soa_retry'], $val('soa_retry', '1200'), ['type' => 'number']) ?>
                 <?= $field('soa_expire', $LANG['soa_expire'], $val('soa_expire', '1209600'), ['type' => 'number']) ?>
                 <?= $field('soa_minimum', $LANG['soa_minimum'], $val('soa_minimum', '3600'), ['type' => 'number']) ?>
             <?php else: ?>
-                <?= $field('soa_ns', $LANG['soa_ns'], (string)$zone_edit['soa_ns'], ['readonly' => $zone_edit['type'] === 'forward', 'mono' => true,
-                    'hint' => $zone_edit['type'] === 'forward' ? $LANG['zone_soa_ns_forward_hint'] : null]) ?>
+                <?= $field('soa_ns_display', $LANG['soa_ns'], (string)$zone_edit['soa_ns'], ['id' => 'zf_soa_ns', 'readonly' => true, 'mono' => true,
+                    'hint' => $LANG['zone_soa_ns_hint'],
+                    'data' => 'data-dm-soa-stored="' . ui_e((string)$zone_edit['soa_ns']) . '"']) ?>
+                <?php if ($soaDiffers): ?>
+                    <div class="dm-field dm-field-wide" data-dm-soa-adopt>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="soa_ns_from_master" id="zf_soa_ns_from_master" value="1">
+                            <label class="form-check-label dm-mono" for="zf_soa_ns_from_master"><?= ui_e(sprintf($LANG['zone_soa_ns_adopt'], $masterSoa)) ?></label>
+                        </div>
+                        <div class="form-text"><?= ui_e($LANG['zone_soa_ns_adopt_hint']) ?></div>
+                    </div>
+                <?php endif; ?>
                 <?= $field('soa_mail', $LANG['soa_mail'], (string)$zone_edit['soa_mail'], ['mono' => true]) ?>
                 <?= $field('soa_refresh', $LANG['soa_refresh'], (string)(int)$zone_edit['soa_refresh'], ['type' => 'number']) ?>
                 <?= $field('soa_retry', $LANG['soa_retry'], (string)(int)$zone_edit['soa_retry'], ['type' => 'number']) ?>
