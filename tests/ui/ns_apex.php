@@ -6,8 +6,9 @@
  *           Servername mit Punkt; Reverse-Zonen ohne Adressrecords;
  *        B  NS-/Glue-Neuaufbau (Serverzuweisung, Umbenennung): '@'-Records entstehen und verschwinden mit der
  *           Zuweisung, manuelle Records bleiben unberührt, systemgenerierte bleiben über server_id unterscheidbar;
- *        K  Konstellationen mit manuellen Apex-Adressrecords (identisch, widersprüchlich): Ergebnis festgehalten
- *           (offene Entscheidung, INFO);
+ *        K  Manuelle und systemgenerierte Apex-Adressrecords (D7-K = K-a): identisch/abweichend, gleiche/andere TTL,
+ *           A und AAAA, Neuaufbau nach manueller Änderung – Datenbank und Ownership, Zonendatei, Warnungen von
+ *           named-checkzone, effektives RRset (Adressen, TTL nach RFC 2181);
  *        Z  Zonendateien der Fixture-Zonen (unverändert) unter OUT_DIR zum Bytevergleich.
  *        Ausgewertet wird jeweils die erzeugte Zonendatei unabhängig mit named-checkzone -D (NS, A, AAAA).
  * Aufruf (über run.sh matrix): php ns_apex.php [Ausgabeverzeichnis]
@@ -115,9 +116,13 @@ $ok($z > 0 && addrRows($z) === [], 'N3a', 'Nameserver außerhalb der Zone: keine
 [$r, $z, $t] = addForward($c, 'myapex.test', ['7'], '7');
 $e = $z ? zoneEval($pdo, $z) : ['ok' => false];
 $ok($z > 0 && addrRows($z) === ['ns1 A 192.0.2.25 server 7'] && $e['ok'], 'N3b', 'ns1.myapex.test in myapex.test: Adressrecord ns1 (Labelgrenze): ' . json_encode($z ? addrRows($z) : $t));
+// N3c: Servername endet nur als Zeichenfolge auf den Zonennamen (apex.test / pex.test), keine Labelgrenze. Die Zone ist
+// gültig (NS außerhalb der Zone braucht keine Adresse) und muss angelegt werden – ohne In-Zone-Adressrecord.
 [$r, $z, $t] = addForward($c, 'pex.test', ['5'], '5');
 $e = $z ? zoneEval($pdo, $z) : ['ok' => false];
-$ok($z === 0 || addrRows($z) === [], 'N3c', 'apex.test in pex.test (Suffix ohne Labelgrenze): keine Adressrecords, Zone ' . ($z ? 'angelegt' : 'abgelehnt'));
+$ok($z > 0 && addrRows($z) === [] && $e['ok'] && $e['ns'] === ['apex.test.'] && $e['addr'] === [], 'N3c',
+    'apex.test als Nameserver von pex.test (Endung ohne Labelgrenze): Zone angelegt, NS apex.test., kein Adressrecord in DB und Zonendatei: '
+    . json_encode($z ? [addrRows($z), $e['addr'] ?? null] : $t));
 
 [$r, $z, $t] = addForward($c, 'deep.test', ['8'], '8');
 $e = $z ? zoneEval($pdo, $z) : ['ok' => false];
@@ -137,14 +142,18 @@ $ok($z > 0 && addrRows($z) === [], 'N6', 'Reverse-Zone: keine Adressrecords (unv
 $zb = zoneId('case.test');
 if ($zb === 0 || zoneId('apex.test') === 0) {
     $ok(false, 'B0', 'Ausgangszonen case.test/apex.test fehlen (Neuanlage abgelehnt) – B und K nicht ausführbar');
-    printf("Ergebnis NS-Apex: %d bestanden, %d fehlgeschlagen, %d Beobachtungen
-", $pass, $fail, $info);
+    printf("Ergebnis NS-Apex: %d bestanden, %d fehlgeschlagen, %d Beobachtungen\n", $pass, $fail, $info);
     exit(1);
 }
 sqlx("INSERT INTO DB.records (zone_id, name, type, content, ttl, server_id) VALUES ($zb, 'www', 'A', '198.51.100.10', 300, NULL)");
 $f = formFor(cgi('GET', "pages/zones.php?edit_id=$zb", '', $c)['body'], 'actions/zone_update.php', "editForm_$zb");
 postN('actions/zone_update.php', pairsN($f, ['server_ids' => ['6', '5'], 'master_server_id' => '6']), $c);
 $ok(addrRows($zb) === ['NS1 A 192.0.2.24 server 6', 'www A 198.51.100.10 manuell'], 'B1', 'Neuaufbau mit zusätzlichem Server außerhalb der Zone: Adressrecord NS1 neu erzeugt, manueller Record www unberührt: ' . json_encode(addrRows($zb)));
+$zp = zoneId('pex.test');
+$f = formFor(cgi('GET', "pages/zones.php?edit_id=$zp", '', $c)['body'], 'actions/zone_update.php', "editForm_$zp");
+postN('actions/zone_update.php', pairsN($f, ['server_ids' => ['5', '6'], 'master_server_id' => '6']), $c);
+$e = zoneEval($pdo, $zp);
+$ok(addrRows($zp) === [] && $e['ok'] && $e['ns'] === ['apex.test.', 'ns1.case.test.'], 'N3d', 'Neuaufbau (pex.test, Server apex.test und NS1.Case.Test): kein Adressrecord ohne Labelgrenze: ' . json_encode(addrRows($zp)));
 $za = zoneId('apex.test');
 $f = formFor(cgi('GET', "pages/zones.php?edit_id=$za", '', $c)['body'], 'actions/zone_update.php', "editForm_$za");
 postN('actions/zone_update.php', pairsN($f, ['server_ids' => ['5', '7'], 'master_server_id' => '7']), $c);
@@ -160,19 +169,77 @@ postN('actions/server_update.php', pairsN($sf, ['name' => 'apex.test']), $c);
 $e = zoneEval($pdo, $za);
 $ok(addrRows($za) === ['@ A 192.0.2.25 server 7'] && $e['ok'], 'B4', 'Umbenennung des Servers auf den Zonennamen: Neuaufbau erzeugt @ A, Zonendatei gültig: ' . json_encode(addrRows($za)));
 
-// ---------- K: Konstellationen mit manuellen Apex-Adressrecords (offene Entscheidung) ----------
-sqlx("INSERT INTO DB.records (zone_id, name, type, content, ttl, server_id) VALUES ($za, '@', 'A', '192.0.2.25', 3600, NULL)");
-$f = formFor(cgi('GET', "pages/zones.php?edit_id=$za", '', $c)['body'], 'actions/zone_update.php', "editForm_$za");
-postN('actions/zone_update.php', pairsN($f, ['server_ids' => ['7', '6'], 'master_server_id' => '7']), $c);
-$e = zoneEval($pdo, $za);
-$ok($e['ok'], 'K1', 'identischer manueller @ A: Zone gültig');
-$note('K1', 'identischer manueller @ A + systemgenerierter @ A: DB ' . json_encode(addrRows($za)) . ', Zonendatei (BIND führt zusammen) ' . json_encode($e['addr'] ?? null));
-sqlx("UPDATE DB.records SET content = '198.51.100.80' WHERE zone_id = $za AND server_id IS NULL AND name = '@'");
-$f = formFor(cgi('GET', "pages/zones.php?edit_id=$za", '', $c)['body'], 'actions/zone_update.php', "editForm_$za");
-postN('actions/zone_update.php', pairsN($f, ['server_ids' => ['7'], 'master_server_id' => '7']), $c);
-$e = zoneEval($pdo, $za);
-$ok($e['ok'] && in_array('apex.test. A 198.51.100.80', $e['addr'], true) && in_array('apex.test. A 192.0.2.25', $e['addr'], true), 'K2', 'widersprüchlicher manueller @ A bleibt erhalten, Zone gültig');
-$note('K2', 'widersprüchlicher manueller @ A (198.51.100.80) + systemgenerierter @ A (192.0.2.25): Apex löst auf beide Adressen auf ' . json_encode($e['addr'] ?? null));
+// ---------- K: manuelle und systemgenerierte Apex-Adressrecords (D7-K = K-a) ----------
+// Server 7 = apex.test (192.0.2.25, 2001:db8::25) ist Master von apex.test; systemgenerierte @-Records (server_id 7).
+sqlx("UPDATE DB.servers SET dns_ip6 = '2001:db8::25' WHERE id = 7");
+$toggle = 0;
+$rebuild = function () use (&$c, $za, &$toggle): void {
+    // NS-/Glue-Neuaufbau über eine Zuweisungsänderung (abwechselnd mit/ohne zusätzlichen Server 6 außerhalb der Zone)
+    $f = formFor(cgi('GET', "pages/zones.php?edit_id=$za", '', $c)['body'], 'actions/zone_update.php', "editForm_$za");
+    postN('actions/zone_update.php', pairsN($f, ['server_ids' => ($toggle++ % 2 === 0) ? ['7', '6'] : ['7'], 'master_server_id' => '7']), $c);
+};
+$rebuild();
+/** Zustand der @-Adressrecords: DB (id, TTL, Ownership), Zeilen der Zonendatei, Warnungen, effektives RRset je Typ */
+$apex = function () use ($pdo, $za): array {
+    $db = $GLOBALS['root']->query('SELECT id, type, content, ttl, IFNULL(server_id, 0) FROM `' . DB . "`.records WHERE zone_id = $za AND name = '@' AND type IN ('A', 'AAAA') ORDER BY id")
+        ->fetchAll(PDO::FETCH_NUM);
+    $dir = T . '/ns-apex-zf';
+    if (!is_dir($dir)) { mkdir($dir, 0700); }
+    $r = generate_zone_file($za, $dir, 'publish', $pdo);
+    if (($r['status'] ?? '') !== 'ok') { return ['ok' => false, 'db' => $db, 'error' => (string)($r['output'] ?? '')]; }
+    $raw = (string)file_get_contents($r['path']);
+    $check = (string)shell_exec('named-checkzone apex.test ' . escapeshellarg($r['path']) . ' 2>&1');
+    $dump = (string)shell_exec('named-checkzone -q -D -o - apex.test ' . escapeshellarg($r['path']) . ' 2>/dev/null');
+    unlink($r['path']);
+    $lines = array_values(array_filter(explode("\n", $raw), fn($l) => preg_match('/^@\t\d+\tIN\t(A|AAAA)\t/', $l) === 1));
+    $warn = array_values(array_filter(array_map('trim', explode("\n", $check)), fn($l) => $l !== '' && $l !== 'OK' && !str_contains($l, 'loaded serial')));
+    $rr = ['A' => ['ttl' => [], 'addr' => []], 'AAAA' => ['ttl' => [], 'addr' => []]];
+    foreach (explode("\n", trim($dump)) as $line) {
+        $f = preg_split('/\s+/', trim($line));
+        if (count($f) >= 5 && $f[0] === 'apex.test.' && isset($rr[$f[3]])) { $rr[$f[3]]['ttl'][] = (int)$f[1]; $rr[$f[3]]['addr'][] = $f[4]; }
+    }
+    foreach ($rr as &$x) { sort($x['addr']); $x['ttl'] = array_values(array_unique($x['ttl'])); }
+    unset($x);
+    return ['ok' => str_contains($check, 'OK'), 'db' => $db, 'lines' => array_map(fn($l) => str_replace("\t", ' ', $l), $lines), 'warn' => $warn, 'rr' => $rr];
+};
+$fmt = fn(array $s) => 'DB ' . json_encode(array_map(fn($r) => "#$r[0] $r[1] $r[2] ttl $r[3] " . ($r[4] ? "server $r[4]" : 'manuell'), $s['db']))
+    . ' | Datei ' . json_encode($s['lines'] ?? []) . ' | Warnungen ' . json_encode($s['warn'] ?? []) . ' | RRset A ' . json_encode($s['rr']['A'] ?? null) . ' AAAA ' . json_encode($s['rr']['AAAA'] ?? null);
+$manual = fn(array $s) => array_values(array_filter($s['db'], fn($r) => (int)$r[4] === 0));
+$system = fn(array $s) => array_values(array_map(fn($r) => "$r[1] $r[2]", array_filter($s['db'], fn($r) => (int)$r[4] === 7)));
+
+$cases = [
+    ['K1', 'A', '192.0.2.25', 300, 'A identisch, gleiche TTL'],
+    ['K2', 'A', '192.0.2.25', 3600, 'A identisch, andere TTL'],
+    ['K3', 'A', '198.51.100.80', 300, 'A abweichend (z. B. Website), gleiche TTL'],
+    ['K4', 'A', '198.51.100.80', 3600, 'A abweichend, andere TTL'],
+    ['K5', 'AAAA', '2001:db8::25', 3600, 'AAAA identisch, andere TTL'],
+    ['K6', 'AAAA', '2001:db8::80', 300, 'AAAA abweichend, gleiche TTL'],
+    ['K7', 'AAAA', '2001:db8::80', 3600, 'AAAA abweichend, andere TTL'],
+];
+foreach ($cases as [$id, $type, $content, $ttl, $desc]) {
+    sqlx("DELETE FROM DB.records WHERE zone_id = $za AND name = '@' AND server_id IS NULL");
+    $st = $GLOBALS['root']->prepare('INSERT INTO `' . DB . "`.records (zone_id, name, type, content, ttl, server_id) VALUES (?, '@', ?, ?, ?, NULL)");
+    $st->execute([$za, $type, $content, $ttl]);
+    $s1 = $apex();             // systemgenerierte Records älter (niedrigere id) als der manuelle
+    $rebuild();
+    $s2 = $apex();             // nach dem Neuaufbau: systemgenerierte Records neu (höhere id)
+    $sysExpected = ['A 192.0.2.25', 'AAAA 2001:db8::25'];
+    $union = array_values(array_unique(array_merge([$type === 'A' ? '192.0.2.25' : '2001:db8::25'], [$content]))); sort($union);
+    $m1 = $manual($s1); $m2 = $manual($s2);
+    $ok($s1['ok'] && $s2['ok'] && count($m2) === 1 && $m1 === $m2 && $system($s1) === $sysExpected && $system($s2) === $sysExpected
+        && $s2['rr'][$type]['addr'] === $union && count($s1['rr'][$type]['ttl']) === 1 && count($s2['rr'][$type]['ttl']) === 1,
+        $id, "$desc: Zone gültig, manueller Record unverändert erhalten (id/Inhalt/TTL), systemgenerierte @ A/AAAA (server_id 7) neu erzeugt, effektives RRset = "
+        . json_encode($union) . ', je RRset genau eine TTL');
+    $note("$id-vor", $fmt($s1));
+    $note("$id-nach", $fmt($s2));
+}
+// K8: manuelle Änderung (TTL) und erneuter Neuaufbau – manueller Record bleibt mit neuer TTL erhalten
+sqlx("UPDATE DB.records SET ttl = 600 WHERE zone_id = $za AND name = '@' AND server_id IS NULL");
+$rebuild();
+$s = $apex();
+$m = $manual($s);
+$ok($s['ok'] && count($m) === 1 && (int)$m[0][3] === 600 && $system($s) === ['A 192.0.2.25', 'AAAA 2001:db8::25'], 'K8',
+    'manuelle TTL-Änderung, danach Neuaufbau: manueller Record mit TTL 600 erhalten, systemgenerierte Records neu: ' . $fmt($s));
 
 printf("Ergebnis NS-Apex: %d bestanden, %d fehlgeschlagen, %d Beobachtungen\n", $pass, $fail, $info);
 exit($fail === 0 ? 0 : 1);
