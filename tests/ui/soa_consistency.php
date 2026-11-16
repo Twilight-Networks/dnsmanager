@@ -352,7 +352,7 @@ if ($webCases) {
     $zonesExpected = array_map(fn($row) => str_starts_with($row, "$k1|") ? preg_replace('/^((?:[^|]*\|){6})[^|]*/', '${1}manuell.web.', $row) : $row, $snap0['zones']);
     $ok($waited && str_starts_with($t, 'error: Beim Speichern des Servers ist ein Fehler aufgetreten.') && $snap1['servers'] === $snap0['servers']
         && $snap1['records'] === $snap0['records'] && $snap1['zones'] === $zonesExpected && nsOf($k1) === $nsBefore && locksFree() && openTrx() === 0,
-        'K1W', "Web-Weg unter dem Konflikt: Fehlermeldung „$t“, vollständiges Rollback, Sperren frei");
+        'K1W', "Web-Weg unter dem Konflikt: Fehlermeldung „{$t}“, vollständiges Rollback, Sperren frei");
     $sf = formFor(cgi('GET', 'pages/servers.php?edit_id=3', '', $a)['body'], 'actions/server_update.php');
     postF('actions/server_update.php', pairs($sf, ['name' => 'ns1.web.test']), $a);
     $t = toasts($a);
