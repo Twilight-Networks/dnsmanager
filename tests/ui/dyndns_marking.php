@@ -54,11 +54,14 @@ $ok($m['dyndns'] && !$m['manual'] && !$m['conflict'] && $m['edit'] && !$m['delet
 $ed = cgi('GET', 'pages/records.php?zone_id=1&edit_id=8', '', $a)['body'];
 $ok(formFor($ed, 'actions/record_update.php', 'editForm_8') !== null && str_contains($ed, 'Von DynDNS verwaltet: nur die TTL ist änderbar.'), 'M2',
     'Editor des verwalteten Records: Formular (TTL änderbar) und bisheriger Hinweis');
-$n = rowInfo(rowOf($html, 3, '192.0.2.10'), 3);
+$n = rowInfo(rowOf($html, 3, '192.0.2.80'), 3);
 $ok($n['manual'] && !$n['dyndns'] && !$n['conflict'] && $n['edit'] && $n['delete'] && $n['select'], 'N1',
     'normaler manueller Record (www): „Manuell“, Bearbeiten, Löschen, Auswahl unverändert: ' . json_encode($n));
 $sys = [];
-foreach (preg_split('#(?=<tr)#', $html) as $tr) { if (str_contains($tr, '>System')) { $sys[] = (str_contains($tr, 'DynDNS') ? 'DynDNS!' : 'ok'); } }
+foreach (preg_split('#(?=<tr)#', $html) as $tr) {
+    $tr = strstr($tr, '</tr>', true) ?: $tr;
+    if (str_contains($tr, '>System')) { $sys[] = (str_contains($tr, 'DynDNS') ? 'DynDNS!' : 'ok'); }
+}
 $ok($sys !== [] && !in_array('DynDNS!', $sys, true), 'N2', 'Systemrecords ohne DynDNS-Kennzeichen (' . count($sys) . ' Zeilen)');
 
 // ---------- A: mehrdeutig reserviert ----------
