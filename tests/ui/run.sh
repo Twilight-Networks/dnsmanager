@@ -145,6 +145,8 @@ if [ "$MODE" = matrix ]; then
   # U4-Core: Builder/Parser/BIND und DynDNS-Kennzeichen (RR und RC) gegen dieselbe Testkopie
   echo "--- Builder/Parser/BIND"; php $H/records/unit.php "$T/app" "$H" || rc=1
   for iso in RR RC; do echo "--- DynDNS-Kennzeichen $iso"; php $H/records/dyndns_flag.php $iso || rc=1; done
+  # RRset-TTL-Konsistenz (RFC 2181 §5.2): Zonendatei, Neuaufbau/Reihenfolge, Vorschau und Record-Liste
+  echo "--- RRset-TTL"; php $H/rrset_ttl.php "$OUT_DIR/rrsetttl-${SHA:0:7}-$(date +%Y%m%d-%H%M%S)" || rc=1
   # U4-UI: Vorschau-Endpunkt, Rechte, keine Schreibzugriffe, Vorschau ↔ Zonendatei, No-JS-Vorschau, >500 Zonen;
   # E3-Bytevergleich der Zonendateien gegen eine Basis-Anwendung (UIG_BASE_SHA, z. B. main)
   if [ -f $T/app/web/actions/record_preview.php ]; then
@@ -164,8 +166,6 @@ if [ "$MODE" = matrix ]; then
   if [ -f $T/app/web/templates/user_editor_form.php ]; then
     echo "--- U5b"; php $H/u5b.php || rc=1
   fi
-  # RRset-TTL-Konsistenz (RFC 2181 §5.2): Zonendatei, Neuaufbau/Reihenfolge, Vorschau und Record-Liste
-  echo "--- RRset-TTL"; php $H/rrset_ttl.php "$OUT_DIR/rrsetttl-${SHA:0:7}-$(date +%Y%m%d-%H%M%S)" || rc=1
   # U6: CSP-Modi und exakte Headerwerte je Antworttyp (Seite, Login, Redirect, 403, DynDNS-API, Report-Endpunkt)
   if grep -q "CSP_MODE" $T/app/web/inc/web/csp.php; then
     echo "--- U6"; php $H/u6.php || rc=1
