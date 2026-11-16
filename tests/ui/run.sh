@@ -168,6 +168,8 @@ if [ "$MODE" = matrix ]; then
   fi
   # NS am Zonen-Apex und Groß-/Kleinschreibung (PR C): Neuanlage, Neuaufbau, manuelle Apex-Records, Fixture-Zonendateien
   echo "--- NS-Apex"; php $H/ns_apex.php "$OUT_DIR/nsapex-${SHA:0:7}-$(date +%Y%m%d-%H%M%S)" || rc=1
+  # DynDNS-Kennzeichnung in der Record-Verwaltung (verwaltet, reserviert/Konflikt, manuell)
+  echo "--- DynDNS-Kennzeichnung"; php $H/dyndns_marking.php || rc=1
   # U6: CSP-Modi und exakte Headerwerte je Antworttyp (Seite, Login, Redirect, 403, DynDNS-API, Report-Endpunkt)
   if grep -q "CSP_MODE" $T/app/web/inc/web/csp.php; then
     echo "--- U6"; php $H/u6.php || rc=1
