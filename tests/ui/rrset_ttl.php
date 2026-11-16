@@ -143,9 +143,9 @@ $ok(array_diff($expectSame, $raws) === [], 'G11', 'konsistente RRsets: Zeilen un
 $ok(array_map(fn($l) => $l['name'] . ' ' . $l['type'] . ' ' . $l['content'], $e['lines'])
     === array_map(fn($r) => $r[0] . ' ' . $r[1] . ' ' . $r[2], $GLOBALS['root']->query('SELECT name, type, content FROM `' . DB . "`.records WHERE zone_id = $zt ORDER BY id")->fetchAll(PDO::FETCH_NUM)),
     'G12', 'Reihenfolge, Namen, Typen und Inhalte der Zeilen = gespeicherte Records (nur TTL normalisiert)');
-$dbTtls = $GLOBALS['root']->query('SELECT GROUP_CONCAT(IFNULL(ttl, \'NULL\') ORDER BY id) FROM `' . DB . "`.records WHERE zone_id = $zt")->fetchColumn();
+$dbTtls = $GLOBALS['root']->query('SELECT GROUP_CONCAT(IFNULL(ttl, \'NULL\') ORDER BY id) FROM `' . DB . "`.records WHERE zone_id = $zt AND server_id IS NULL")->fetchColumn();
 $ok($dbTtls === '600,600,600,3600,300,600,600,3600,300,3600,900,3600,120,3600,3600,300,3600,600,1800,3600,1200,NULL,3600,NULL,9000,NULL', 'G13',
-    'gespeicherte TTLs unverändert (keine Korrektur in der Datenbank)');
+    'gespeicherte TTLs der manuellen Records unverändert (keine Korrektur in der Datenbank): ' . $dbTtls);
 
 // ---------- R: systemgenerierte Records, Neuaufbau, Reihenfolge ----------
 // u0.test: ns1.u0.test liegt in der Zone → systemgenerierter Adressrecord ns1 A 192.0.2.11 (TTL 300)
