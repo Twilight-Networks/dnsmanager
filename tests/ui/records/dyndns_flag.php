@@ -101,13 +101,13 @@ scenario('Y13', ["UPDATE DB.records SET content = '192.0.2.99', name = 'mail' WH
 $bulk = [];
 for ($i = 0; $i < 1100; $i++) { $bulk[] = sprintf("(1, 'h%04d', 'A', '198.51.100.%d', 3600)", $i, $i % 250 + 1); }
 $bigSql = ['INSERT INTO DB.records (zone_id, name, type, content, ttl) VALUES ' . implode(',', $bulk),
-    "INSERT INTO DB.records (id, zone_id, name, type, content, ttl) VALUES (950, 1, 'dýn', 'A', '192.0.2.98', 300), (951, 1, 'dÝn', 'AAAA', '2001:db8::98', 300),"
-    . " (952, 1, 'DYN.u0.test.', 'AAAA', '2001:db8::97', 300), (953, 1, 'zz', 'AAAA', '2001:db8::96', 300)"];
+    "INSERT INTO DB.records (id, zone_id, name, type, content, ttl) VALUES (99950, 1, 'dýn', 'A', '192.0.2.98', 300), (99951, 1, 'dÝn', 'AAAA', '2001:db8::98', 300),"
+    . " (99952, 1, 'DYN.u0.test.', 'AAAA', '2001:db8::97', 300), (99953, 1, 'zz', 'AAAA', '2001:db8::96', 300)"];
 scenario('Y17', $bigSql, [8], 'große Zone (1.100 + 4 Records, mehrere Blöcke): verwaltet [8], Reservierungen = Schutz');
 $reservedOf = fn(?array $v) => array_values(array_map(fn($r) => $r['id'], array_filter($v['records'] ?? [], fn($r) => $r['isDyndnsReserved'])));
 $rA = $reservedOf($svc->getZoneRecordView($admin, 1)); $rZ = $reservedOf($svc->getZoneRecordView($zoneadmin, 1));
 sort($rA); sort($rZ);
-$ok($rA === [950, 951, 952] && $rZ === $rA, 'Y18', 'große Zone: reserviert [950 lose/erster Block, 951 lose/letzter Block, 952 strikt] für admin und zoneadmin: '
+$ok($rA === [99950, 99951, 99952] && $rZ === $rA, 'Y18', 'große Zone: reserviert [99950 lose/erster Block, 99951 lose/letzter Block, 99952 strikt] für admin und zoneadmin: '
     . json_encode($rA) . ' / ' . json_encode($rZ));
 
 // Rechte und keine Account-Daten
