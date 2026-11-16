@@ -59,8 +59,9 @@ $ok($n['manual'] && !$n['dyndns'] && !$n['conflict'] && $n['edit'] && $n['delete
     'normaler manueller Record (www): „Manuell“, Bearbeiten, Löschen, Auswahl unverändert: ' . json_encode($n));
 $sys = [];
 foreach (preg_split('#(?=<tr)#', $html) as $tr) {
+    if (!str_starts_with($tr, '<tr')) { continue; }
     $tr = strstr($tr, '</tr>', true) ?: $tr;
-    if (str_contains($tr, '>System')) { $sys[] = (str_contains($tr, 'DynDNS') ? 'DynDNS!' : 'ok'); }
+    if (str_contains($tr, 'dm-col-origin') && str_contains($tr, '>System')) { $sys[] = (str_contains($tr, 'DynDNS') ? 'DynDNS!' : 'ok'); }
 }
 $ok($sys !== [] && !in_array('DynDNS!', $sys, true), 'N2', 'Systemrecords ohne DynDNS-Kennzeichen (' . count($sys) . ' Zeilen)');
 
