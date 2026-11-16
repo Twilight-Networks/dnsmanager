@@ -58,14 +58,20 @@ function scenario(string $id, array $sql, array $expect, string $msg): void
             $g = guardManaged($pdo, $zid, $zname, $rec);
             $f = $byId[(int)$rec['id']]['isDyndns'];
             if ($g !== $f) { $mismatch[] = "{$rec['id']}:{$rec['name']}/{$rec['type']} Schutz=" . var_export($g, true) . ' isDyndns=' . var_export($f, true); }
+            // isDyndnsReserved = Schutz meldet AMBIGUOUS (reservierter Name, nicht eindeutig verwaltet; ohne Systemrecords)
+            $res = dyndnsFindOwnerReservations($pdo, $zid, $zname, (string)$rec['name'], dyndnsLoadZoneAccounts($pdo, $zid));
+            $expRes = $rec['server_id'] === null && !$g && ($res['strict'] !== [] || $res['loose'] !== []);
+            $fr = $byId[(int)$rec['id']]['isDyndnsReserved'];
+            if ($expRes !== $fr) { $mismatch[] = "{$rec['id']}:{$rec['name']}/{$rec['type']} Reservierung=" . var_export($expRes, true) . ' isDyndnsReserved=' . var_export($fr, true); }
             if ($f) { $flags[] = (int)$rec['id']; }
         }
         foreach ($view['records'] as $r) {
-            if ($r['isDyndns'] && !in_array($r['type'], ['A', 'AAAA'], true)) { $mismatch[] = "{$r['id']} Typ {$r['type']} gekennzeichnet"; }
+            if (($r['isDyndns'] || $r['isDyndnsReserved']) && !in_array($r['type'], ['A', 'AAAA'], true)) { $mismatch[] = "{$r['id']} Typ {$r['type']} gekennzeichnet"; }
+            if ($r['isDyndns'] && $r['isDyndnsReserved']) { $mismatch[] = "{$r['id']} zugleich verwaltet und reserviert"; }
         }
     }
     sort($flags);
-    $ok($mismatch === [] && $flags === $expect, $id, $msg . ' – gekennzeichnet: [' . implode(',', $flags) . ']' . ($mismatch ? ' ABWEICHUNG: ' . implode('; ', $mismatch) : ' = Schutz'));
+    $ok($mismatch === [] && $flags === $expect, $id, $msg . ' – gekennzeichnet: [' . implode(',', $flags) . ']' . ($mismatch ? ' ABWEICHUNG: ' . implode('; ', $mismatch) : ' = Schutz (verwaltet und reserviert)'));
 }
 
 $ok($pdo->query('SELECT @@transaction_isolation')->fetchColumn() === str_replace(' ', '-', $iso), 'Y00', "Isolationsebene $iso");
@@ -101,7 +107,8 @@ $json = json_encode([$svc->getZoneRecordView($admin, 1), $svc->getZoneRecordView
 $ok(!str_contains($json, 'u0dyn') && !str_contains($json, 'u0app') && !str_contains($json, 'current_ipv') && !str_contains($json, 'hostname') && !str_contains($json, 'password'),
     'Y15', 'Ergebnis enthält keine Account-Daten (Benutzername, Hostname-Feld, gespeicherte IP, Passwort)');
 $keys = array_keys($svc->getZoneRecordView($admin, 1)['records'][0]); sort($keys);
-$ok($keys === ['content', 'id', 'isDkim', 'isDyndns', 'isGlue', 'isProtectedNs', 'name', 'systemManaged', 'ttl', 'type'], 'Y16', 'Vertrag: bisherige Felder + isDyndns');
+$ok($keys === ['content', 'id', 'isDkim', 'isDyndns', 'isDyndnsReserved', 'isGlue', 'isProtectedNs', 'name', 'systemManaged', 'ttl', 'type'], 'Y16',
+    'Vertrag: bisherige Felder + isDyndns + isDyndnsReserved');
 
 printf("== DynDNS-Kennzeichen [%s]: %d/%d bestanden\n", $iso, $pass, $pass + $fail);
 exit($fail ? 1 : 0);
