@@ -681,6 +681,8 @@ return [
     'record_preview_disclaimer' => 'Die Vorschau zeigt die Zeile der Zonendatei, die beim Speichern entstehen würde. Sie garantiert keine erfolgreiche Speicherung: Maßgeblich ist die Prüfung beim Speichern (u. a. Duplikate, DynDNS, Zonendatei).',
     'record_preview_control_chars' => 'Unzulässige Steuerzeichen – die Zonendatei würde nicht erzeugt.',
     'record_preview_autoptr' => 'Der automatische PTR-Eintrag wird erst beim Speichern geprüft und ist nicht Teil der Vorschau.',
+    'record_preview_rrset_ttl' => 'Die TTL gilt je RRset (gleicher Name und Typ): Alle %2$s-Records von %1$s werden mit der niedrigsten TTL von %3$d s veröffentlicht.',
+    'record_ttl_effective_title' => 'Veröffentlicht wird die niedrigste TTL des RRsets (gleicher Name und Typ): %d s. Die gespeicherte TTL bleibt unverändert.',
     'record_origin_system' => 'System',
     'record_origin_system_glue' => 'System · Glue',
     'record_origin_glue' => 'Glue',

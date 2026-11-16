@@ -681,6 +681,8 @@ return [
     'record_preview_disclaimer' => 'La vista previa muestra la línea del archivo de zona que se generaría al guardar. No garantiza que el guardado tenga éxito: las comprobaciones al guardar son las determinantes (p. ej. duplicados, DynDNS, archivo de zona).',
     'record_preview_control_chars' => 'Caracteres de control no permitidos: no se generaría el archivo de zona.',
     'record_preview_autoptr' => 'El registro PTR automático solo se comprueba al guardar y no forma parte de la vista previa.',
+    'record_preview_rrset_ttl' => 'El TTL se aplica por RRset (mismo nombre y tipo): todos los registros %2$s de %1$s se publican con el TTL más bajo de %3$d s.',
+    'record_ttl_effective_title' => 'Se publica el TTL más bajo del RRset (mismo nombre y tipo): %d s. El TTL guardado no cambia.',
     'record_origin_system' => 'Sistema',
     'record_origin_system_glue' => 'Sistema · Glue',
     'record_origin_glue' => 'Glue',

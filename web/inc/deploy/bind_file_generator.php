@@ -53,6 +53,59 @@ function zone_file_record_line(array $r, $zoneTtl): string
 }
 
 /**
+ * RRset-Schlüssel eines Records (RFC 2181 §5.2: Owner-Name, Klasse, Typ – nicht der Inhalt). Der Owner-Name wird so
+ * bestimmt, wie BIND die Zeile von zone_file_record_line() auswertet: '@' = Zonen-Apex, Name mit abschließendem Punkt
+ * absolut, sonst relativ zur Zone; ohne Unterscheidung der Groß-/Kleinschreibung. Klasse ist immer IN. Keine weitere
+ * Normalisierung (Namen werden unverändert geschrieben).
+ */
+function zone_file_rrset_key(string $name, string $type, string $zoneName): string
+{
+    $zone = strtolower(rtrim($zoneName, '.'));
+    if ($name === '@') {
+        $owner = $zone . '.';
+    } elseif (str_ends_with($name, '.')) {
+        $owner = strtolower($name);
+    } else {
+        $owner = strtolower($name) . '.' . $zone . '.';
+    }
+    return $owner . ' IN ' . strtoupper($type);
+}
+
+/**
+ * Effektive TTL je RRset: die niedrigste effektive TTL seiner Records (Record ohne eigene TTL: Zonen-TTL, wie in
+ * zone_file_record_line()). Unabhängig von der Reihenfolge der Records.
+ *
+ * @param array<int, array{name: string, type: string, ttl?: int|string|null}> $records
+ * @return array<string, int> RRset-Schlüssel (zone_file_rrset_key) => TTL
+ */
+function zone_file_rrset_ttls(array $records, $zoneTtl, string $zoneName): array
+{
+    $ttls = [];
+    foreach ($records as $r) {
+        $key = zone_file_rrset_key((string)$r['name'], (string)$r['type'], $zoneName);
+        $ttl = isset($r['ttl']) ? (int)$r['ttl'] : (int)$zoneTtl;
+        $ttls[$key] = isset($ttls[$key]) ? min($ttls[$key], $ttl) : $ttl;
+    }
+    return $ttls;
+}
+
+/**
+ * Record mit der effektiven TTL seines RRsets (RFC 2181 §5.2). Nur die TTL wird ersetzt und nur, wenn sie von der
+ * RRset-TTL abweicht; Name, Typ, Inhalt und gespeicherte Werte bleiben unverändert.
+ *
+ * @param array<string, int> $rrsetTtls Ergebnis von zone_file_rrset_ttls()
+ */
+function zone_file_record_with_rrset_ttl(array $r, array $rrsetTtls, $zoneTtl, string $zoneName): array
+{
+    $key = zone_file_rrset_key((string)$r['name'], (string)$r['type'], $zoneName);
+    $own = isset($r['ttl']) ? (int)$r['ttl'] : (int)$zoneTtl;
+    if (isset($rrsetTtls[$key]) && $rrsetTtls[$key] !== $own) {
+        $r['ttl'] = $rrsetTtls[$key];
+    }
+    return $r;
+}
+
+/**
  * Defensive Prüfung eines SOA-Namensfeldes (soa_ns, soa_mail) unmittelbar vor dem Schreiben der
  * Zonendatei (Sicherheitsbefund S17).
  *
@@ -284,9 +337,11 @@ function generate_zone_file(int $zone_id, string $output_dir, string $mode, PDO 
 
 ZONE;
 
-    // Alle Records einfügen
+    // Alle Records einfügen; je RRset einheitlich die niedrigste effektive TTL (RFC 2181 §5.2), unabhängig von der
+    // Reihenfolge der Records. Gespeicherte Werte bleiben unverändert.
+    $rrset_ttls = zone_file_rrset_ttls($records, $zone['ttl'], (string)$zone_name);
     foreach ($records as $r) {
-        $content .= zone_file_record_line($r, $zone['ttl']) . "\n";
+        $content .= zone_file_record_line(zone_file_record_with_rrset_ttl($r, $rrset_ttls, $zone['ttl'], (string)$zone_name), $zone['ttl']) . "\n";
     }
 
     // Datei schreiben

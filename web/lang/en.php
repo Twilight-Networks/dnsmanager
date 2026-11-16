@@ -681,6 +681,8 @@ return [
     'record_preview_disclaimer' => 'The preview shows the zone file line that saving would produce. It does not guarantee that saving succeeds: the checks performed when saving are authoritative (e.g. duplicates, DynDNS, zone file).',
     'record_preview_control_chars' => 'Invalid control characters – the zone file would not be generated.',
     'record_preview_autoptr' => 'The automatic PTR record is only checked when saving and is not part of the preview.',
+    'record_preview_rrset_ttl' => 'The TTL applies per RRset (same name and type): all %2$s records of %1$s are published with the lowest TTL of %3$d s.',
+    'record_ttl_effective_title' => 'The lowest TTL of the RRset (same name and type) is published: %d s. The stored TTL remains unchanged.',
     'record_origin_system' => 'System',
     'record_origin_system_glue' => 'System · Glue',
     'record_origin_glue' => 'Glue',
