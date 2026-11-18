@@ -14,10 +14,10 @@ const DB = 'dnsmgr_uig_app';
 const TPL = 'dnsmgr_uig_tpl';
 const SNAP_TABLES = ['users', 'user_zones', 'zones', 'zone_servers', 'servers', 'records', 'dyndns_accounts', 'system_status', 'diagnostics', 'deployments'];
 const RESET_TABLES = ['users', 'user_zones', 'zones', 'zone_servers', 'servers', 'records', 'dyndns_accounts', 'system_status', 'diagnostics', 'diagnostic_log', 'deployments'];
-// History-Tabellen (AP1/H2a/H2b; nur soweit im Schema des Commits vorhanden): je Fall geleert, Reihenfolge Kind vor
+// History-Tabellen (AP1/H2a/H2b/H2c; nur soweit im Schema des Commits vorhanden): je Fall geleert, Reihenfolge Kind vor
 // Eltern. Zonen-IDs der Fixture werden je Fall neu vergeben; verbliebene Heads würden sonst als Drift bzw. Kollision
 // in den nächsten Fall wirken. Der Vergleich (SNAP_TABLES) bleibt auf die Fachtabellen beschränkt.
-const HISTORY_RESET_TABLES = ['history_dependencies', 'zone_history_state', 'zone_revisions', 'zone_snapshots', 'history_change_sets'];
+const HISTORY_RESET_TABLES = ['audit_events', 'history_dependencies', 'zone_history_state', 'zone_revisions', 'zone_snapshots', 'history_change_sets'];
 
 if (DB === 'dnsmanager' || !preg_match('/^dnsmgr_uig_/', DB)) { fwrite(STDERR, "ABBRUCH: unzulässige Datenbank\n"); exit(3); }
 

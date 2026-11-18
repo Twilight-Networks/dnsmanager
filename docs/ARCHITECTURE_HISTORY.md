@@ -1,6 +1,6 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2b (Basis `bbfb717`)
+Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2c (Basis `d595180`)
 
 ## 0. Status und Geltung
 
@@ -8,9 +8,9 @@ Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meile
   (Abschnitt 5a: History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung,
   `ZoneStateSnapshot`/`ZoneSnapshotDiff`/`ZoneSnapshotReader`, Baseline-Initialisierung) und **H2b** (Abschnitt 5b:
   `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden, Drift, Lazy-Baseline, Zonenlöschung,
-  `history_dependencies` mit Migration 003). Alle übrigen hier beschriebenen Tabellen, Klassen, Agent-Erweiterungen und
-  Abläufe existieren im Code noch nicht; insbesondere gibt es keine Audit-Ereignisse (H2c) und kein Publish-Journal
-  (H2d).
+  `history_dependencies` mit Migration 003) und **H2c** (Abschnitt 5c: `audit_events` mit Migration 004,
+  `AuditPolicy`/`AuditRecorder` in allen Verwaltungspfaden). Alle übrigen hier beschriebenen Tabellen, Klassen,
+  Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere gibt es kein Publish-Journal (H2d).
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -211,8 +211,9 @@ Initialisierungs-CLI ist Teil des Codes; H2a nutzt die Historie zur Laufzeit nic
 
 Ohne Revision, weil der DNS-Inhalt nach `zs1` unverändert bleibt: Beschreibung und `allow_dyndns` von Zonen,
 DynDNS-Kontoanlage und Passwortänderung, Serveranlage, Serveränderungen nur an `active`, `api_ip`, Token oder
-`is_local`, Benutzer- und Rechteverwaltung, Publish und Generator (`soa_serial`, `changed`, `bind_dirty`). Diese
-Vorgänge erfasst H2c als Audit-Ereignisse. `deleteServer` ist nur ohne Zuweisung zulässig; ein Cascade auf
+`is_local`, Benutzer- und Rechteverwaltung, Publish und Generator (`soa_serial`, `changed`, `bind_dirty`). Die
+Verwaltungsvorgänge erfasst H2c als Audit-Ereignisse (Abschnitt 5c); Publish und Generator gehören zum
+Publish-Journal (H2d) und erzeugen keine Audit-Ereignisse (E43). `deleteServer` ist nur ohne Zuweisung zulässig; ein Cascade auf
 `records.server_id` träfe nur Altdaten, die die Invariante verletzen, und erschiene als Drift.
 
 **Änderungsmengen und Revisionen (E31, E32):** Änderungsmengen entstehen erst mit der ersten Revision. Je
@@ -292,6 +293,89 @@ Datenbanken. Auf ns1 Migration 003, Code per SHA, `--check` und `--reconcile`; T
 Anwendung nur mit festgelegtem Rückbau, ohne Publish All. Historieneinträge gelöschter Testzonen bleiben erhalten (E8).
 ns2 unverändert.
 
+## 5c. Festlegungen H2c (umgesetzt)
+
+**Umfang (E43)** – Audit-Ereignisse entstehen nur für committete Änderungen gegenüber dem **gesperrten** Stand; `unchanged`,
+Ablehnungen (`access_denied`, `invalid_*`, `not_found`, `last_admin` …) und Fehler erzeugen keinen Eintrag. Abgelehnte
+Zugriffe bleiben wie bisher ausschließlich im Syslog.
+
+| Pfad | Operation (Änderungsmenge) | Ereignis |
+|---|---|---|
+| `ZoneService::createZone` / `updateZone` / `deleteZone` | `zone.create` / `zone.update` / `zone.delete` | `zone`: `description`, `allow_dyndns`; Löschung zusätzlich Kaskadenzähler (E53). Reine DNS-Änderungen ohne Ereignis |
+| `ServerService::createServer` / `updateServer` / `deleteServer` | `server.create` / `server.update` / `server.delete` | `server`: `name`, `dns_ip4`, `dns_ip6`, `api_ip`, `is_local`, `active`; `api_token` nur als Kennzeichen. Ein impliziter Wechsel des bisherigen lokalen Servers ist ein eigenes Ereignis derselben Änderungsmenge |
+| `ServerService::reloadBind` | `server.reload` | `server`, Aktion `reload`, nur `result` (`ok`/`failed`), nicht transaktional (E51) |
+| `DyndnsAccountService::createAccount` / `updateAccount` / `changePassword` / `deleteAccount` | `dyndns_account.create` / `.update` / `.password` / `.delete` | `dyndns_account`: `hostname`, `zone_id`; `username` und `password` nur als Kennzeichen; Label = Hostname |
+| `UserService::createUser` / `updateUser` / `deleteUser` / `changePassword` / `setActive` | `user.create` / `.update` / `.delete` / `.password` / `.disable` / `.enable` | `user`: `username`, `role`, `active`, `zones` (hinzugefügt/entfernt; „alle Zonen“ als `mode = all` mit tatsächlicher Anzahl, Q4); `password` nur als Kennzeichen |
+
+Ohne Audit-Ereignis: Record-Pfade und AutoPTR (reiner DNS-Inhalt, Revision), DynDNS-API (`current_ipv4/6` sind
+Client-IPs; DNS-Wirkung als Revision), Publish und Generator (H2d), Login, Session-Revalidierung, Monitoring,
+Baseline-/Reconcile-CLI (eigene Systemänderungsmengen).
+
+**Abgrenzung (E44)** – Revisionen bilden den DNS-Inhalt nach `zs1` ab, Audit-Ereignisse Verwaltungsfelder außerhalb
+davon und Entitäten ohne Snapshot. DNS-Inhalt wird nicht im Audit wiederholt (z. B. Serverumbenennung: Name im
+Ereignis, NS/Glue nur in den Revisionen).
+
+**Tabelle `audit_events` (E45)** – maßgeblich `sql/migrations/004_audit_events.sql` und `SchemaCheck`: `id`;
+`change_set_id` (FK → `history_change_sets`, `RESTRICT`); `seq` SMALLINT UNSIGNED **NOT NULL** ≥ 1 mit UNIQUE
+`(change_set_id, seq)`; `entity_type` ENUM(zone, server, dyndns_account, user); `entity_id` ≥ 1 (ohne FK);
+`entity_label` NOT NULL, nicht leer; `zone_id` (Zone: **NOT NULL und = `entity_id`**, DynDNS-Konto: NOT NULL,
+Server/Benutzer: NULL); `action` ENUM(create, update, delete, reload; `reload` nur für Server); `changes` JSON-Objekt,
+nicht leer, höchstens 16384 Bytes. MariaDB weist eine Zeile nur bei FALSE zurück, UNKNOWN gilt als erfüllt; alle
+CHECK-Bedingungen sind deshalb NULL-sicher formuliert (explizite `IS [NOT] NULL` vor Vergleichen). Keine FKs auf
+Fachtabellen, keine Kaskaden, append-only (E8). Die Zeit ergibt sich aus `history_change_sets.created_at`.
+
+**Migration (E46)** – `scripts/migrate_004_audit_events.sh` nach dem Muster von 003 (Preflight aller Grundtabellen und
+von `audit_events` vor der DDL ⇒ Exit 2; Abbruch während der DDL ⇒ Exit 3, Wiederanlauf; Sicherung). Reihenfolge
+Migration → Code; alter Code läuft mit dem neuen Schema, neuer Code mit altem Schema ist fail-closed (503).
+
+**`AuditRecorder` (E47)** – eine Instanz je Fachtransaktion: `open()` nach der Akteurssperre liest den Akteursnamen
+sperrend (**Stand zu Beginn des Vorgangs**, auch bei Selbstlöschung und Selbstumbenennung; ein Lesen erst beim Commit
+würde die Selbstlöschung scheitern lassen); `record()` puffert und prüft nur (keine Datenbankanweisung, kein
+Read-View); `finish()` unmittelbar vor dem Commit; `close()` im `finally`. Bindung an die Transaktion über einen eigenen
+Savepoint (Muster E39); bei einer Mischoperation gilt die Bindung des `ZoneHistoryRecorder` (dessen spätere
+Savepoint-Prüfungen würden einen jüngeren Savepoint auflösen). Der `ZoneHistoryRecorder` erhält nur die lesenden
+Ergänzungen `isFinished()` und `assertCurrentTransaction()`; seine Semantik bleibt unverändert.
+
+**`AuditPolicy` (E48)** – verbindliche Feld-Whitelist je Entitätstyp mit Feldklassen (`name`, `ip`, `bool`, `id`,
+`role`, `text`, `zones`, `secret`, `count`, `result`); unbekannte, verbotene oder falsch typisierte Felder sind ein
+Programmfehler (`LogicException` ⇒ Rollback). Geheimnisse gelangen nie als Wert in den Recorder, nur als Kennzeichen
+`set`/`changed`/`rotated`/`cleared`. Bezeichner ohne Leerraum, Steuerzeichen, `$`, Anführungszeichen und Backslash
+(schließt Hashes aus), höchstens 255 Zeichen. Freitext (Zonenbeschreibung) ist nicht automatisch geheimnisfrei: höchstens
+500 Zeichen (`…_truncated`), bei Geheimnismuster (bcrypt/argon2/crypt-Hash, privater Schlüssel, Token-ähnliche
+Zeichenfolge ≥ 32 Zeichen) vollständig geschwärzt (Wert `null`, `…_redacted`). Kein Agent-Antworttext. Ausgabe
+deterministisch in Whitelist-Reihenfolge; Infrastruktur-IP-Adressen der Server sind zulässig (Q1), Client-IPs nie.
+
+**Änderungsmengen und Korrelation (E49)** – Mischoperationen (Revision und Ereignis) verwenden **exakt dieselbe**
+Änderungsmenge (gleicher `HistoryContext`, gleiche Korrelation); reine Verwaltungsänderungen legen genau eine neue an.
+Drift bleibt eine eigene Systemänderungsmenge derselben Korrelation. Ereignisse einer Änderungsmenge tragen `seq` 1..n.
+
+**Konsistenz paralleler Serveränderungen (E50)** – `updateServer` bestimmt DNS-Relevanz (Name/DNS-IP) und Änderung von
+`active` zunächst ungesperrt (Lock-Entscheidung, Zonenliste) und wiederholt beides nach `servers … FOR UPDATE`. Ergibt
+erst der gesperrte Stand eine DNS-relevante Änderung (ohne Topologie-Lock, Zonenliste, Rebuild und Revision) oder eine
+Änderung von `active` ohne gehaltenen Topologie-Lock, endet der Vorgang ohne Schreibzugriff mit dem bestehenden Code
+`server.update.topology_locked` (wie bei belegtem Lock; erneut versuchen). Die Reaktivierung (`bind_dirty`) richtet sich
+nach dem gesperrten Stand. Der bisherige lokale Server wird vor dem bestehenden `UPDATE … SET is_local = 0` per
+`SELECT … FOR UPDATE` bestimmt (dieselben Zeilen sperrt das UPDATE ohnehin). Alle Vorher-Werte stammen aus gesperrten
+Zeilen (R-A5); ebenso bei Server- und Benutzerlöschung.
+
+**BIND-Reload (E51)** – nach dem Agentenaufruf eigene kurze Transaktion (`users` S für den Namen; fehlt der Akteur
+inzwischen, bleibt das Label leer) mit Änderungsmenge `server.reload` und Ergebnis. Scheitert der Nachtrag, bleibt das
+Ergebnis unverändert; die Meldung trägt zusätzlich `audit = failed` und `auditDetail`, der Adapter schreibt eine
+Protokollzeile (Q2 b); Toast, Redirect und HTTP-Status sind unverändert. Bekannte Grenze: Endet der Prozess zwischen
+Reload und Nachtrag, fehlt das Ereignis (Syslog bleibt).
+
+**Fehlerverhalten (E52)** – wie E40: Jeder Audit-Fehler ist eine Exception in der Fachtransaktion und erscheint als
+bisheriger Fehlercode des Pfads (`*.failed`) mit `detail`; keine neuen Codes, Sprachschlüssel, HTTP-Status oder
+Redirects. Ein 1062 aus `audit_events` würde in `DyndnsAccountService` als `duplicate_username` erscheinen; er entsteht
+nur bei einem Programmfehler (doppeltes `seq`).
+
+**Kaskade der Zonenlöschung (E53)** – Zähler `dyndns_accounts_removed` (sperrend nach der Zonensperre gezählt, Reihenfolge
+`zones → dyndns_accounts` wie `DyndnsAccountService`; das kaskadierende DELETE sperrt dieselben Zeilen) und
+`user_assignments_removed` (aus der bestehenden `user_zones`-Sperre); keine Kontonamen.
+
+**Tests (E54)** – `tests/history/audit_test.php` (RR und RC), `migration004_test.sh`, statischer Nachweis R05–R09 in
+`static_rh8_test.php`, Mutationsproben MA01–MA13; Einzelheiten `tests/history/README.md`.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -306,6 +390,19 @@ ns2 unverändert.
 | R-H8 | Jede Schreibstelle mit `validateAndFlag`, `rebuildNsGlueAndFlag` oder `DELETE FROM zones` hat einen Recorder-Aufruf; statisch und dynamisch geprüft (Muster Paket 6). |
 | R-H9 | Lock-Reihenfolge (Ziel): Advisory-Lock (wo bisher) → Transaktion → users (S) → user_zones (S) → zones (X, aufsteigend) → zone_history_state (X) → Fachtabellen → Historien-INSERTs. Publish-Journaltabellen werden **nie** aus Fachtransaktionen geändert. |
 
+**Audit-Ereignisse (H2c, E47–E53):**
+
+| ID | Regel |
+|---|---|
+| R-A1 | Audit-Ereignisse entstehen in derselben Transaktion wie die Fachänderung (Rollback ⇒ kein Ereignis; Fehler der Erfassung ⇒ Rollback der Fachänderung). |
+| R-A2 | Nur committete Änderungen; Ablehnungen, `unchanged` und Fehler erzeugen keine Datenbankeinträge (Syslog wie bisher). |
+| R-A3 | Inhalte ausschließlich über die Feld-Whitelist der `AuditPolicy` (Typprüfung, deterministisch, Längengrenzen); Abweichung ⇒ Rollback. |
+| R-A4 | Keine Passwörter, Passwort-Hashes, Tokens, DynDNS-Kontonamen, Client-IPs oder Agent-Antworttexte; Geheimnisse nur als Kennzeichen; Freitext gekürzt bzw. geschwärzt. |
+| R-A5 | Vorher-Werte nur aus in der Transaktion gesperrten Zeilen. |
+| R-A6 | Je Fachtransaktion genau eine Änderungsmenge des Akteurs für Revisionen und Ereignisse; `seq` lückenlos 1..n. |
+| R-A7 | Nicht transaktionale Vorgänge (BIND-Reload) danach in eigener kurzer Transaktion; Ergebnis des Vorgangs unverändert. |
+| R-A8 | Lock-Reihenfolge wie R-H9, ergänzt um: … → Historien-INSERTs → `audit_events`-INSERTs → Commit. Bis `finish()` nur sperrendes Lesen des Akteursnamens (kein Read-View). |
+
 **Präzisierung H2b (E34, E35):** R-H2 gilt für **vorhandene** Heads: Sie werden nach **allen** Zonensperren der
 Transaktion mit `FOR UPDATE` (Satzsperre) gesperrt, und bis zum Ende von `beginZones()` findet kein nicht sperrendes
 Lesen statt. Ein **fehlender** Head wird nicht in der Fachtransaktion gesperrt oder angelegt, sondern vorher in eigener
@@ -316,9 +413,10 @@ und Nachweise: Abschnitt 5b.
 
 ## 7. Audit-Ereignisse
 
+- **Umgesetzt mit H2c (Abschnitt 5c, R-A1–R-A8).** Discard und Restore folgen mit H4/H5.
 - Getrennt von Revisionen; beide verweisen auf dieselbe Änderungsmenge. Eine Operation kann Audit-Ereignis und
   Revision erzeugen.
-- Erfasst werden u. a. (Umfang wird in H2c festgelegt): Zonen-Metadaten (Beschreibung, `allow_dyndns` – setzen heute
+- Ursprünglich vorgesehener Umfang (in H2c festgelegt, siehe 5c; Publish gehört zum Journal H2d): Zonen-Metadaten (Beschreibung, `allow_dyndns` – setzen heute
   kein `changed`), Server (Anlage, Änderung, Aktivierung/Deaktivierung, `api_ip`, Token-Rotation, Löschung, BIND-Reload),
   DynDNS-Konten (Anlage, Umbenennung, Passwortänderung, Löschung), Benutzer- und Rechteänderungen, Discard, Restore.
 - Geheime Felder ausschließlich als Kennzeichen (`{"api_token":"rotated"}`, `{"password":"changed"}`), nie mit Wert.
@@ -512,6 +610,10 @@ Vorschau aller betroffenen Zonen und Änderungen, Berechtigung für alle Zonen.
   für admin.
 - Keine Passworthashes, Agent-Token oder DynDNS-Benutzernamen (nur Konto-ID) in Snapshots, Audit oder Journal; keine
   Client-IP; Agent-Fehlertexte gekürzt und bereinigt. Suchtest auf Hash-/Token-Muster ist Abnahmebestandteil.
+- **Leserechte der Audit-Ereignisse (Vorgabe für H3, Q7):** Ereignisse der Typen `server`, `user` und `dyndns_account`
+  nur für admin; zoneadmin sieht nur `zone`-Ereignisse seiner berechtigten Zonen (Prüfung über `ZoneAccess` in derselben
+  Anweisung, E10), nie Ereignisse anderer Typen derselben Änderungsmenge. Ereignisse gelöschter Zonen nur für admin.
+  H2c enthält keinen Lesepfad.
 
 ## 17. Core-Services (Zuständigkeiten, Entwurf)
 
@@ -541,7 +643,7 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | **H1** | Bestandsaufnahme, Architektur (dieses Dokument) | Freigabe 18.11.2026; Merge dieses Dokuments |
 | **H2a** | Schema, Migration 002 mit Skript, `SchemaCheck`, `ZoneStateSnapshot`, Baseline-CLI – **umgesetzt** (Abschnitt 5a, Tests `tests/history`) | Migration wiederholbar inkl. `--check`; alter Code mit neuem Schema lauffähig; Web-Golden identisch; keine Laufzeitänderung |
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` – **umgesetzt** (Abschnitt 5b, Migration 003, Tests `tests/history`) | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
-| **H2c** | `audit_events` für Operationen ohne DNS-Wirkung | keine Geheimnisse (Suchtest); atomar mit Fachänderung |
+| **H2c** | `audit_events` für Operationen ohne DNS-Wirkung – **umgesetzt** (Abschnitt 5c, Migration 004, Tests `tests/history`) | keine Geheimnisse (Suchtest); atomar mit Fachänderung; RR und RC; Web-Golden identisch |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
 | **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
 | **H3** | Historienoberfläche: Core-Read-Services (`ZoneHistoryReadService`, `ZoneSyncReadService`) **und** Weboberfläche mit Historienliste, Filtern, Detailansichten, Vorher-/Nachher-Vergleich, Berechtigungen und Paginierung | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse; Oberfläche nach `docs/UI_GUIDELINES.md` und `docs/UI_ROLE_MATRIX.md`, Web-Golden für bestehende Seiten unverändert |
@@ -610,8 +712,20 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E40 | Fehler der Historie als bisherige Fehlercodes, keine neuen Web-Verträge | freigegeben (H2b) |
 | E41 | Web-Golden mit Reset der History-Tabellen; History-Erwartungen in der Pfadsuite | freigegeben (H2b) |
 | E42 | Tests in isolierten Datenbanken; ns1 mit festgelegtem Rückbau, ohne Publish All; Historie append-only (E8); ns2 unverändert | freigegeben (H2b, mit Präzisierung) |
+| E43 | Audit-Umfang: Zonenmetadaten, Server (inkl. Reload), DynDNS-Konten, Benutzer und Zuweisungen; nicht: Records, DynDNS-API, Publish, Login, Monitoring | freigegeben (H2c) |
+| E44 | Abgrenzung Revision (DNS-Inhalt `zs1`) und Audit (Verwaltungsfelder); kein doppelter DNS-Inhalt | freigegeben (H2c) |
+| E45 | Tabelle `audit_events` mit NULL-sicheren CHECKs, `seq` NOT NULL und UNIQUE je Änderungsmenge | freigegeben (H2c, mit Präzisierung) |
+| E46 | Migration 004 mit Skript, `SchemaCheck` fail-closed | freigegeben (H2c) |
+| E47 | `AuditRecorder`: Name beim Öffnen, Pufferung, `finish()` vor Commit, Savepoint-Bindung bzw. die des `ZoneHistoryRecorder` | freigegeben (H2c, mit Präzisierung) |
+| E48 | `AuditPolicy`: Whitelist, Typprüfung, Kennzeichen, Längengrenzen, Schwärzung von Freitext; Infrastruktur-IPs zulässig (Q1) | freigegeben (H2c, mit Präzisierung) |
+| E49 | Gemeinsame Änderungsmenge bei Mischoperationen, genau eine neue bei reinen Verwaltungsänderungen | freigegeben (H2c, mit Präzisierung) |
+| E50 | Vorher-Werte und DNS-Relevanz von Serveränderungen aus gesperrtem Stand; kontrollierter Abbruch `topology_locked` | freigegeben (H2c, mit Präzisierung) |
+| E51 | BIND-Reload: Nachtrag in eigener Transaktion, Ergebnis unverändert, Kennzeichen `audit = failed` und Protokollzeile (Q2 b) | freigegeben (H2c) |
+| E52 | Audit-Fehler als bisherige Fehlercodes, keine neuen Web-Verträge | freigegeben (H2c) |
+| E53 | Kaskadenzähler der Zonenlöschung (sperrend gezählt) | freigegeben (H2c, Q3) |
+| E54 | Invarianten R-A1–R-A8; Tests RR/RC, Fehlerinjektion, Mutationsproben, Web-Golden; ns1 ohne echten BIND-Reload als Pflicht (Q6) | freigegeben (H2c) |
 
-**Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes; Umfang `audit_events` (H2c);
+**Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des
 Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` (gesonderte Entscheidung).
 
@@ -623,4 +737,5 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
+| 18.11.2026 | H2c umgesetzt: Abschnitt 5c (Audit-Ereignisse, Migration 004), Regeln R-A1–R-A8 (Abschnitt 6), Leserechte für H3 (Abschnitt 16), Entscheidungen E43–E54 mit den Präzisierungen aus dem Plan-Review (NULL-sichere CHECKs und `seq`, Serverstand unter Sperre, gemeinsame Änderungsmenge, strikte Policy); Korrektur in 5b (Publish gehört zu H2d) |
 | 18.11.2026 | H2b umgesetzt: Abschnitt 5b, Präzisierung von R-H2/R-H9 (Abschnitt 6), Entscheidungen E29–E42 mit den Präzisierungen aus dem Plan-Review (E33 Duplicate-Key-Pfad, E35 fehlende Heads ohne Gap-Sperre, E39 Bindung des Wächters an Verbindung und Transaktion, E42 Schutz von ns1), Migration 003 |

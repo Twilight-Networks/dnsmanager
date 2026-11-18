@@ -21,6 +21,9 @@
  * Migrationsskript bewertet nur seine eigenen Tabellen aus derselben Erwartung (002: vier Grundtabellen, 003:
  * history_dependencies).
  *
+ * AP1/H2c (E46): Ebenso audit_events aus Migration 004 (sql/migrations/004_audit_events.sql); das Migrationsskript 004
+ * bewertet nur audit_events (Voraussetzung: history_change_sets aus 002 unverändert).
+ *
  * Es werden niemals Schemaänderungen vorgenommen (keine automatische Migration beim Seitenaufruf).
  * Das Ergebnis wird je Prozess zwischengespeichert (eine Prüfung je Anfrage).
  */
@@ -150,6 +153,36 @@ final class SchemaCheck
             'fk|fk_hd_revision|1|zone_id|zone_revisions|zone_id|RESTRICT|RESTRICT',
             'fk|fk_hd_revision|2|revision_no|zone_revisions|revision_no|RESTRICT|RESTRICT',
             'chk|chk_hd_distinct|Table|`change_set_id` <> `dep_change_set_id`',
+        ],
+        'audit_events' => [
+            'table|BASE TABLE|InnoDB',
+            'col|id|bigint(20) unsigned|NO|~|auto_increment|~|~',
+            'col|change_set_id|bigint(20) unsigned|NO|~||~|~',
+            'col|seq|smallint(5) unsigned|NO|~||~|~',
+            "col|entity_type|enum('zone','server','dyndns_account','user')|NO|~||ascii|ascii_bin",
+            'col|entity_id|int(11)|NO|~||~|~',
+            'col|entity_label|varchar(255)|NO|~||utf8mb4|utf8mb4_bin',
+            'col|zone_id|int(11)|YES|NULL||~|~',
+            "col|action|enum('create','update','delete','reload')|NO|~||ascii|ascii_bin",
+            'col|changes|longtext|NO|~||utf8mb4|utf8mb4_bin',
+            'idx|idx_ae_entity|1|1|entity_type|~|BTREE',
+            'idx|idx_ae_entity|1|2|entity_id|~|BTREE',
+            'idx|idx_ae_entity|1|3|change_set_id|~|BTREE',
+            'idx|idx_ae_zone|1|1|zone_id|~|BTREE',
+            'idx|idx_ae_zone|1|2|change_set_id|~|BTREE',
+            'idx|PRIMARY|0|1|id|~|BTREE',
+            'idx|uq_ae_change_set_seq|0|1|change_set_id|~|BTREE',
+            'idx|uq_ae_change_set_seq|0|2|seq|~|BTREE',
+            'fk|fk_ae_change_set|1|change_set_id|history_change_sets|id|RESTRICT|RESTRICT',
+            "chk|chk_ae_action|Table|`action` = 'reload' and `entity_type` = 'server' or `action` in ('create','update','delete')",
+            "chk|chk_ae_changes|Table|json_valid(`changes`) and json_type(`changes`) = 'OBJECT' and json_length(`changes`) >= 1"
+                . ' and octet_length(`changes`) <= 16384',
+            'chk|chk_ae_entity_id|Table|`entity_id` >= 1',
+            'chk|chk_ae_label|Table|char_length(`entity_label`) >= 1',
+            'chk|chk_ae_seq|Table|`seq` >= 1',
+            "chk|chk_ae_zone|Table|`entity_type` = 'zone' and `zone_id` is not null and `zone_id` = `entity_id`"
+                . " or `entity_type` = 'dyndns_account' and `zone_id` is not null and `zone_id` >= 1"
+                . " or `entity_type` in ('server','user') and `zone_id` is null",
         ],
     ];
 

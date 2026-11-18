@@ -29,6 +29,15 @@
  *   Heads und liest den Vorher-Stand; vor dem Commit entsteht eine Änderungsmenge server.update mit je einer
  *   Revision je geänderter Zone (R-H6). Änderungen nur an active, api_ip, Token oder is_local berühren den
  *   DNS-Inhalt nicht und erzeugen keine Revision.
+ *   Konsistenz unter Sperre (AP1/H2c, E50): Ob eine Änderung DNS-relevant ist (Name/DNS-IP) oder "active" ändert,
+ *   wird zunächst ungesperrt bestimmt (Lock-Entscheidung, Zonenliste). Nach servers … FOR UPDATE wird beides auf dem
+ *   gesperrten Stand wiederholt. Ergibt erst der gesperrte Stand eine DNS-relevante Änderung (ohne Zonenliste,
+ *   Rebuild und Revision vorbereitet) oder eine Änderung von "active" ohne gehaltenen Topologie-Lock, endet der
+ *   Vorgang ohne Schreibzugriff mit "topology_locked" (wie bei belegtem Lock; erneut versuchen). Die Reaktivierung
+ *   (bind_dirty) richtet sich nach dem gesperrten Stand.
+ *   Audit (AP1/H2c): Ereignis "update" mit Vorher-Werten aus dem gesperrten Stand (Token nur als Kennzeichen); wird
+ *   is_local gesetzt, erhält der bisherige lokale Server (vorher sperrend gelesen) ein eigenes Ereignis
+ *   is_local 1 → 0 in derselben Änderungsmenge. Bei Name/DNS-IP-Änderung dieselbe Änderungsmenge wie die Revisionen.
  * - Anlegen: Transaktion → users (S) → servers (X, vorhandene lokale Server) → INSERT. Die Prüfung "nur ein
  *   lokaler Server" läuft für die bisherige Meldungsreihenfolge zusätzlich ungesperrt in der Validierung und
  *   wird mit SELECT … WHERE is_local = 1 FOR UPDATE wiederholt.
@@ -40,6 +49,10 @@
  * - Löschen: Transaktion → users (S) → servers (X, Zielzeile) → zone_servers (S) → Löschen von Diagnosen,
  *   Diagnoseprotokoll und Server. Die Zuweisungsprüfung erfolgt damit auf dem gesperrten Stand (eine
  *   parallele Zuweisung wartet auf die Serverzeile, zone_servers.server_id hat ON DELETE CASCADE).
+ * - Audit (AP1/H2c): Anlage, Änderung und Löschung schreiben in derselben Transaktion ein Audit-Ereignis
+ *   (AuditRecorder; server.create, server.update, server.delete). Der BIND-Reload wird nach dem Agentenaufruf in
+ *   eigener kurzer Transaktion nachgetragen (server.reload, nur Ergebnis ok/failed). Scheitert dieser Nachtrag, bleibt
+ *   das Ergebnis unverändert; die Meldung erhält zusätzlich audit = failed und auditDetail (Protokoll im Adapter).
  * - Deadlocks sind nicht grundsätzlich ausgeschlossen; sie führen zu vollständigem Rollback und
  *   "<operation>.failed". Keine automatischen Wiederholungen.
  */
@@ -56,6 +69,7 @@ require_once __DIR__ . '/ServerControlBackend.php';
 require_once __DIR__ . '/ServerInput.php';
 require_once __DIR__ . '/../history/HistoryContext.php';
 require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
+require_once __DIR__ . '/../history/AuditRecorder.php';
 
 final class ServerService
 {
@@ -98,6 +112,7 @@ final class ServerService
         }
 
         $row = self::rowFromInput($input);
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -105,6 +120,7 @@ final class ServerService
                 $this->rollbackIfActive();
                 return self::fail('audit', 'server.create.access_denied', ['actorId' => $actor->userId, 'reason' => 'db_role']);
             }
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'server.create'));
             if ($input->isLocal && $this->localServerIds(true, 0) !== []) {
                 $this->rollbackIfActive();
                 return self::fail('error', 'server.create.invalid_input', ['errors' => ['local_exists']]);
@@ -124,11 +140,20 @@ final class ServerService
                 ':active'    => $row['active'],
             ]);
             $serverId = (int)$this->pdo->lastInsertId();
+            if ($serverId < 1) {
+                throw new RuntimeException('Keine Server-ID erhalten');
+            }
 
+            // Audit (AP1/H2c): Token nur als Kennzeichen
+            $audit->record('server', $serverId, $row['name'], null, 'create', [], self::auditValues($row),
+                $row['api_token'] !== '' ? ['api_token' => 'set'] : []);
+            $audit->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::fail('error', 'server.create.failed', ['name' => $input->name, 'detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
 
         return new ServiceResult(true, [new ServiceMessage('success', 'server.create.success', [
@@ -224,7 +249,6 @@ final class ServerService
 
         // Topologieänderung im Sinne von Publish All: ausschließlich servers.active
         $activeChanged = (int)$existing['active'] !== (int)$update_data['active'];
-        $reactivated   = $activeChanged && (int)$update_data['active'] === 1;
 
         // Topologie-Lock bei Änderung von "active" (wie bisher) sowie – Paket 4a – bei Änderung von Name/DNS-IP:
         // Der NS-/Glue-Neuaufbau der zugewiesenen Zonen läuft dann in derselben Transaktion wie die
@@ -250,6 +274,7 @@ final class ServerService
 
         $ok = false;
         $history = null;
+        $audit = null;
         try {
             // Zugewiesene Zonen für den NS-/Glue-Neuaufbau (AP1/H2b, E34): vor der Transaktion unter dem Topologie-Lock
             // ermittelt (alle Schreiber von zone_servers halten ihn; das Ergebnis ist bis zum Commit stabil). Ein
@@ -276,8 +301,11 @@ final class ServerService
                 return new ServiceResult(false, $m);
             }
 
-            // Zielzeile sperren (serialisiert parallele Änderungen desselben Servers)
-            $stmt = $this->pdo->prepare('SELECT id, name, api_token FROM servers WHERE id = ? FOR UPDATE');
+            // Zielzeile sperren (serialisiert parallele Änderungen desselben Servers); alle auditierten Felder aus dem
+            // gesperrten Stand (AP1/H2c, E50)
+            $stmt = $this->pdo->prepare(
+                'SELECT id, name, dns_ip4, dns_ip6, api_ip, api_token, is_local, active FROM servers WHERE id = ? FOR UPDATE'
+            );
             $stmt->execute([$serverId]);
             $lockedRow = $stmt->fetch(PDO::FETCH_ASSOC);
             $stmt->closeCursor();
@@ -297,7 +325,32 @@ final class ServerService
                 return new ServiceResult(false, $m);
             }
 
+            // E50: DNS-Relevanz und Änderung von "active" auf dem gesperrten Stand wiederholen. Eine erst jetzt erkannte
+            // DNS-relevante Änderung (ohne Zonenliste, Rebuild und Revision) oder eine Änderung von "active" ohne
+            // gehaltenen Topologie-Lock wird nicht geschrieben.
+            $lockedDnsChanged = !self::sameText($lockedRow['name'], $update_data['name'])
+                || !self::sameText($lockedRow['dns_ip4'], $update_data['dns_ip4'])
+                || !self::sameText($lockedRow['dns_ip6'], $update_data['dns_ip6']);
+            $lockedActiveChanged = (int)$lockedRow['active'] !== (int)$update_data['active'];
+            if (($lockedDnsChanged && !$server_data_changed) || ($lockedActiveChanged && !$this->lock->isHeld())) {
+                $this->rollbackIfActive();
+                $m[] = new ServiceMessage('warning', 'server.update.topology_locked', ['lock' => TopologyLock::NAME] + $ctx);
+                $this->releaseLock($m);
+                return new ServiceResult(false, $m);
+            }
+            $reactivated = $lockedActiveChanged && (int)$update_data['active'] === 1;
+
+            // Bisheriger lokaler Server: vor dem UPDATE sperrend lesen (Audit, E50); dieselben Zeilen sperrt das
+            // anschließende UPDATE ohnehin.
+            $previousLocal = [];
             if ($update_data['is_local']) {
+                $stmt = $this->pdo->prepare(
+                    'SELECT id, name FROM servers WHERE is_local = 1 AND id != ? ORDER BY id FOR UPDATE'
+                );
+                $stmt->execute([$serverId]);
+                $previousLocal = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                $stmt->closeCursor();
+
                 $stmt = $this->pdo->prepare("UPDATE servers SET is_local = 0 WHERE is_local = 1 AND id != ?");
                 $stmt->execute([$serverId]);
             }
@@ -374,7 +427,18 @@ final class ServerService
                 }
             }
 
+            // Audit (AP1/H2c): Vorher-Werte aus dem gesperrten Stand; bei Name/DNS-IP-Änderung dieselbe Änderungsmenge
+            // wie die Revisionen (gleicher Kontext)
+            $audit = AuditRecorder::open($this->pdo, $historyCtx, $history);
+            foreach ($previousLocal as $pl) {
+                $audit->record('server', (int)$pl['id'], (string)$pl['name'], null, 'update', ['is_local' => 1], ['is_local' => 0]);
+            }
+            $audit->record('server', $serverId, (string)$update_data['name'], null, 'update',
+                self::auditValues($lockedRow), self::auditValues($update_data),
+                $keepToken ? [] : self::tokenMarker((string)$lockedRow['api_token'], (string)$update_data['api_token']));
+
             $history?->finish();
+            $audit->finish();
             $this->pdo->commit();
 
             foreach ($rebuildWarnings as $w) {
@@ -388,6 +452,7 @@ final class ServerService
             $m[] = new ServiceMessage('error', 'server.update.failed', ['detail' => $e->getMessage()] + $ctx);
         } finally {
             $history?->close();
+            $audit?->close();
         }
 
         // Lock (falls gehalten) nach Commit/Rollback und Zonen-Rebuilds freigeben
@@ -416,6 +481,7 @@ final class ServerService
         }
 
         $name = null;
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -424,10 +490,11 @@ final class ServerService
                 return self::fail('audit', 'server.delete.access_denied', ['actorId' => $actor->userId, 'reason' => 'db_role'] + $ctx);
             }
 
-            $stmt = $this->pdo->prepare("SELECT name FROM servers WHERE id = ? FOR UPDATE");
+            $stmt = $this->pdo->prepare("SELECT name, dns_ip4, dns_ip6, api_ip, is_local, active FROM servers WHERE id = ? FOR UPDATE");
             $stmt->execute([$serverId]);
-            $name = $stmt->fetchColumn();
+            $lockedRow = $stmt->fetch(PDO::FETCH_ASSOC);
             $stmt->closeCursor();
+            $name = $lockedRow === false ? false : $lockedRow['name'];
             if ($name === false) {
                 $this->rollbackIfActive();
                 return self::fail('error', 'server.delete.not_found', $ctx);
@@ -448,10 +515,16 @@ final class ServerService
             $this->pdo->prepare("DELETE FROM diagnostic_log WHERE server_id = ?")->execute([$serverId]);
             $this->pdo->prepare("DELETE FROM servers WHERE id = ?")->execute([$serverId]);
 
+            // Audit (AP1/H2c): letzte Werte aus dem gesperrten Stand
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'server.delete'));
+            $audit->record('server', $serverId, (string)$name, null, 'delete', self::auditValues($lockedRow), []);
+            $audit->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::fail('error', 'server.delete.failed', $ctx + ['name' => is_string($name) ? $name : '', 'detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
 
         return new ServiceResult(true, [new ServiceMessage('success', 'server.delete.success', $ctx)]);
@@ -490,6 +563,16 @@ final class ServerService
 
         $r = $this->control->reloadBind($server['api_ip'] === null ? null : (string)$server['api_ip'], (string)$server['api_token']);
         $ctx['message'] = $r['message'];
+
+        // Audit (AP1/H2c, E51): nicht transaktional, nach dem Agentenaufruf in eigener kurzer Transaktion; nur das
+        // Ergebnis, nie der Antworttext. Ein Fehler ändert das Ergebnis nicht (Q2: Kennzeichen für den Adapter).
+        try {
+            AuditRecorder::recordStandalone($this->pdo, HistoryContext::forUser($actor, 'server.reload'), 'server', $serverId,
+                $ctx['name'], null, 'reload', ['result' => $r['status'] === 'ok' ? 'ok' : 'failed']);
+        } catch (Throwable $e) {
+            $ctx['audit'] = 'failed';
+            $ctx['auditDetail'] = $e->getMessage();
+        }
         if ($r['status'] === 'ok') {
             return new ServiceResult(true, [new ServiceMessage('success', 'server.reload.success', $ctx)]);
         }
@@ -541,6 +624,41 @@ final class ServerService
         }
 
         return $errors;
+    }
+
+    /**
+     * Auditierte Serverfelder (AuditPolicy, ohne Token) aus einer gesperrten Zeile bzw. den Schreibwerten.
+     *
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private static function auditValues(array $row): array
+    {
+        return [
+            'name'     => (string)$row['name'],
+            'dns_ip4'  => $row['dns_ip4'],
+            'dns_ip6'  => $row['dns_ip6'],
+            'api_ip'   => $row['api_ip'],
+            'is_local' => (int)$row['is_local'],
+            'active'   => (int)$row['active'],
+        ];
+    }
+
+    /**
+     * Kennzeichen der Token-Änderung (nie der Wert).
+     *
+     * @return array<string, string>
+     */
+    private static function tokenMarker(string $old, string $new): array
+    {
+        if ($old === $new) {
+            return [];
+        }
+        if ($old === '') {
+            return ['api_token' => 'set'];
+        }
+
+        return ['api_token' => $new === '' ? 'cleared' : 'rotated'];
     }
 
     /**

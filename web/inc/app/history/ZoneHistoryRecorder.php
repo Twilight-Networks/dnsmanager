@@ -373,6 +373,23 @@ final class ZoneHistoryRecorder
         return $this->actorRevisions[$zoneId] ?? null;
     }
 
+    /** true, sobald finish() gelaufen ist (für AuditRecorder, AP1/H2c E49; ändert keine Recorder-Semantik) */
+    public function isFinished(): bool
+    {
+        return $this->finished;
+    }
+
+    /**
+     * Prüft, dass die Klammer zur LAUFENDEN Transaktion gehört (Savepoint, E39) – für den AuditRecorder einer
+     * Mischoperation, der keinen eigenen Savepoint anlegt (AP1/H2c, E47). Ändert keine Recorder-Semantik.
+     *
+     * @throws LogicException ohne offene Transaktion oder bei beendeter Transaktion
+     */
+    public function assertCurrentTransaction(): void
+    {
+        $this->assertSameTransaction();
+    }
+
     public function context(): HistoryContext
     {
         return $this->ctx;

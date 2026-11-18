@@ -36,6 +36,9 @@
  *   unverändert mit.
  *
  * Historie (AP1/H2b, docs/ARCHITECTURE_HISTORY.md Abschnitt 5b):
+ * - Audit (AP1/H2c): Anlage, Änderung und Löschung schreiben die Metadaten außerhalb des DNS-Inhalts (description,
+ *   allow_dyndns; bei Löschung Kaskadenzähler) als Audit-Ereignis in dieselbe Änderungsmenge wie die Revision
+ *   (AuditRecorder mit gemeinsamem Kontext, finish() nach dem ZoneHistoryRecorder).
  * - Anlage: nach dem INSERT der Zone wird die Anlage erfasst; vor dem Commit Revision 1 "create" (zone.create).
  * - Ändern/Löschen: Lazy-Baseline fehlender Heads vor der Transaktion (ensureHeads, E35); in der Transaktion direkt
  *   nach zones FOR UPDATE: zone_history_state FOR UPDATE und Vorher-Snapshot (beginZones), vor dem Commit Drift-,
@@ -65,6 +68,7 @@ require_once __DIR__ . '/ZoneUpdateInput.php';
 require_once __DIR__ . '/SoaMname.php';
 require_once __DIR__ . '/../history/HistoryContext.php';
 require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
+require_once __DIR__ . '/../history/AuditRecorder.php';
 
 final class ZoneService
 {
@@ -163,6 +167,7 @@ final class ZoneService
         }
 
         $history = null;
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -189,9 +194,14 @@ final class ZoneService
                 throw new Exception("Fehler: Keine gültige Zonen-ID erzeugt.");
             }
 
-            // Historie: Anlage erfassen (Revision 1 "create" vor dem Commit)
-            $history = ZoneHistoryRecorder::open($this->pdo, HistoryContext::forUser($actor, 'zone.create'));
+            // Historie: Anlage erfassen (Revision 1 "create" vor dem Commit); Audit nur für die Metadaten außerhalb des
+            // DNS-Inhalts (description, allow_dyndns) in derselben Änderungsmenge (AP1/H2c)
+            $historyCtx = HistoryContext::forUser($actor, 'zone.create');
+            $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
             $history->zoneCreated($zone_id);
+            $audit = AuditRecorder::open($this->pdo, $historyCtx, $history);
+            $audit->record('zone', $zone_id, $name, $zone_id, 'create', [],
+                ['description' => $description, 'allow_dyndns' => $allow_dyndns]);
 
             // NS-, A- und AAAA-Records für alle zugewiesenen Server (unverändert)
             $stmt_server = $this->pdo->prepare("SELECT name, dns_ip4, dns_ip6 FROM servers WHERE id = ?");
@@ -247,6 +257,7 @@ final class ZoneService
             }
 
             $history->finish();
+            $audit->finish();
             $this->pdo->commit();
             $this->releaseLock('create', $m);
             $m[] = new ServiceMessage('success', 'zone.create.success', ['name' => $name, 'zoneId' => $zone_id]);
@@ -258,6 +269,7 @@ final class ZoneService
             return self::fail($m, 'error', 'zone.create.failed', ['name' => $name, 'detail' => $e->getMessage()]);
         } finally {
             $history?->close();
+            $audit?->close();
             // Sicherheitsnetz (z. B. unerwartete Fehler außerhalb von Throwable-Pfaden)
             $this->releaseLock('create', $m);
         }
@@ -369,6 +381,7 @@ final class ZoneService
 
         $historyCtx = HistoryContext::forUser($actor, 'zone.update');
         $history = null;
+        $audit = null;
         try {
             // ---- Transaktion: Berechtigung und gesperrter Altstand (E12/E13/E14) ----
             try {
@@ -410,6 +423,7 @@ final class ZoneService
                 // Historie: Head sperren und Vorher-Stand lesen, unmittelbar nach der Zonensperre (R-H2)
                 $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
                 $history->beginZones([$id]);
+                $audit = AuditRecorder::open($this->pdo, $historyCtx, $history);
 
                 // Bearbeitungsstand zoneadmin (ohne Serverzuweisung) auf der gesperrten Zonenzeile
                 if (!$adminPath) {
@@ -553,7 +567,14 @@ final class ZoneService
                     }
                 }
 
+                // Audit (AP1/H2c): Metadaten außerhalb des DNS-Inhalts, Vorher-Werte aus der gesperrten Zonenzeile;
+                // dieselbe Änderungsmenge wie eine Revision dieses Vorgangs
+                $audit->record('zone', $id, (string)$old['name'], $id, 'update',
+                    ['description' => $old['description'], 'allow_dyndns' => (int)$old['allow_dyndns']],
+                    ['description' => $description, 'allow_dyndns' => $allow_dyndns]);
+
                 $history->finish();
+                $audit->finish();
                 $this->pdo->commit();
             } catch (Throwable $e) {
                 $this->rollbackIfActive();
@@ -568,6 +589,7 @@ final class ZoneService
         } finally {
             $this->rollbackIfActive();
             $history?->close();
+            $audit?->close();
             $this->releaseLock('update', $m);
         }
     }
@@ -608,6 +630,7 @@ final class ZoneService
 
         $ok = false;
         $history = null;
+        $audit = null;
         try {
             // Historie: fehlender Head ⇒ Lazy-Baseline in eigener Transaktion vor der Fachtransaktion (E35)
             $historyCtx = HistoryContext::forUser($actor, 'zone.delete');
@@ -626,7 +649,7 @@ final class ZoneService
                 // RecordService (lockZoneWritePermissions) und damit ein möglicher Sperrzyklus.
                 $stmt = $this->pdo->prepare("SELECT user_id FROM user_zones WHERE zone_id = ? ORDER BY user_id FOR UPDATE");
                 $stmt->execute([$id]);
-                $stmt->fetchAll();
+                $userAssignments = count($stmt->fetchAll());
 
                 $stmt = $this->pdo->prepare("SELECT id FROM zones WHERE id = ? FOR UPDATE");
                 $stmt->execute([$id]);
@@ -638,10 +661,27 @@ final class ZoneService
                     $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
                     $history->beginZones([$id]);
                     $history->zoneDeleting($id);
+                    $audit = AuditRecorder::open($this->pdo, $historyCtx, $history);
+
+                    // Audit (AP1/H2c, E53): Kaskade als Zähler. DynDNS-Konten sperrend gezählt (nach der Zonensperre, wie
+                    // DyndnsAccountService: zones → dyndns_accounts; das kaskadierende DELETE sperrt sie ohnehin exklusiv).
+                    $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM dyndns_accounts WHERE zone_id = ? LOCK IN SHARE MODE");
+                    $stmt->execute([$id]);
+                    $dyndnsAccounts = (int)$stmt->fetchColumn();
+                    $stmt->closeCursor();
+                    $stmt = $this->pdo->prepare("SELECT description, allow_dyndns FROM zones WHERE id = ? LOCK IN SHARE MODE");
+                    $stmt->execute([$id]);
+                    $meta = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $stmt->closeCursor();
 
                     $this->pdo->prepare("DELETE FROM zones WHERE id = ?")->execute([$id]);
                     $this->pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
+
+                    $audit->record('zone', $id, (string)$name, $id, 'delete',
+                        ['description' => $meta['description'], 'allow_dyndns' => (int)$meta['allow_dyndns']], [], [],
+                        ['dyndns_accounts_removed' => $dyndnsAccounts, 'user_assignments_removed' => $userAssignments]);
                     $history->finish();
+                    $audit->finish();
                     $this->pdo->commit();
                     $ok = true;
                     $m[] = new ServiceMessage('success', 'zone.delete.success', ['zoneId' => $id, 'name' => $name]);
@@ -652,6 +692,7 @@ final class ZoneService
             $m[] = new ServiceMessage('error', 'zone.delete.failed', ['zoneId' => $id, 'name' => $name, 'detail' => $e->getMessage()]);
         } finally {
             $history?->close();
+            $audit?->close();
             // Lock nach Commit bzw. Rollback freigeben (wie bisher nach der Meldung)
             $this->releaseLock('delete', $m);
         }

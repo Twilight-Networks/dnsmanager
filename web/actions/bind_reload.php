@@ -83,6 +83,14 @@ foreach ($result->messages as $message) {
     }
 }
 
+// AP1/H2c (Q2): Scheitert der Audit-Nachtrag des Reloads, bleibt die Antwort unverändert; nur Protokollzeile
+foreach ($result->messages as $message) {
+    if (($message->context['audit'] ?? null) === 'failed') {
+        appLog('error', "Audit-Ereignis für BIND-Reload auf Server-ID {$serverId} nicht gespeichert: "
+            . (string)($message->context['auditDetail'] ?? ''));
+    }
+}
+
 // === Zurück zur Serverübersicht ===
 header("Location: " . rtrim(BASE_URL, '/') . "/pages/servers.php");
 exit;

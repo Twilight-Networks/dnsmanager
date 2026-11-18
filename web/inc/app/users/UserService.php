@@ -26,6 +26,13 @@
  * Reaktivierung (nicht bei reinen Zonenänderungen und nicht bei "unchanged"). Die Web-Revalidierung
  * widerruft daraufhin alle Sessions des Kontos.
  *
+ * Audit (AP1/H2c): Jede erfolgreiche Änderung schreibt in derselben Transaktion ein Audit-Ereignis (AuditRecorder;
+ * Operationen user.create, user.update, user.delete, user.password, user.enable, user.disable). Passwörter und
+ * Passwort-Hashes nur als Kennzeichen (set/changed), Zonenzuweisungen als hinzugefügte/entfernte IDs bzw. bei
+ * "alle Zonen" als mode = all mit tatsächlicher Anzahl. Der Akteursname wird beim Öffnen der Erfassung unmittelbar
+ * nach der Sperre gelesen (auch bei Selbstlöschung und Selbstumbenennung: Name zu Beginn des Vorgangs).
+ * "unchanged", Ablehnungen und Fehler erzeugen kein Ereignis.
+ *
  * Nebenläufigkeit / Schutz des letzten aktiven Administrators:
  * - Jede Operation, die die Anzahl der aktiven Admins verringern kann (Löschen, Herabstufen
  *   admin → zoneadmin, Deaktivieren), sperrt in EINER Anweisung Akteur, Ziel und ALLE aktuell
@@ -46,6 +53,8 @@ require_once __DIR__ . '/../Actor.php';
 require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/UserInput.php';
+require_once __DIR__ . '/../history/AuditRecorder.php';
+require_once __DIR__ . '/../history/HistoryContext.php';
 
 final class UserService
 {
@@ -99,6 +108,7 @@ final class UserService
             return self::result(false, 'error', 'user.create.failed', $ctx + ['detail' => 'Passwort-Hashing fehlgeschlagen.']);
         }
 
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -107,6 +117,7 @@ final class UserService
                 $this->rollbackIfActive();
                 return self::result(false, 'audit', 'user.create.access_denied', $ctx + ['actorId' => $actor->userId, 'reason' => 'db_role']);
             }
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'user.create'));
 
             $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
             $stmt->execute([$input->username]);
@@ -123,21 +134,30 @@ final class UserService
                 throw new RuntimeException("Benutzer-ID konnte nicht ermittelt werden.");
             }
 
+            $auditZones = [];
             if ($input->role === 'zoneadmin') {
                 if ($input->allZones) {
                     $stmt = $this->pdo->prepare("INSERT INTO user_zones (user_id, zone_id) SELECT ?, id FROM zones");
                     $stmt->execute([$userId]);
+                    $auditZones = ['mode' => 'all', 'count' => $stmt->rowCount()];
                 } else {
                     $this->insertZones($userId, $zoneIds);
+                    $auditZones = $zoneIds;
                 }
             }
 
+            $audit->record('user', $userId, $input->username, null, 'create', [],
+                ['username' => $input->username, 'role' => $input->role, 'active' => 1, 'zones' => $auditZones],
+                ['password' => 'set']);
+            $audit->finish();
             $this->pdo->commit();
 
             return self::result(true, 'success', 'user.create.success', $ctx + ['userId' => $userId]);
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::result(false, 'error', 'user.create.failed', $ctx + ['detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
     }
 
@@ -170,6 +190,7 @@ final class UserService
             return self::result(false, 'error', 'user.update.invalid_zones', $ctx);
         }
 
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -178,6 +199,8 @@ final class UserService
                 $this->rollbackIfActive();
                 return self::result(false, 'audit', 'user.update.access_denied', $ctx + ['actorId' => $actor->userId, 'reason' => 'db_role']);
             }
+            // Akteursname vor einer möglichen Selbstumbenennung (Stand zu Beginn des Vorgangs)
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'user.update'));
             if (!isset($locked[$userId])) {
                 $this->rollbackIfActive();
                 return self::result(false, 'error', 'user.update.not_found', $ctx);
@@ -215,12 +238,18 @@ final class UserService
                 $this->insertZones($userId, $zoneIds);
             }
 
+            $audit->record('user', $userId, $input->username, null, 'update',
+                ['username' => $old['username'], 'role' => $old['role'], 'zones' => $existingZoneIds],
+                ['username' => $input->username, 'role' => $input->role, 'zones' => $input->role === 'zoneadmin' ? $zoneIds : []]);
+            $audit->finish();
             $this->pdo->commit();
 
             return self::result(true, 'success', 'user.update.success', $ctx);
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::result(false, 'error', 'user.update.failed', $ctx + ['detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
     }
 
@@ -241,6 +270,7 @@ final class UserService
             return self::result(false, 'error', 'user.delete.invalid_id', $ctx);
         }
 
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -249,6 +279,8 @@ final class UserService
                 $this->rollbackIfActive();
                 return self::result(false, 'audit', 'user.delete.access_denied', $ctx + ['actorId' => $actor->userId, 'reason' => 'db_role']);
             }
+            // Akteursname vor einer möglichen Selbstlöschung (die users-Zeile fehlt danach in der Transaktion)
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'user.delete'));
             if (!isset($locked[$userId])) {
                 $this->rollbackIfActive();
                 return self::result(false, 'error', 'user.delete.not_found', $ctx);
@@ -258,15 +290,27 @@ final class UserService
                 return self::result(false, 'error', 'user.delete.last_admin', $ctx);
             }
 
+            // Zuweisungen für das Audit sperrend lesen (dieselben Zeilen löscht das folgende DELETE)
+            $stmt = $this->pdo->prepare("SELECT zone_id FROM user_zones WHERE user_id = ? ORDER BY zone_id FOR UPDATE");
+            $stmt->execute([$userId]);
+            $existingZoneIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            $stmt->closeCursor();
+
             $this->pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$userId]);
             $this->pdo->prepare("DELETE FROM user_zones WHERE user_id = ?")->execute([$userId]);
 
+            $target = $locked[$userId];
+            $audit->record('user', $userId, $target['username'], null, 'delete',
+                ['username' => $target['username'], 'role' => $target['role'], 'active' => $target['active'], 'zones' => $existingZoneIds], []);
+            $audit->finish();
             $this->pdo->commit();
 
             return self::result(true, 'success', 'user.delete.success', $ctx);
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::result(false, 'error', 'user.delete.failed', $ctx + ['detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
     }
 
@@ -301,6 +345,7 @@ final class UserService
             return self::result(false, 'error', 'user.password.hash_failed', $ctx);
         }
 
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -315,15 +360,20 @@ final class UserService
                 return self::result(false, 'error', 'user.password.not_found', $ctx);
             }
 
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'user.password'));
             $stmt = $this->pdo->prepare("UPDATE users SET password_hash = ?, session_epoch = session_epoch + 1 WHERE id = ?");
             $stmt->execute([$hash, $userId]);
 
+            $audit->record('user', $userId, $locked[$userId]['username'], null, 'update', [], [], ['password' => 'changed']);
+            $audit->finish();
             $this->pdo->commit();
 
             return self::result(true, 'success', 'user.password.success', $ctx);
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::result(false, 'error', 'user.password.failed', $ctx + ['detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
     }
 
@@ -354,6 +404,7 @@ final class UserService
             return self::result(false, 'error', "$op.self", $ctx);
         }
 
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -380,15 +431,20 @@ final class UserService
                 return self::result(false, 'error', "$op.last_admin", $ctx);
             }
 
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, $op));
             $stmt = $this->pdo->prepare("UPDATE users SET active = ?, session_epoch = session_epoch + 1 WHERE id = ?");
             $stmt->execute([$active ? 1 : 0, $userId]);
 
+            $audit->record('user', $userId, $target['username'], null, 'update', ['active' => $target['active']], ['active' => $active]);
+            $audit->finish();
             $this->pdo->commit();
 
             return self::result(true, 'success', "$op.success", $ctx);
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::result(false, 'error', "$op.failed", $ctx + ['detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
     }
 

@@ -59,7 +59,9 @@ if ($run('P')) {
     // P03 nur Beschreibung (kein DNS-Inhalt) → keine Revision; P04 unverändert → keine Historie
     $m = H2b::mark($p);
     $r = H2b::zones($p)->updateZone($a, 2, H2b::zoneInput($p, $a, 2, ['description' => 'nur Text']));
-    T::ok($r->ok && H2b::brief($p, $m) === [], 'P03', 'nur Beschreibung: Erfolg ohne Änderungsmenge (R-H4)');
+    // AP1/H2c: ohne Revision (R-H4), aber mit genau einer Änderungsmenge für das Audit-Ereignis
+    T::ok($r->ok && H2b::brief($p, $m) === ['zone.update user:21/h2b_admin web: '], 'P03', 'nur Beschreibung: keine Revision, nur Änderungsmenge des Audit-Ereignisses (H2c)');
+    $m = H2b::mark($p);
     $r = H2b::zones($p)->updateZone($a, 2, H2b::zoneInput($p, $a, 2));
     T::ok($r->ok && in_array('zone.update.unchanged', $codes($r), true) && H2b::brief($p, $m) === [], 'P04', 'unverändert: keine Historie');
 
@@ -146,7 +148,7 @@ if ($run('P')) {
     T::eq(["server.update user:21/h2b_admin web: 1#$n1:change 2#$n2:change $zid#$n7:change"], H2b::brief($p, $m), 'P14b', 'eine Änderungsmenge server.update, Revisionen in allen zugewiesenen Zonen');
     $m = H2b::mark($p);
     $r = H2b::servers($p)->updateServer($a, 2, new ServerInput('ns2b.h2b.test', $s['dns_ip4'], '', '192.0.2.222', '', false, true));
-    T::ok($r->ok && H2b::brief($p, $m) === [], 'P15', 'nur api_ip: keine Historie');
+    T::ok($r->ok && H2b::brief($p, $m) === ['server.update user:21/h2b_admin web: '], 'P15', 'nur api_ip: keine Revision, nur Änderungsmenge des Audit-Ereignisses (H2c)');
 
     // P16–P17 DynDNS-Konten, P18–P19 DynDNS-API, P20 ohne DNS-Wirkung
     [$n1, $n4] = [$nx(1), $nx(4)];
@@ -167,7 +169,7 @@ if ($run('P')) {
     $m = H2b::mark($p);
     H2b::dyndns($p)->changePassword($a, 1, 'Neu-H2B-Passwort-99');
     $r = H2b::dyndns($p)->createAccount($a, new DyndnsAccountInput('h2b_zweit', 'Zweit-H2B-Passwort-1', 'zwei', 1));
-    T::ok($r->ok && H2b::brief($p, $m) === [], 'P20', 'Passwortänderung und Kontoanlage: keine Revision');
+    T::ok($r->ok && H2b::brief($p, $m) === ['dyndns_account.password user:21/h2b_admin web: ', 'dyndns_account.create user:21/h2b_admin web: '], 'P20', 'Passwortänderung und Kontoanlage: keine Revision, je eine Änderungsmenge der Audit-Ereignisse (H2c)');
     $n1 = $nx(1);
     $m = H2b::mark($p);
     $r = H2b::dyndns($p)->deleteAccount($a, 1);
@@ -219,13 +221,13 @@ if ($run('D')) {
     $p->exec("UPDATE records SET ttl = 999 WHERE zone_id = 4");
     $m = H2b::mark($p);
     $r = H2b::zones($p)->updateZone($a, 4, H2b::zoneInput($p, $a, 4, ['description' => 'D02']));
-    T::eq(['history.drift system web: 4#2:drift'], H2b::brief($p, $m), 'D02', 'nur Drift, keine Akteursrevision');
+    T::eq(['history.drift system web: 4#2:drift', 'zone.update user:21/h2b_admin web: '], H2b::brief($p, $m), 'D02', 'nur Drift, keine Akteursrevision (H2c: Änderungsmenge des Audit-Ereignisses, gleiche Korrelation)');
     $p->exec("UPDATE records SET ttl = 998 WHERE zone_id = 4");
     $m = H2b::mark($p);
     $r = H2b::zones($p)->updateZone($a, 4, H2b::zoneInput($p, $a, 4));
     T::ok(in_array('zone.update.unchanged', $codes($r), true) && H2b::brief($p, $m) === [], 'D02b', 'Rollback (unverändert): Drift nicht festgeschrieben');
     $r = H2b::zones($p)->updateZone($a, 4, H2b::zoneInput($p, $a, 4, ['description' => 'D02c']));
-    T::eq(['history.drift system web: 4#3:drift'], H2b::brief($p, $m), 'D02c', 'beim nächsten festgeschriebenen Vorgang erneut erkannt');
+    T::eq(['history.drift system web: 4#3:drift', 'zone.update user:21/h2b_admin web: '], H2b::brief($p, $m), 'D02c', 'beim nächsten festgeschriebenen Vorgang erneut erkannt');
 
     // D03 Lazy-Baseline (Zone ohne Head, z. B. von altem Code angelegt)
     $p->exec("INSERT INTO zones (id, name, type, ttl, soa_ns, soa_mail, soa_refresh, soa_retry, soa_expire, soa_minimum, soa_serial, changed, allow_dyndns)

@@ -329,3 +329,41 @@ php web/scripts/history_baseline-cli.php --reconcile
   Code-Update erkennt der Recorder zwischenzeitliche Änderungen als Drift, neue Zonen erhalten eine Lazy-Baseline,
   gelöschte Zonen kennzeichnet `--reconcile`. `DROP TABLE` nur als freigegebene, datenverlustbehaftete Sondermaßnahme
   mit Sicherung.
+
+## 004 – Fachliche Audit-Ereignisse (AP1/H2c)
+
+| Datei | Zweck |
+|---|---|
+| `004_audit_events.sql` | wiederholbares SQL (`CREATE TABLE IF NOT EXISTS`, atomar) |
+| `../../scripts/migrate_004_audit_events.sh` | Preflight, Sicherung, Ausführung, Nachprüfung (Muster und Exitcodes wie 003) |
+
+Neue Tabelle `audit_events` (E45): fachliche Verwaltungsvorgänge (Zonenmetadaten, Server inkl. BIND-Reload,
+DynDNS-Konten, Benutzer und Zuweisungen) je Änderungsmenge mit fortlaufender `seq` (NOT NULL, eindeutig je
+Änderungsmenge). Inhalte nur über die Whitelist der `AuditPolicy`; keine Passwörter, Hashes, Tokens,
+DynDNS-Kontonamen oder Client-IPs. CHECK-Bedingungen NULL-sicher (MariaDB nimmt UNKNOWN als erfüllt an).
+Fremdschlüssel nur auf `history_change_sets` (`RESTRICT`); keine auf Fachtabellen. Bestehende Tabellen werden nicht
+verändert. Migration 003 ist keine Voraussetzung (nur 002), wird aber in der Reihenfolge 002 → 003 → 004 erwartet.
+
+### Verbindliche Reihenfolge
+
+1. **Sicherung und Migration 004** (Code noch alt; Migration 002 muss vorhanden und unverändert sein).
+2. **Prüfung** `--check` → Exitcode 0.
+3. **Code** ausrollen (per festem SHA). Ab diesem Stand schreiben alle Verwaltungsvorgänge Audit-Ereignisse (H2c).
+
+Der alte Code bleibt mit dem erweiterten Schema lauffähig (er liest und schreibt die Tabelle nicht). Der neue Code mit
+altem Schema antwortet bei Login und geschützten Seiten mit 503 (`SchemaCheck`, fail-closed).
+
+### Ablauf
+
+```bash
+bash scripts/migrate_004_audit_events.sh --db dnsmanager --check
+#    Exit 1 = Migration erforderlich, 0 = vorhanden, 2 = Migration 002 fehlt/abweichend oder Tabelle abweichend
+bash scripts/migrate_004_audit_events.sh --db dnsmanager --apply --backup-dir /root/dnsmanager-backup
+bash scripts/migrate_004_audit_events.sh --db dnsmanager --check
+```
+
+- **Preflight:** wie 003; die vier Grundtabellen aus 002 müssen exakt der Erwartung entsprechen. Eine vorhandene,
+  abweichende `audit_events` (auch ein gleichnamiger CHECK mit anderem Ausdruck) ⇒ Exit 2 ohne Änderung.
+- **Wiederanlauf:** Die Anweisung ist atomar; nach einem Abbruch (Exit 3) das Skript erneut ausführen.
+- **Rückweg:** Code-Rollback auf H2b ohne Löschen der Tabelle (E27); der H2b-Code nutzt sie nicht. `DROP TABLE` nur als
+  freigegebene, datenverlustbehaftete Sondermaßnahme mit Sicherung.

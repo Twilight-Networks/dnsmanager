@@ -255,6 +255,40 @@ CREATE TABLE IF NOT EXISTS history_dependencies (
     CONSTRAINT chk_hd_distinct CHECK (change_set_id <> dep_change_set_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Fachliche Audit-Ereignisse der Historie (Migration 004, AP1/H2c)
+CREATE TABLE IF NOT EXISTS audit_events (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    change_set_id BIGINT UNSIGNED NOT NULL,
+    seq SMALLINT UNSIGNED NOT NULL,
+    entity_type ENUM('zone', 'server', 'dyndns_account', 'user') CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    entity_id INT NOT NULL,
+    entity_label VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    zone_id INT NULL DEFAULT NULL,
+    action ENUM('create', 'update', 'delete', 'reload') CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    changes LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ae_change_set_seq (change_set_id, seq),
+    KEY idx_ae_entity (entity_type, entity_id, change_set_id),
+    KEY idx_ae_zone (zone_id, change_set_id),
+    CONSTRAINT fk_ae_change_set FOREIGN KEY (change_set_id) REFERENCES history_change_sets (id)
+        ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT chk_ae_seq CHECK (seq >= 1),
+    CONSTRAINT chk_ae_entity_id CHECK (entity_id >= 1),
+    CONSTRAINT chk_ae_label CHECK (CHAR_LENGTH(entity_label) >= 1),
+    CONSTRAINT chk_ae_zone CHECK (
+        (entity_type = 'zone' AND zone_id IS NOT NULL AND zone_id = entity_id)
+        OR (entity_type = 'dyndns_account' AND zone_id IS NOT NULL AND zone_id >= 1)
+        OR (entity_type IN ('server', 'user') AND zone_id IS NULL)
+    ),
+    CONSTRAINT chk_ae_action CHECK (
+        (action = 'reload' AND entity_type = 'server') OR action IN ('create', 'update', 'delete')
+    ),
+    CONSTRAINT chk_ae_changes CHECK (
+        JSON_VALID(changes) AND JSON_TYPE(changes) = 'OBJECT' AND JSON_LENGTH(changes) >= 1
+        AND LENGTH(changes) <= 16384
+    )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Initialstatus
 INSERT INTO system_status (id, bind_dirty) VALUES (1, 0);
 

@@ -15,7 +15,7 @@ final class H2b
     public const SOCK = '/run/mysqld/mysqld.sock';
     public const DYN_PASSWORD = 'H2B-Dyn-Geheim-4711';
     public const BUSINESS_TABLES = ['users', 'user_zones', 'zones', 'zone_servers', 'servers', 'records', 'dyndns_accounts', 'system_status'];
-    public const HISTORY_TABLES = ['history_change_sets', 'zone_snapshots', 'zone_revisions', 'zone_history_state', 'history_dependencies'];
+    public const HISTORY_TABLES = ['history_change_sets', 'zone_snapshots', 'zone_revisions', 'zone_history_state', 'history_dependencies', 'audit_events'];
 
     public static string $app = '';
     public static string $iso = '';
@@ -58,6 +58,8 @@ final class H2b
             'web/inc/app/publish/PublishBackend.php', 'web/inc/deploy/BindZoneBuildBackend.php',
             'web/inc/app/history/HistoryBaselineService.php', 'web/inc/app/history/ZoneHistoryRecorder.php',
             'web/inc/app/history/ZoneSnapshotStore.php', 'web/inc/app/history/ZoneSnapshotReader.php',
+            'web/inc/app/history/AuditRecorder.php', 'web/inc/app/history/AuditPolicy.php',
+            'web/inc/app/users/UserService.php', 'web/inc/app/users/UserInput.php',
         ] as $f) {
             require_once "$a/$f";
         }
@@ -144,7 +146,7 @@ final class H2b
         $master = array_values(array_filter($z['servers'], fn ($s) => $s['role'] === 'master'))[0]['id'] ?? null;
         return new ZoneUpdateInput(
             (string)($over['ttl'] ?? $z['ttl']), $z['prefixLength'] === null ? null : (string)$z['prefixLength'],
-            (string)($over['description'] ?? ($z['description'] ?? '')), (bool)$z['allowDyndns'],
+            (string)($over['description'] ?? ($z['description'] ?? '')), (bool)($over['allowDyndns'] ?? $z['allowDyndns']),
             $z['soa']['mail'], (string)$z['soa']['refresh'], (string)$z['soa']['retry'], (string)$z['soa']['expire'], (string)$z['soa']['minimum'],
             $over['serverIds'] ?? $servers, $over['masterId'] ?? (int)$master, null, $z['editVersion'], false
         );
@@ -259,7 +261,8 @@ final class H2b
     /**
      * Invarianten der Historie: je Zone mit Head Revisionen lückenlos 1..Head, Head = letzte Revision (Nummer und Hash),
      * für vorhandene Zonen Head-Hash = aktueller DB-Inhalt, gelöschte Zonen nur mit deleted_at; jede Zone hat einen
-     * Head; jede Änderungsmenge hat mindestens eine Revision; jeder Revisions-Hash hat einen Snapshot.
+     * Head; jede Änderungsmenge hat mindestens eine Revision oder (AP1/H2c) ein Audit-Ereignis; Audit-Ereignisse je
+     * Änderungsmenge lückenlos mit seq 1..n; jeder Revisions-Hash hat einen Snapshot.
      *
      * @return string[] Befunde (leer = in Ordnung)
      */
@@ -293,9 +296,15 @@ final class H2b
                 $bad[] = "Zone $z ohne Head";
             }
         }
-        $n = (int)self::one($p, 'SELECT COUNT(*) FROM history_change_sets c WHERE NOT EXISTS (SELECT 1 FROM zone_revisions r WHERE r.change_set_id = c.id)');
+        $n = (int)self::one($p, 'SELECT COUNT(*) FROM history_change_sets c WHERE NOT EXISTS (SELECT 1 FROM zone_revisions r WHERE r.change_set_id = c.id)'
+            . ' AND NOT EXISTS (SELECT 1 FROM audit_events e WHERE e.change_set_id = c.id)');
         if ($n > 0) {
-            $bad[] = "$n Änderungsmenge(n) ohne Revision";
+            $bad[] = "$n Änderungsmenge(n) ohne Revision und ohne Audit-Ereignis";
+        }
+        $n = (int)self::one($p, 'SELECT COUNT(*) FROM (SELECT change_set_id FROM audit_events GROUP BY change_set_id'
+            . ' HAVING MIN(seq) <> 1 OR MAX(seq) <> COUNT(*)) g');
+        if ($n > 0) {
+            $bad[] = "$n Änderungsmenge(n) mit lückenhafter Ereignisfolge";
         }
         $n = (int)self::one($p, 'SELECT COUNT(*) FROM zone_revisions r LEFT JOIN zone_snapshots s ON s.content_hash = r.content_hash WHERE s.content_hash IS NULL');
         if ($n > 0) {
