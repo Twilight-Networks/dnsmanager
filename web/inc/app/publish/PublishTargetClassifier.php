@@ -20,7 +20,8 @@
  *             TLS-Handshake) oder ein lokaler Fehler vor dem Senden (Aufrufer).
  * - unknown   Zustellung möglich, Ergebnis nicht bestimmbar: Zeitüberschreitung (auch beim Verbindungsaufbau, Q3),
  *             Abbruch während der Übertragung, Antwort ohne gültiges Agent-JSON, rollback = "failed".
- * - partial   nur Cleanup: Agent meldet Fehler, hat aber Dateien entfernt (und neu geladen).
+ * - partial   nur Cleanup: Agent meldet Fehler nach einer Änderung – Dateien entfernt oder zones.conf neu geschrieben
+ *             und neu geladen (erkennbar an entfernten Dateien bzw. am Schlüssel "rndc" der Fehlerantwort).
  * Es wird nichts erfunden: Weder Serial noch Datei-Hash noch Reload-Ergebnis werden aus der Antwort abgeleitet.
  */
 
@@ -95,7 +96,10 @@ final class PublishTargetClassifier
         if ($kind === self::KIND_CLEANUP) {
             $removedConf = self::count($json['removed_conf'] ?? []);
             $removedZone = self::count($json['removed_zone_files'] ?? []);
-            if (($removedConf ?? 0) > 0 || ($removedZone ?? 0) > 0) {
+            // Praxistest H2d: Der Fehlerpfad des Agenten NACH dem Neuschreiben von zones.conf und dem Reload (z. B. nicht
+            // löschbare Zonendatei) liefert ggf. leere Entfernt-Listen, trägt aber als einzige Fehlerantwort den Schlüssel
+            // "rndc". Der Bestand ist dann verändert – partial, nie rejected.
+            if (($removedConf ?? 0) > 0 || ($removedZone ?? 0) > 0 || array_key_exists('rndc', $json)) {
                 return self::result('partial', $httpStatus, 'cleanup_incomplete', $message, $removedConf ?? 0, $removedZone ?? 0);
             }
         }

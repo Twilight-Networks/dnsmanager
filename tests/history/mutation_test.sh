@@ -115,5 +115,7 @@ mutate MJ14 "$PL" $'        $stmt = $this->pdo->prepare(\'SELECT GET_LOCK(?, 0)\
 
 mutate MJ15 "$PS" $'            $ledger->releaseRunLock($run);\n            try {\n                $this->backend->bindJournal(null);' $'            try {\n                $this->backend->bindJournal(null);' RR J:S 'Laufsperre nach gescheiterter Backend-Bindung nicht freigegeben (Review S1)'
 
+mutate MJ16 "$PC" " || array_key_exists('rndc', \$json)) {" ") {" RR JP 'Cleanup-Fehler nach Reload als rejected eingeordnet (Praxistest)'
+
 echo "ERGEBNIS mutation: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" = 0 ]

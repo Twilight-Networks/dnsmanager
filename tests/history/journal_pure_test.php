@@ -88,6 +88,8 @@ $cases = [
     'C18' => ['zone_cleanup', ['httpCode' => 422, 'body' => '{"status":"error","removed_conf":[],"removed_zone_files":[],"rollback":"ok"}'], 'rejected|422|agent_error', 'Cleanup-Preflight zurückgerollt ⇒ rejected'],
     'C19' => ['zone_cleanup', ['httpCode' => 500, 'body' => '{"status":"error","rollback":"failed"}'], 'unknown|500|rollback_failed', 'Cleanup rollback=failed ⇒ unknown'],
     'C20' => ['zone_cleanup', ['httpCode' => 200, 'body' => '{"status":"success"}'], 'unknown|200|invalid_response', 'Cleanup-Erfolg ohne Dateilisten ⇒ unknown (keine erfundenen Zähler)'],
+    // Praxistest H2d (ns2, nicht löschbare verwaiste Zonendatei): zones.conf neu geschrieben und neu geladen, nichts entfernt
+    'C20b' => ['zone_cleanup', ['httpCode' => 500, 'body' => '{"status":"error","message":"Zonen-Cleanup unvollständig: nicht alle verwaisten Dateien konnten entfernt werden.","errors":["Verwaiste Zonendatei konnte nicht entfernt werden: db.h2d-e2e.example.test"],"removed_conf":[],"removed_zone_files":[],"rndc":"server reload successful"}'], 'partial|500|cleanup_incomplete', 'Cleanup-Fehler nach Neuschreiben und Reload ohne entfernte Datei ⇒ partial, nicht rejected'],
 ];
 foreach ($cases as $id => [$k, $r, $want, $msg]) {
     T::eq($want, $c($k, $r), $id, $msg);

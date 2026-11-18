@@ -438,7 +438,9 @@ z. B. Lock-Verlust) wird nicht beliefert und als `failed`/`target_changed` einge
 `rejected` = Agent-JSON `error` mit HTTP ≠ 200 ohne `rollback = failed` (Bestand unverändert); `failed` = sicher nicht
 zugestellt (TLS-Konfiguration, Namensauflösung, Verbindungsaufbau, TLS-Handshake, lokaler Fehler vor dem Senden);
 `unknown` = Zustellung möglich, Ergebnis unbestimmt (Zeitüberschreitung auch beim Verbindungsaufbau, Abbruch, Antwort
-ohne Agent-JSON, `rollback = failed`); Cleanup zusätzlich `partial` (Fehler mit entfernten Dateien). Fehlertexte ohne
+ohne Agent-JSON, `rollback = failed`); Cleanup zusätzlich `partial` (Fehler nach einer Änderung: entfernte Dateien
+oder – im Praxistest auf ns2 festgestellt – `zones.conf` neu geschrieben und neu geladen ohne entfernte Datei, erkennbar
+am Schlüssel `rndc` der Fehlerantwort; nie `rejected`). Fehlertexte ohne
 Steuerzeichen, tokenähnliche Folgen geschwärzt, ≤ 500 Zeichen. Die Einordnung ist reines Journalwissen: die operative
 Auswertung (HTTP 200 = Erfolg), `changed`/`bind_dirty`, Meldungen und Web-Verträge bleiben unverändert (J8).
 
