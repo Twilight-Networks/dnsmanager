@@ -508,6 +508,17 @@ Auf ns1/ns2 kein Publish All des installierten Bestands, solange dessen Wirkung 
 nicht gesondert freigegeben ist; keine manuellen Statuskorrekturen. Reale Ende-zu-Ende-Läufe gegen die installierten
 Agenten sind damit als ausstehend dokumentiert (PR-Bericht).
 
+**Praxistest ns1/ns2 (18.11.2026, nach Aufhebung von Q1 b durch den Maintainer)** – gegen die installierten Agenten,
+über die Core-Services der installierten Anwendung: (E1) Publish All mit dem ausstehenden Stand von `example.test`;
+(E2) Testzone anlegen und Publish Zone; (E3) Ablehnung durch den ns2-Agenten (`named-checkzone`-Fehler) ⇒ `rejected`,
+operativ `partial`, Bestand auf ns2 unverändert; (E4) Prüfung auf ns2 länger als das Client-Timeout ⇒ `unknown`/`timeout`,
+ns2 übernimmt die Datei danach nachweislich (sha256 = `file_hash`); (E5) SIGKILL des Publish-Prozesses während der
+Verteilung ⇒ Lauf nicht lebendig, offene Ziele `unknown`, nächster Lauf J6 `abandoned` und Neuveröffentlichung;
+(E6/E7) Zonenlöschung, Full Rebuild mit nicht löschbarer verwaister Datei auf ns2 ⇒ Cleanup-Warnung und `bind_dirty = 1`,
+danach Full Rebuild mit vollständigem Cleanup. Endzustand: alle Zonen DB = Datei = geladen auf ns1 und ns2, keine offenen
+Vorgänge, keine Rückstände. Befund: Der Cleanup-Fehler nach Reload wurde zunächst als `rejected` eingeordnet; korrigiert
+auf `partial` (Abschnitt E63 oben, Test C20b, Mutationsprobe MJ16) und auf ns2 erneut bestätigt.
+
 **Tests (E73)** – `tests/history`: `journal_pure_test.php` (rh1-Vektor, Einordnung, Bereinigung, Lese-Regeln),
 `journal_test.php` (RR/RC: K Constraints, P Pfade/Hashes/Akteurskontext, O Endpunkte, F Fehlerinjektion, J Ledger/J4a,
 L Lebendigkeit, N Nebenläufigkeit, R Reaktivierung, X Stress, B Byte-Gleichheit, Z Schutz), `migration005_test.sh`,
