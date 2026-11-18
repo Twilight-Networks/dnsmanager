@@ -13,6 +13,7 @@ APP="${1:-}"; BASE_SCHEMA="${2:-}"
 [ -d "$APP/scripts" ] && [ -f "$BASE_SCHEMA" ] || { echo "Aufruf: bash migration_test.sh <App-Verzeichnis> <Basis-Schema.sql>"; exit 2; }
 H="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIG="$APP/scripts/migrate_002_history_foundation.sh"
+[ -z "$(mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'dnsmgr\_t21\_m%'")" ] || { echo "ABBRUCH: Datenbanken dnsmgr_t21_m* vorhanden – keine Änderung"; exit 3; }
 W="$(mktemp -d /tmp/dnsmgr-h2a-mig.XXXXXX)"; chmod 700 "$W"
 PASS=0; FAIL=0
 

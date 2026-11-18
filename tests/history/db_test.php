@@ -24,6 +24,10 @@ require_once "$app/web/inc/app/history/ZoneStateSnapshot.php";
 
 const SOCK = '/run/mysqld/mysqld.sock';
 $DB = 'dnsmgr_t21_b' . strtolower($iso);
+if (trim((string)shell_exec("mariadb -N -B -e \"SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '$DB'\"")) !== '0') {
+    fwrite(STDERR, "ABBRUCH: Datenbank $DB vorhanden – keine Änderung" . PHP_EOL);
+    exit(3);
+}
 $W = rtrim(sys_get_temp_dir(), '/') . '/dnsmgr-h2a-db-' . strtolower($iso) . '-' . getmypid();
 mkdir($W, 0700);
 

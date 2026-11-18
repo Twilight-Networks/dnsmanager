@@ -20,6 +20,13 @@ SHA="${1:-}"; BASE="${2:-}"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "Aufruf: bash run.sh <App-SHA> <Basis-SHA> (je 40 Zeichen)"; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "als root ausführen"; exit 2; }
 REPO="${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}"
+
+echo "History-Tests H2a – $(hostname) $(date '+%F %T')"
+# Vorprüfungen VOR dem Einrichten des Aufräumens: Ein Abbruch hier entfernt nichts (auch keine fremden dnsmgr_t21_*)
+[ "$(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")" = 1 ] || { echo "ABBRUCH: Publish-Sperre belegt"; exit 3; }
+[ -z "$(mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'dnsmgr\\_t21\\_%'")" ] || { echo "ABBRUCH: Datenbanken dnsmgr_t21_* vorhanden (nicht von diesem Lauf) – keine Änderung"; exit 3; }
+[ "$(mariadb -N -e "SELECT COUNT(*) FROM mysql.user WHERE User = 'h2acli'")" = 0 ] || { echo "ABBRUCH: Benutzer h2acli vorhanden – keine Änderung"; exit 3; }
+
 T="$(mktemp -d /tmp/dnsmgr-h2a-run.XXXXXX)"; chmod 700 "$T"
 cleanup() {
     local d
@@ -31,9 +38,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "History-Tests H2a – $(hostname) $(date '+%F %T')"
-[ "$(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")" = 1 ] || { echo "ABBRUCH: Publish-Sperre belegt"; exit 3; }
-[ -z "$(mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'dnsmgr\\_t21\\_%'")" ] || { echo "ABBRUCH: Datenbanken dnsmgr_t21_* vorhanden"; exit 3; }
 git clone -q "$REPO" "$T/repo" || { echo "ABBRUCH: Klon"; exit 1; }
 for s in "$SHA" "$BASE"; do git -C "$T/repo" cat-file -e "$s^{commit}" || { echo "ABBRUCH: Commit $s unbekannt"; exit 1; }; done
 mkdir -m 750 "$T/app"; git -C "$T/repo" archive "$SHA" | tar -x -C "$T/app"

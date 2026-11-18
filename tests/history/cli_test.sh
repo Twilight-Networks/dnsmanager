@@ -11,6 +11,7 @@ set -uo pipefail
 APP="${1:-}"; BASE_SCHEMA="${2:-}"
 [ -d "$APP/web" ] && [ -f "$BASE_SCHEMA" ] || { echo "Aufruf: bash cli_test.sh <App-Verzeichnis> <Basis-Schema.sql>"; exit 2; }
 H="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ "$(mariadb -N -e "SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME IN ('dnsmgr_t21_cli','dnsmgr_t21_clio')) + (SELECT COUNT(*) FROM mysql.user WHERE User = 'h2acli')")" = 0 ] || { echo "ABBRUCH: dnsmgr_t21_cli/clio oder Benutzer h2acli vorhanden – keine Änderung"; exit 3; }
 W="$(mktemp -d /tmp/dnsmgr-h2a-cli.XXXXXX)"; chmod 700 "$W"
 PASS=0; FAIL=0
 cleanup() {
