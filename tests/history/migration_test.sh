@@ -6,22 +6,22 @@
 # Aufruf (als root auf dem Testsystem, MariaDB-Socket): bash migration_test.sh <App-Verzeichnis> <Basis-Schema.sql>
 #   <App-Verzeichnis>   Stand des zu prüfenden Commits (git archive)
 #   <Basis-Schema.sql>  sql/dnsmanager_schema.sql des Basis-Commits (ohne CREATE DATABASE/USE)
-# Legt ausschließlich Datenbanken dnsmgr_t21_m* und ein Arbeitsverzeichnis unter /tmp an und entfernt beides am Ende.
+# Legt ausschließlich Datenbanken dnsmgr_t21_r<RUN>_m* (tests/history/owned.sh) und ein Arbeitsverzeichnis unter /tmp
+# an und entfernt am Ende nur die selbst angelegten Datenbanken.
 
 set -uo pipefail
 APP="${1:-}"; BASE_SCHEMA="${2:-}"
 [ -d "$APP/scripts" ] && [ -f "$BASE_SCHEMA" ] || { echo "Aufruf: bash migration_test.sh <App-Verzeichnis> <Basis-Schema.sql>"; exit 2; }
 H="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIG="$APP/scripts/migrate_002_history_foundation.sh"
-[ -z "$(mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'dnsmgr\_t21\_m%'")" ] || { echo "ABBRUCH: Datenbanken dnsmgr_t21_m* vorhanden – keine Änderung"; exit 3; }
+# shellcheck source=owned.sh
+source "$H/owned.sh"
 W="$(mktemp -d /tmp/dnsmgr-h2a-mig.XXXXXX)"; chmod 700 "$W"
+owned_init "$W/owned"
 PASS=0; FAIL=0
 
 cleanup() {
-    local d
-    for d in $(mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'dnsmgr\_t21\_m%'"); do
-        mariadb -e "DROP DATABASE IF EXISTS \`$d\`"
-    done
+    owned_cleanup
     rm -rf "$W"
 }
 trap cleanup EXIT
@@ -33,8 +33,8 @@ expect_exit() { # <erwartet> <Fall> <Befehl…>
     if [ "$rc" = "$want" ]; then ok 1 "$id Exit $rc"; else ok 0 "$id Exit $rc statt $want"; sed 's/^/       /' "$W/out"; fi
 }
 mkdb() { # <Name> [new]: Basis-Schema (bzw. neues Schema) und Fixture
-    local d="dnsmgr_t21_$1"
-    mariadb -e "DROP DATABASE IF EXISTS \`$d\`; CREATE DATABASE \`$d\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+    local d="${H2A_PREFIX}$1"
+    owned_create_db "$d" >&2 || exit 1
     if [ "${2:-}" = new ]; then
         grep -vE '^(CREATE DATABASE|USE )' "$APP/sql/dnsmanager_schema.sql" | mariadb "$d"
     else
@@ -136,6 +136,14 @@ mutate M07e zone_snapshots 2 "ALTER TABLE zone_snapshots MODIFY payload LONGTEXT
 mutate M07f history_change_sets 1 "ALTER TABLE history_change_sets MODIFY actor_type ENUM('user','dyndns_account','system','x') CHARACTER SET ascii COLLATE ascii_bin NOT NULL" "ALTER TABLE history_change_sets MODIFY actor_type ENUM('user','dyndns_account','system') CHARACTER SET ascii COLLATE ascii_bin NOT NULL"
 mutate M07g zone_revisions 3 "ALTER TABLE zone_revisions MODIFY revision_no INT UNSIGNED NULL" "ALTER TABLE zone_revisions MODIFY revision_no INT UNSIGNED NOT NULL"
 mutate M07h history_change_sets 1 "ALTER TABLE history_change_sets ALTER created_at DROP DEFAULT" "ALTER TABLE history_change_sets ALTER created_at SET DEFAULT CURRENT_TIMESTAMP(6)"
+# S1: geänderter CHECK-Ausdruck bei unverändertem Constraint-Namen
+mutate M07k zone_snapshots 2 "ALTER TABLE zone_snapshots DROP CONSTRAINT chk_zs_hash; ALTER TABLE zone_snapshots ADD CONSTRAINT chk_zs_hash CHECK (content_hash REGEXP '^[0-9a-f]{40,64}\$')"     "ALTER TABLE zone_snapshots DROP CONSTRAINT chk_zs_hash; ALTER TABLE zone_snapshots ADD CONSTRAINT chk_zs_hash CHECK (content_hash REGEXP '^[0-9a-f]{64}\$')"
+grep -q "zone_snapshots: mismatch – erwartet chk|chk_zs_hash|Table|" "$W/out"; ok "$([ $? = 0 ] && echo 1)" "M07k Skript-Detail nennt den CHECK-Ausdruck"
+mutate M07l history_change_sets 1 "ALTER TABLE history_change_sets DROP CONSTRAINT chk_hcs_actor; ALTER TABLE history_change_sets ADD CONSTRAINT chk_hcs_actor CHECK (actor_type IN ('user', 'dyndns_account', 'system'))"     "ALTER TABLE history_change_sets DROP CONSTRAINT chk_hcs_actor; ALTER TABLE history_change_sets ADD CONSTRAINT chk_hcs_actor CHECK ((actor_type = 'user' AND actor_user_id IS NOT NULL AND actor_dyndns_account_id IS NULL) OR (actor_type = 'dyndns_account' AND actor_dyndns_account_id IS NOT NULL AND actor_user_id IS NULL AND actor_label IS NULL) OR (actor_type = 'system' AND actor_user_id IS NULL AND actor_dyndns_account_id IS NULL))"
+mariadb "$D" -e "ALTER TABLE zone_revisions DROP CONSTRAINT chk_zr_revision_no; ALTER TABLE zone_revisions ADD CONSTRAINT chk_zr_revision_no CHECK (revision_no >= 0)"
+expect_exit 2 "M07m --apply mit geändertem CHECK-Ausdruck ohne Änderung abgelehnt" bash "$MIG" --db "$D" --apply --no-backup
+mariadb "$D" -e "ALTER TABLE zone_revisions DROP CONSTRAINT chk_zr_revision_no; ALTER TABLE zone_revisions ADD CONSTRAINT chk_zr_revision_no CHECK (revision_no >= 1)"
+ok "$([ "$(php_states "$D")" = "ok ok ok ok" ] && echo 1)" "M07n nach Rückbau wieder ok"
 # Sicht statt Tabelle (nur Zustandsbewertung, Rückbau: Tabelle neu anlegen)
 mariadb "$D" -e "DROP TABLE zone_history_state; CREATE VIEW zone_history_state AS SELECT 1 AS zone_id"
 expect_exit 2 "M07i Skript erkennt Sicht statt Tabelle" bash "$MIG" --db "$D" --check
@@ -146,7 +154,7 @@ D=$(mkdb m8 new)
 expect_exit 0 "M08 Neuinstallation: --check ohne Migration" bash "$MIG" --db "$D" --check
 ok "$([ -z "$(php_problems "$D")" ] && echo 1)" "M08b Neuinstallation: SchemaCheck::problems() leer"
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
-ok "$([ "$(sig "$D")" = "$(sig dnsmgr_t21_m1)" ] && echo 1)" "M08c Struktursignatur Neuinstallation = Migration (byte-gleich)"
+ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}m1")" ] && echo 1)" "M08c Struktursignatur Neuinstallation = Migration (byte-gleich)"
 
 echo "ERGEBNIS migration: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" = 0 ]

@@ -2,7 +2,8 @@
 /**
  * Datei: tests/history/db_test.php
  * Zweck: Datenbanktests der Baseline-Initialisierung (HistoryBaselineService, ZoneSnapshotReader) auf einer isolierten
- *        Datenbank dnsmgr_t21_b{rr|rc} (AP1/H2a, E23/E24).
+ *        Datenbank dnsmgr_t21_r<RUN>_b{rr|rc} (AP1/H2a, E23/E24). Eigentum wie tests/history/owned.sh: Die Datenbank
+ *        wird ohne IF NOT EXISTS angelegt, registriert und am Ende nur selbst angelegt wieder entfernt.
  *
  * Abgedeckt: Ergebnisstruktur, unveränderte Fachdaten (vollständige Inhalts-Prüfsumme), Wiederholbarkeit, Prüflauf,
  * Advisory-Lock, Schema fail-closed, Fehlerinjektion je INSERT (Trigger) mit vollständigem Rollback, Teilabbruch und
@@ -23,11 +24,19 @@ require_once "$app/web/inc/app/history/HistoryBaselineService.php";
 require_once "$app/web/inc/app/history/ZoneStateSnapshot.php";
 
 const SOCK = '/run/mysqld/mysqld.sock';
-$DB = 'dnsmgr_t21_b' . strtolower($iso);
-if (trim((string)shell_exec("mariadb -N -B -e \"SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '$DB'\"")) !== '0') {
-    fwrite(STDERR, "ABBRUCH: Datenbank $DB vorhanden – keine Änderung" . PHP_EOL);
-    exit(3);
+$RUN = getenv('H2A_RUN') ?: bin2hex(random_bytes(4));
+if (preg_match('/^[0-9a-f]{8}$/D', $RUN) !== 1) {
+    fwrite(STDERR, "ABBRUCH: ungültige Lauf-Kennung H2A_RUN" . PHP_EOL);
+    exit(2);
 }
+$DB = "dnsmgr_t21_r{$RUN}_b" . strtolower($iso);
+$OWNED = false;   // erst nach erfolgreichem CREATE DATABASE (ohne IF NOT EXISTS) Eigentum dieses Laufs
+register_shutdown_function(static function (): void {
+    global $OWNED, $DB;
+    if ($OWNED) {
+        exec("mariadb -e 'DROP DATABASE IF EXISTS `$DB`' 2>&1");
+    }
+});
 $W = rtrim(sys_get_temp_dir(), '/') . '/dnsmgr-h2a-db-' . strtolower($iso) . '-' . getmypid();
 mkdir($W, 0700);
 
@@ -56,8 +65,18 @@ function sh(string $cmd): string
 /** Datenbank neu aus sql/dnsmanager_schema.sql (Stand des Commits) und Fixture aufbauen */
 function resetDb(): PDO
 {
-    global $DB, $app, $iso;
-    sh("mariadb -e 'DROP DATABASE IF EXISTS `$DB`; CREATE DATABASE `$DB` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'");
+    global $DB, $app, $iso, $OWNED;
+    if ($OWNED) {
+        sh("mariadb -e 'DROP DATABASE `$DB`'");   // eigene Datenbank aus dem ersten Anlegen
+    }
+    sh("mariadb -e 'CREATE DATABASE `$DB` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'");   // scheitert, falls fremd vorhanden
+    if (!$OWNED) {
+        $OWNED = true;
+        $reg = getenv('H2A_REGISTRY');
+        if (is_string($reg) && $reg !== '') {
+            file_put_contents($reg, "db $DB" . PHP_EOL, FILE_APPEND);
+        }
+    }
     sh("grep -vE '^(CREATE DATABASE|USE )' " . escapeshellarg("$app/sql/dnsmanager_schema.sql") . " | mariadb $DB");
     sh("mariadb $DB < " . escapeshellarg(__DIR__ . '/fixture.sql'));
     $r = new ReflectionProperty(SchemaCheck::class, 'cache');
@@ -387,5 +406,6 @@ T::eq('1,2,5', (string)$observer->query('SELECT GROUP_CONCAT(zone_id ORDER BY zo
 
 // Aufräumen
 sh("mariadb -e 'DROP DATABASE IF EXISTS `$DB`'");
+$OWNED = false;
 sh('rm -rf ' . escapeshellarg($W));
 T::finish("db-$iso");

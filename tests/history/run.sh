@@ -11,9 +11,12 @@
 #   2. Migrationstests (migration_test.sh)
 #   3. Datenbanktests der Baseline unter REPEATABLE READ (innodb_snapshot_isolation = ON) und READ COMMITTED
 #   4. CLI-Test mit DML-Benutzer (cli_test.sh)
-# Nur isolierte Datenbanken dnsmgr_t21_* und der Benutzer h2acli; die installierte Anwendung, ihre Datenbank und
-# /etc/dnsmanager werden nicht berührt. Der Advisory-Lock 'dnsmanager_publish_all' ist serverweit: Die Tests belegen
-# ihn nur kurz; ist er beim Start belegt, bricht der Lauf ab. Aufräumen am Ende (auch bei Abbruch).
+# Nur isolierte Datenbanken dnsmgr_t21_r<RUN>_* und der Benutzer h2a<RUN> (Lauf-Kennung H2A_RUN, 8 Hex-Zeichen; optional
+# vorgebbar, sonst zufällig). Eigentum nach tests/history/owned.sh: Jede Suite legt ihre Ressourcen ohne IF NOT EXISTS an
+# und trägt sie danach in das gemeinsame Register dieses Laufs ein; aufgeräumt werden ausschließlich registrierte
+# Ressourcen – nie fremde Datenbanken oder Benutzer, auch nicht solche, die während des Laufs entstehen.
+# Die installierte Anwendung, ihre Datenbank und /etc/dnsmanager werden nicht berührt. Der Advisory-Lock
+# 'dnsmanager_publish_all' ist serverweit: Die Tests belegen ihn nur kurz; ist er beim Start belegt, bricht der Lauf ab.
 
 set -uo pipefail
 SHA="${1:-}"; BASE="${2:-}"
@@ -22,18 +25,18 @@ SHA="${1:-}"; BASE="${2:-}"
 REPO="${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}"
 
 echo "History-Tests H2a – $(hostname) $(date '+%F %T')"
-# Vorprüfungen VOR dem Einrichten des Aufräumens: Ein Abbruch hier entfernt nichts (auch keine fremden dnsmgr_t21_*)
+export H2A_RUN="${H2A_RUN:-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+[[ "$H2A_RUN" =~ ^[0-9a-f]{8}$ ]] || { echo "ABBRUCH: ungültige Lauf-Kennung H2A_RUN"; exit 2; }
+echo "Lauf-Kennung: $H2A_RUN (Datenbanken dnsmgr_t21_r${H2A_RUN}_*, Benutzer h2a${H2A_RUN})"
 [ "$(mariadb -N -e "SELECT IS_FREE_LOCK('dnsmanager_publish_all')")" = 1 ] || { echo "ABBRUCH: Publish-Sperre belegt"; exit 3; }
-[ -z "$(mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'dnsmgr\\_t21\\_%'")" ] || { echo "ABBRUCH: Datenbanken dnsmgr_t21_* vorhanden (nicht von diesem Lauf) – keine Änderung"; exit 3; }
-[ "$(mariadb -N -e "SELECT COUNT(*) FROM mysql.user WHERE User = 'h2acli'")" = 0 ] || { echo "ABBRUCH: Benutzer h2acli vorhanden – keine Änderung"; exit 3; }
 
 T="$(mktemp -d /tmp/dnsmgr-h2a-run.XXXXXX)"; chmod 700 "$T"
+export H2A_REGISTRY="$T/owned"
+: > "$H2A_REGISTRY"; chmod 600 "$H2A_REGISTRY"
 cleanup() {
-    local d
-    for d in $(mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'dnsmgr\\_t21\\_%'"); do
-        mariadb -e "DROP DATABASE IF EXISTS \`$d\`"
-    done
-    mariadb -e "DROP USER IF EXISTS 'h2acli'@'localhost'"
+    # Sicherheitsnetz für abgebrochene Suiten: nur Ressourcen aus dem Register dieses Laufs
+    # shellcheck source=owned.sh
+    [ -f "$T/app/tests/history/owned.sh" ] && { source "$T/app/tests/history/owned.sh"; owned_cleanup "$H2A_REGISTRY"; }
     rm -rf "$T"
 }
 trap cleanup EXIT

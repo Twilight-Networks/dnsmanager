@@ -233,7 +233,7 @@ php web/scripts/history_baseline-cli.php --check     # Exit 0 = alle Zonen haben
 - **Preflight:** MariaDB ab 10.6 (atomares DDL), Datenbank und Fachtabellen vorhanden, `zones.id` vom Typ `int(11)`.
   Danach werden **alle vier** History-Tabellen vollständig gegen die Erwartung aus `web/inc/app/SchemaCheck.php`
   geprüft (Tabellenart, Engine, Spalten mit Typ, NULL, Standardwert, Zeichensatz und Sortierung, Indizes,
-  Fremdschlüssel mit Regeln, Namen der CHECK-Bedingungen) – **bevor** eine DDL-Anweisung ausgeführt wird. Weicht eine
+  Fremdschlüssel mit Regeln, CHECK-Bedingungen mit Name und normalisiertem Ausdruck) – **bevor** eine DDL-Anweisung ausgeführt wird. Weicht eine
   vorhandene Tabelle ab, bricht das Skript **ohne Änderung** ab (Exit 2) und nennt die erste Abweichung.
 - **Nachprüfung:** alle vier Tabellen exakt wie erwartet; Zeilenzahl bereits vorhandener History-Tabellen unverändert.
   Die Prüfsummen der Fachtabellen (`CHECKSUM TABLE … EXTENDED`) werden vorher und nachher verglichen und nur

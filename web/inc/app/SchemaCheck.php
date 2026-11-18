@@ -12,8 +12,8 @@
  * AP1/H2a (E25): Zusätzlich werden die History-Grundtabellen aus Migration 002
  * (sql/migrations/002_history_foundation.sql) vollständig geprüft: Tabellenart und Engine, alle Spalten (Position,
  * Typ, NULL, Standardwert, Extra, Zeichensatz, Sortierung), alle Indizes, Fremdschlüssel (Spalten, Ziel, Regeln) und
- * die Namen der CHECK-Bedingungen. Jede Abweichung, auch eine zusätzliche Spalte oder ein zusätzlicher Index, ist ein
- * Befund. Dieselbe Erwartung und dieselbe Abfrage verwendet das Migrationsskript
+ * die CHECK-Bedingungen (Name, Ebene und normalisierter Ausdruck). Jede Abweichung, auch eine zusätzliche Spalte
+ * oder ein zusätzlicher Index, ist ein Befund. Dieselbe Erwartung und dieselbe Abfrage verwendet das Migrationsskript
  * scripts/migrate_002_history_foundation.sh (über web/scripts/schema_history-cli.php) für Preflight und
  * Nachprüfung; es gibt nur diese eine Definition der Erwartung.
  *
@@ -40,7 +40,7 @@ final class SchemaCheck
      *   col|<Name>|<Typ>|<IS_NULLABLE>|<Standardwert>|<Extra>|<Zeichensatz>|<Sortierung>   (nach Position)
      *   idx|<Index>|<NON_UNIQUE>|<Position>|<Spalte>|<SUB_PART>|<INDEX_TYPE>
      *   fk|<Name>|<Position>|<Spalte>|<Zieltabelle>|<Zielspalte>|<UPDATE_RULE>|<DELETE_RULE>
-     *   chk|<Name>
+     *   chk|<Name>|<LEVEL>|<CHECK_CLAUSE>   (Ausdruck in der von MariaDB normalisierten Form)
      * Werte wie von MariaDB 11.8 in information_schema geliefert (erhoben auf ns1 aus der Migrationsdatei; identisch
      * für sql/dnsmanager_schema.sql, siehe tests/history).
      */
@@ -61,7 +61,9 @@ final class SchemaCheck
             'idx|idx_hcs_correlation|1|1|correlation_id|~|BTREE',
             'idx|idx_hcs_created|1|1|created_at|~|BTREE',
             'idx|PRIMARY|0|1|id|~|BTREE',
-            'chk|chk_hcs_actor',
+            "chk|chk_hcs_actor|Table|`actor_type` = 'user' and `actor_user_id` is not null and `actor_dyndns_account_id` is null"
+                . " or `actor_type` = 'dyndns_account' and `actor_dyndns_account_id` is not null and `actor_user_id` is null"
+                . " and `actor_label` is null or `actor_type` = 'system' and `actor_user_id` is null and `actor_dyndns_account_id` is null",
         ],
         'zone_snapshots' => [
             'table|BASE TABLE|InnoDB',
@@ -71,8 +73,8 @@ final class SchemaCheck
             'col|record_count|int(10) unsigned|NO|~||~|~',
             'col|created_at|datetime(6)|NO|current_timestamp(6)||~|~',
             'idx|PRIMARY|0|1|content_hash|~|BTREE',
-            'chk|chk_zs_hash',
-            'chk|chk_zs_payload',
+            "chk|chk_zs_hash|Table|`content_hash` regexp '^[0-9a-f]{64}\$'",
+            'chk|chk_zs_payload|Table|json_valid(`payload`)',
         ],
         'zone_revisions' => [
             'table|BASE TABLE|InnoDB',
@@ -95,8 +97,8 @@ final class SchemaCheck
             'idx|uq_zr_zone_revision|0|2|revision_no|~|BTREE',
             'fk|fk_zr_change_set|1|change_set_id|history_change_sets|id|RESTRICT|RESTRICT',
             'fk|fk_zr_snapshot|1|content_hash|zone_snapshots|content_hash|RESTRICT|RESTRICT',
-            'chk|chk_zr_diff_summary',
-            'chk|chk_zr_revision_no',
+            'chk|chk_zr_diff_summary|Table|`diff_summary` is null or json_valid(`diff_summary`)',
+            'chk|chk_zr_revision_no|Table|`revision_no` >= 1',
         ],
         'zone_history_state' => [
             'table|BASE TABLE|InnoDB',
@@ -135,7 +137,7 @@ SELECT t, l FROM (
      ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME
   WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME IN ({TABLES}) AND k.REFERENCED_TABLE_NAME IS NOT NULL
  UNION ALL
- SELECT TABLE_NAME, 5, CONSTRAINT_NAME, 0, CONCAT_WS('|', 'chk', CONSTRAINT_NAME)
+ SELECT TABLE_NAME, 5, CONSTRAINT_NAME, 0, CONCAT_WS('|', 'chk', CONSTRAINT_NAME, LEVEL, CHECK_CLAUSE)
    FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME IN ({TABLES})
 ) s ORDER BY t, k, o1, o2
 SQL;
