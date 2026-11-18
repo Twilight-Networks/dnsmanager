@@ -5,7 +5,7 @@ Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6); **Core-Abschluss** m
 
 **Einordnung ns1/ns2 (Klarstellung 18.11.2026):** ns1 (192.168.53.122) und ns2 (192.168.53.125) sind die dedizierten Entwicklungs- und Testmaschinen des Projekts, keine externen Produktivsysteme. „Produktiv“, „Produktivstand“, „Produktivübernahme“ und „Produktion“ bezeichnen in diesem Dokument den dort installierten und abgenommenen Softwarestand. Die historischen Beschreibungen der Abnahmen bleiben unverändert.
 
-**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026, **noch nicht implementiert**). Die dort vorgesehenen Erweiterungen der Lock-Reihenfolge (Abschnitt 6, R-H9) und der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den jeweiligen Meilensteinen H2a–H5 und AS.
+**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026; umgesetzt ist bisher Meilenstein H2a: History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung, Snapshot/Diff/Leser unter `web/inc/app/history/` und die Baseline-CLI, ohne Integration in die Schreibpfade). Die dort vorgesehenen Erweiterungen der Lock-Reihenfolge (Abschnitt 6, R-H9) und der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den jeweiligen Meilensteinen H2b–H5 und AS.
 
 ## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
@@ -345,6 +345,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 ## 4. Wiederverwendbare Bausteine
 
 - **Basis:** `Actor`, `ActorAccess`, `ZoneAccess`, `TopologyLock`, `ServiceResult`/`ServiceMessage`, `SchemaCheck`, `AppBootstrap`.
+- **Historie (H2a):** `ZoneStateSnapshot` (kanonischer Snapshot, Vertrag `zs1`), `ZoneSnapshotDiff`, `ZoneSnapshotReader`, `HistoryBaselineService` (siehe `ARCHITECTURE_HISTORY.md` Abschnitt 5a).
 - **Validierung** (rein): `validators.php` – `validateDnsRecord`, `validateZoneInput`, `isValidFqdn`, `isValidSoaName`, `validateDyndnsHostname`, `normalizeDyndnsHostname`; `isDuplicateRecord` liest die DB.
 - **DynDNS:** `dyndns_guard.php` (siehe 3.2).
 - **Records:** `glue_check.php` (`isGlueRecord`, `isNsRecordReferencedByGlue` rein; `isProtectedNsRecord` liest), `ttl_defaults.php`, `soa_serial.php`, `dkim_helpers.php`, `AutoPtr`.

@@ -10,6 +10,7 @@
 #   UIG_CSP_MODE=<modus> run.sh serve <SHA>     CSP_MODE enforce|report-only|off nur in der Testkopie (U6; ohne: Standard)
 #   run.sh matrix  <Commit-SHA>                 Record-Typ-Matrix (U4-Core, tests/ui/records, siehe README)
 #   UIG_RECORDS_MATRIX=1 run.sh serve <SHA>     Testkopie zusätzlich mit der Matrix-Fixture (Erfassung der JS-Daten)
+#   UIG_EXTRA_SQL=<datei> run.sh …              zusätzliches Schema-SQL nach dem Schema des Commits (H2a: alter Code mit neuem Schema)
 #
 # Ablauf: eigener GitHub-Klon → git archive des Commits nach /tmp/dnsmgr-uig/app; Konfiguration aus
 # web/config/ui_config-sample.php (isolierte DB dnsmgr_uig_*, eigener DB-Benutzer, Log in Datei, Sprache de);
@@ -88,6 +89,12 @@ for d in tpl app; do
   mariadb -e "DROP DATABASE IF EXISTS dnsmgr_uig_$d; CREATE DATABASE dnsmgr_uig_$d CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
   mariadb dnsmgr_uig_$d < $T/schema.sql
 done
+if [ -n "${UIG_EXTRA_SQL:-}" ]; then
+  # H2a: zusätzliches Schema-SQL nach dem Schema des Commits (z. B. Migration 002 für "alter Code mit neuem Schema")
+  [ -f "$UIG_EXTRA_SQL" ] || { echo "ABBRUCH: UIG_EXTRA_SQL fehlt: $UIG_EXTRA_SQL"; exit 1; }
+  for d in tpl app; do mariadb dnsmgr_uig_$d < "$UIG_EXTRA_SQL" || { echo "ABBRUCH: UIG_EXTRA_SQL"; exit 1; }; done
+  echo "Zusätzliches Schema: $UIG_EXTRA_SQL (sha256 $(sha256sum "$UIG_EXTRA_SQL" | cut -c1-16)…)"
+fi
 mariadb -e "DROP USER IF EXISTS 'uigweb'@'localhost'; CREATE USER 'uigweb'@'localhost' IDENTIFIED BY '$PW'; GRANT SELECT, INSERT, UPDATE, DELETE ON dnsmgr_uig_app.* TO 'uigweb'@'localhost'"
 php $H/fixture.php | mariadb dnsmgr_uig_tpl || { echo "ABBRUCH: Fixture"; exit 1; }
 if [ "$MODE" = matrix ] || [ "${UIG_RECORDS_MATRIX:-0}" = 1 ]; then

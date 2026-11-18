@@ -2,7 +2,7 @@
 
 Migrationen für bestehende Installationen. Neuinstallationen verwenden `sql/dnsmanager_schema.sql`, das den jeweils aktuellen Stand bereits enthält.
 
-Der Webcode nimmt **niemals** selbst Schemaänderungen vor. Fehlt eine vorausgesetzte Spalte oder weicht sie ab, verweigern Login und geschützte Seiten den Dienst mit HTTP 503 (Fail-Closed, `SchemaCheck`) und protokollieren `event=schema_incompatible`.
+Der Webcode nimmt **niemals** selbst Schemaänderungen vor. Fehlt eine vorausgesetzte Spalte oder Tabelle oder weicht sie ab, verweigern Login und geschützte Seiten den Dienst mit HTTP 503 (Fail-Closed, `SchemaCheck`) und protokollieren `event=schema_incompatible`.
 
 ## 001 – Kontostatus und Sitzungsgeneration (S26/S27)
 
@@ -178,3 +178,106 @@ Danach sind Deaktivierungen und Generationen verloren. Ein erneutes Update führ
 **Vollständige Wiederherstellung** aus der Sicherung vor der Migration: nur, wenn seit der Migration keine anderen Änderungen erhalten bleiben müssen. Auch dann gelten die Schritte 1, 2 und 4–7.
 
 Liefert Schritt 1c keine Konten, entfällt Schritt 3. Die Sessions werden trotzdem beendet (Schritt 4), weil der alte Code die Generation nicht kennt.
+
+## 002 – Grundtabellen der Änderungshistorie (AP1/H2a)
+
+| Datei | Zweck |
+|---|---|
+| `002_history_foundation.sql` | wiederholbares SQL (`CREATE TABLE IF NOT EXISTS` in Abhängigkeitsreihenfolge) |
+| `../../scripts/migrate_002_history_foundation.sh` | Preflight, Sicherung, Ausführung, Nachprüfung |
+| `../../web/scripts/schema_history-cli.php` | Strukturerwartung aus `SchemaCheck` für das Skript (ohne Datenbankzugriff) |
+| `../../web/scripts/history_baseline-cli.php` | Baseline-Initialisierung bestehender Zonen (nach der Migration) |
+
+Neue Tabellen (Architektur: [`docs/ARCHITECTURE_HISTORY.md`](../../docs/ARCHITECTURE_HISTORY.md)); bestehende Tabellen werden nicht verändert:
+
+- `history_change_sets`: Klammer je Fachtransaktion (Operation, Akteurart, Akteur, Kanal, Korrelation).
+- `zone_snapshots`: inhaltsadressierte, kanonische Zonen-Snapshots (Vertrag `zs1`, SHA-256 als Primärschlüssel).
+- `zone_revisions`: unveränderliche Revisionen je Zone, eindeutig über `(zone_id, revision_no)`.
+- `zone_history_state`: Head je Zone (`tracked` / `baseline_unverified`).
+
+Keine Fremdschlüssel auf Fachtabellen (die Historie gelöschter Zonen bleibt erhalten), Fremdschlüssel innerhalb der
+Historie ohne Cascade, keine Serial-Spalten (E15/E16 offen).
+
+### Verbindliche Reihenfolge
+
+1. **Sicherung und Migration** (Code noch alt).
+2. **Prüfung** `--check` → Exitcode 0.
+3. **Code** ausrollen (per festem SHA).
+4. **Baseline** `history_baseline-cli.php --dry-run`, danach `--apply`; Kontrolle mit `--check`.
+
+Der alte Code bleibt mit dem erweiterten Schema lauffähig: Er liest und schreibt die neuen Tabellen nicht. Der neue Code
+mit altem Schema antwortet bei Login und geschützten Seiten mit 503 (`SchemaCheck`, fail-closed; Log
+`event=schema_incompatible`). Sessions bleiben gültig. Die Baseline (Schritt 4) ist keine Voraussetzung für den Betrieb
+von H2a: Der Code nutzt die Historie zur Laufzeit noch nicht.
+
+### Ablauf
+
+```bash
+# 1. Preflight (ändert nichts)
+bash scripts/migrate_002_history_foundation.sh --db dnsmanager --check
+#    Exit 1 = Migration erforderlich, 0 = vollständig vorhanden, 2 = abweichende Struktur (manuell klären)
+
+# 2. Migration mit Sicherung (vollständiger mysqldump, Rechte 600 in einem 700-Verzeichnis).
+#    --no-backup ist nur für isolierte Testdatenbanken (dnsmgr_tNN_*) zulässig.
+bash scripts/migrate_002_history_foundation.sh --db dnsmanager --apply --backup-dir /root/dnsmanager-backup
+
+# 3. Kontrolle
+bash scripts/migrate_002_history_foundation.sh --db dnsmanager --check
+
+# 4. Nach dem Code-Update: Baseline (Konfiguration und Rechte der Anwendung, z. B. als www-data oder root)
+php web/scripts/history_baseline-cli.php --dry-run
+php web/scripts/history_baseline-cli.php --apply
+php web/scripts/history_baseline-cli.php --check     # Exit 0 = alle Zonen haben einen History-Head
+```
+
+- **Preflight:** MariaDB ab 10.6 (atomares DDL), Datenbank und Fachtabellen vorhanden, `zones.id` vom Typ `int(11)`.
+  Danach werden **alle vier** History-Tabellen vollständig gegen die Erwartung aus `web/inc/app/SchemaCheck.php`
+  geprüft (Tabellenart, Engine, Spalten mit Typ, NULL, Standardwert, Zeichensatz und Sortierung, Indizes,
+  Fremdschlüssel mit Regeln, CHECK-Bedingungen mit Name und normalisiertem Ausdruck) – **bevor** eine DDL-Anweisung ausgeführt wird. Weicht eine
+  vorhandene Tabelle ab, bricht das Skript **ohne Änderung** ab (Exit 2) und nennt die erste Abweichung.
+- **Nachprüfung:** alle vier Tabellen exakt wie erwartet; Zeilenzahl bereits vorhandener History-Tabellen unverändert.
+  Die Prüfsummen der Fachtabellen (`CHECKSUM TABLE … EXTENDED`) werden vorher und nachher verglichen und nur
+  **informativ** ausgegeben: Die Migration schreibt keine Fachtabellen; eine Abweichung im laufenden Betrieb stammt von
+  einem unabhängigen Schreibvorgang (Oberfläche, DynDNS, Publish) und wird nicht der Migration zugerechnet.
+- **Baseline:** je Zone ohne Head eine Revision `baseline` mit Status `baseline_unverified`, unter dem Advisory-Lock
+  `dnsmanager_publish_all` (Try-Lock; belegt ⇒ Abbruch ohne Änderung, Exit 2) und je Zone in einer eigenen Transaktion
+  unter der Zonensperre. Es wird **keine** frühere Historie konstruiert und **kein** Veröffentlichungsstand angenommen:
+  Ein ausstehender Stand (`zones.changed ≠ 0`) bleibt ausstehend. Fachdaten, Serials, `changed`, `bind_dirty` und
+  Agenten bleiben unverändert.
+
+### Wiederanlauf
+
+- Die Migration ist wiederholbar. Sind alle vier Tabellen korrekt vorhanden, meldet `--apply` „Nichts zu tun“ (Exit 0).
+- **Technischer Abbruch während der DDL** (Exit 3): Jede `CREATE TABLE`-Anweisung ist für sich atomar; bereits
+  angelegte Tabellen bleiben bestehen. Das Skript erneut ausführen: Der Preflight prüft die vorhandenen Tabellen
+  vollständig und legt nur die fehlenden an (deterministisch, Ausgabe „Wiederanlauf: …“).
+- Wurde eine Tabelle außerhalb des Skripts abweichend angelegt (Exit 2), zuerst klären; das Skript ändert vorhandene
+  Tabellen bewusst nicht.
+- Baseline: Ein Abbruch rollt die laufende Zone vollständig zurück; abgeschlossene Zonen bleiben. Ein erneuter Lauf
+  überspringt Zonen mit Head und setzt fort.
+
+### Rückweg
+
+**Ein Code-Rollback löscht keine History-Daten.** Das neue Schema bleibt bei einer Rückkehr zum bisherigen
+Anwendungscode bestehen: Der alte Code liest und schreibt die History-Tabellen nicht, es gibt keine Fremdschlüssel auf
+Fachtabellen, Sessions bleiben gültig.
+
+1. Code per festem SHA zurücksetzen (`git checkout -q --detach <alter-SHA>`, danach `rev-parse HEAD HEAD^{tree}`).
+2. Funktionsprüfung (Login, Zonen, Publish).
+
+Fachänderungen, die der alte Code nach dem Rollback vornimmt, werden nicht historisiert. Mit der späteren
+Recorder-Integration (H2b) erkennt die Vorher-Prüfung (R-H3) solche Abweichungen als Revision `drift`.
+
+**Entfernen der Tabellen** ist eine **datenverlustbehaftete Sondermaßnahme**: nur nach ausdrücklicher Freigabe, nur
+nach vorheriger vollständiger Sicherung, regulär nur für isolierte Testdatenbanken. Reihenfolge wegen der
+Fremdschlüssel:
+
+```sql
+-- Nur nach Freigabe und Sicherung (mysqldump der Datenbank inkl. History-Tabellen)
+DROP TABLE zone_history_state;
+DROP TABLE zone_revisions;
+DROP TABLE zone_snapshots;
+DROP TABLE history_change_sets;
+```
+
+Danach verweigert ein Code ab H2a den Dienst (503), bis die Migration erneut ausgeführt wurde.

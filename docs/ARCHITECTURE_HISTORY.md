@@ -1,11 +1,14 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 18.11.2026 · Basis `main` = `6e8133c` · Arbeitspaket AP1/H1
+Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2a (Basis `98cd0d5`)
 
 ## 0. Status und Geltung
 
-- **Dieses Dokument beschreibt eine freigegebene Architekturentscheidung, keine Implementierung.** Keine der hier
-  beschriebenen Tabellen, Klassen, Agent-Erweiterungen oder Abläufe existiert im Code mit Stand `6e8133c`.
+- **Dieses Dokument beschreibt eine freigegebene Architekturentscheidung.** Umgesetzt ist bisher nur Meilenstein
+  **H2a** (Abschnitt 5a): die vier History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung,
+  `ZoneStateSnapshot`/`ZoneSnapshotDiff`/`ZoneSnapshotReader` und die Baseline-Initialisierung. Alle übrigen hier
+  beschriebenen Tabellen, Klassen, Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere schreibt
+  kein Fachpfad Historie (H2b) und es gibt kein Publish-Journal (H2d).
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -115,6 +118,67 @@ Grundsätze:
 | `zone_server_verification` | geladener Stand (L3, nach AS) | zone_id, server_id, observed_serial, observed_at, method |
 
 `record_key` ist der Inhaltsschlüssel `(name, type, content)`, nie die Record-ID.
+
+## 5a. Festlegungen H2a (umgesetzt)
+
+**Umfang (E18):** Migration 002 legt nur `history_change_sets`, `zone_snapshots`, `zone_revisions` und
+`zone_history_state` an. `history_dependencies` folgt mit H2b, `audit_events` mit H2c, das Publish-Journal mit H2d,
+`zone_server_verification` mit AS – jeweils mit eigener Migration. Keine Serial-Spalten (E15/E16 bleiben offen).
+
+**Tabellen (E19, E20)** – maßgeblich sind `sql/migrations/002_history_foundation.sql` und die Strukturerwartung in
+`web/inc/app/SchemaCheck.php`:
+
+| Tabelle | Festlegung |
+|---|---|
+| `history_change_sets` | `id` BIGINT UNSIGNED; `created_at` DATETIME(6); `operation` VARCHAR(64) ascii; `actor_type` ENUM(user, dyndns_account, system); `actor_user_id`, `actor_dyndns_account_id` INT NULL; `actor_label` VARCHAR(64) NULL; `channel` VARCHAR(16) ascii; `correlation_id` CHAR(36) NULL; CHECK Akteurart ↔ Akteurfelder (DynDNS-Konto ohne Label, §16); IDX `created_at`, `(actor_user_id, created_at)`, `correlation_id` |
+| `zone_snapshots` | PK `content_hash` CHAR(64) ascii_bin (= `content_hash` aus Abschnitt 3; eine separate `snapshot_hash`-Spalte entfällt); `contract`; `payload` LONGTEXT utf8mb4_bin mit CHECK `JSON_VALID`; `record_count` INT UNSIGNED; CHECK Hashformat |
+| `zone_revisions` | `id` BIGINT UNSIGNED; `zone_id` INT (Typ von `zones.id`, ohne FK); `zone_name`; `revision_no` INT UNSIGNED ≥ 1; FK `change_set_id`, FK `content_hash` → `zone_snapshots`; `kind` ENUM(baseline, create, change, discard, restore, delete, drift); `source_revision_no`; `diff_summary` (JSON, nur Feldnamen und Zähler); UNIQUE `(zone_id, revision_no)` |
+| `zone_history_state` | PK `zone_id`; `head_revision_no`, `head_hash`; `tracking` ENUM(tracked, baseline_unverified); `deleted_at`; FK `(zone_id, head_revision_no, head_hash)` → `zone_revisions (zone_id, revision_no, content_hash)`: Head und Hash sind damit konsistent erzwungen |
+
+Fremdschlüssel nur innerhalb der Historie, alle `RESTRICT`; keine Fremdschlüssel auf Fachtabellen.
+
+**Snapshot-Vertrag `zs1` (E21)** – `ZoneStateSnapshot`, rein:
+- Kanonisches JSON mit fester Schlüsselreihenfolge: `contract`; `zone` (`name`, `type`, `ttl`, `prefix_length`,
+  `soa_ns`, `soa_mail`, `soa_refresh`, `soa_retry`, `soa_expire`, `soa_minimum`); `servers` als Paare
+  `[server_id, is_master]` aufsteigend; `records` als Tupel `[name, type, content, ttl, server_id]`.
+- `json_encode` mit `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, ohne Leerraum; `content_hash` = SHA-256 (hex,
+  klein) über die Payload-Bytes.
+- Records als Multimenge (Duplikate bleiben), Sortierung nach Bytes über `name`, `type`, `content`, dann `ttl` und
+  `server_id` (NULL zuerst). Werte wie gespeichert (kein Trimmen, keine Änderung der Schreibweise); NULL, "" und 0
+  unterscheidbar; Ganzzahlen streng geprüft; ungültiges UTF-8 ist ein Fehler.
+- Whitelist: nur die genannten Felder. Nicht enthalten sind Zonen-ID (Deduplizierung), `soa_serial`, `changed`,
+  `created_at`, Beschreibung, `allow_dyndns`, Record-IDs, Servernamen und -adressen, DynDNS-Bezug.
+- `fromPayload()` akzeptiert nur exakt kanonische Payloads. Der Vertrag ist über einen eingefrorenen Testvektor
+  gesichert; jede Änderung erfordert eine neue Kennung.
+
+**Diff (E22)** – `ZoneSnapshotDiff`, rein: Zonenfelder, Serverzuweisung (hinzugefügt, entfernt, Master geändert) und
+Records über den Inhaltsschlüssel `(name, type, content)` als Multimenge: zuerst exakt gleiche Einträge paarweise
+entfernt, verbleibende Einträge desselben Schlüssels in kanonischer Reihenfolge als `changed` (TTL/Serverbezug)
+zugeordnet, Überschuss als `added`/`removed`. Deterministisch; `summary()` nur mit Feldnamen und Zählern.
+
+**Leser (E23)** – `ZoneSnapshotReader::lockAndRead()`: nur in offener Transaktion; `zones … FOR UPDATE`, danach
+Serverzuweisung und Records ausschließlich sperrend (`LOCK IN SHARE MODE`). Sperrende Lesevorgänge erzeugen keinen
+Read-View und sehen den neuesten bestätigten Stand; das Ergebnis ist unter REPEATABLE READ mit
+`innodb_snapshot_isolation = 1` und unter READ COMMITTED gleich, Fehler 1020 kann aus ihnen nicht entstehen.
+
+**Baseline (E24)** – `HistoryBaselineService` und `web/scripts/history_baseline-cli.php` (`--check`, `--dry-run`,
+`--apply`): Schema fail-closed → Advisory-Try-Lock `dnsmanager_publish_all` → je Zone (aufsteigend) eigene Transaktion:
+`zones` X → Snapshot sperrend lesen → `zone_history_state` nicht sperrend lesen (nur unter der Zonensperre geändert;
+keine Gap-Sperre auf fehlende Zeilen) → vorhandener Head: überspringen; Revisionen ohne Head: Abbruch → Snapshot
+inhaltsadressiert speichern (vorhandener Payload muss byte-identisch sein) → Änderungsmenge `migration.baseline`
+(Akteur `system`, Kanal `cli`, Lauf-UUID als `correlation_id`) → Revision 1 `baseline` → Head `baseline_unverified` →
+Commit. Keine Schreibvorgänge an Fachtabellen, Serials, `changed`, `bind_dirty` oder Agenten; ein ausstehender Stand
+bleibt ausstehend. Abbruch rollt die laufende Zone vollständig zurück; ein erneuter Lauf setzt fort.
+
+**SchemaCheck (E25)** – prüft zusätzlich die vier Tabellen vollständig (Tabellenart, Engine, Spalten, Indizes,
+Fremdschlüssel, CHECK-Bedingungen mit normalisiertem Ausdruck) und ist fail-closed für Login und Session-Revalidierung. Dieselbe
+Erwartung nutzt das Migrationsskript; es gibt nur eine Definition.
+
+**Migration (E26, E27, E28)** – siehe `sql/migrations/README.md`: vollständiger Struktur-Preflight aller vorhandenen
+History-Tabellen vor der ersten DDL (Abweichung ⇒ Exit 2 ohne Änderung); technischer Abbruch während der DDL ⇒ Exit 3,
+angelegte Tabellen bleiben, Wiederanlauf deterministisch. Ein Code-Rollback löscht keine History-Daten; `DROP TABLE` nur
+als freigegebene, datenverlustbehaftete Sondermaßnahme mit Sicherung. Reihenfolge: Migration → Code → Baseline (die
+Initialisierungs-CLI ist Teil des Codes; H2a nutzt die Historie zur Laufzeit nicht).
 
 ## 6. Atomare History-Erfassung
 
@@ -304,7 +368,9 @@ Vorschau aller betroffenen Zonen und Änderungen, Berechtigung für alle Zonen.
 
 1. Migration `sql/migrations/002_…` mit Skript nach dem Muster von 001 (Preflight, Sicherung, `--check`,
    wiederholbar). Reihenfolge: Migration → Initialisierung → Code. `SchemaCheck` wird um die neuen Tabellen erweitert
-   (fail-closed).
+   (fail-closed). **Umgesetzt in H2a (Abschnitt 5a, E28):** Migration → Code → Initialisierung, weil die
+   Initialisierungs-CLI Teil des Codes ist; gleichwertig, da H2a die Historie zur Laufzeit nicht nutzt. Vor dem
+   Ausrollen von H2b muss die Initialisierung abgeschlossen sein (oder der Recorder legt die Baseline lazy an, Punkt 4).
 2. Initialisierung per CLI unter dem Advisory-Lock: je Zone Revision `baseline` (`migration.baseline`, Akteur
    `system`), `tracking = baseline_unverified`, alle Ziele `never_confirmed`. **Keine** konstruierte frühere Historie,
    **kein** angenommener Veröffentlichungsstand.
@@ -352,7 +418,7 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | MS | Inhalt | Abnahmekriterien |
 |---|---|---|
 | **H1** | Bestandsaufnahme, Architektur (dieses Dokument) | Freigabe 18.11.2026; Merge dieses Dokuments |
-| **H2a** | Schema, Migration 002 mit Skript, `SchemaCheck`, `ZoneStateSnapshot`, Baseline-CLI | Migration wiederholbar inkl. `--check`; alter Code mit neuem Schema lauffähig; Web-Golden identisch; keine Laufzeitänderung |
+| **H2a** | Schema, Migration 002 mit Skript, `SchemaCheck`, `ZoneStateSnapshot`, Baseline-CLI – **umgesetzt** (Abschnitt 5a, Tests `tests/history`) | Migration wiederholbar inkl. `--check`; alter Code mit neuem Schema lauffähig; Web-Golden identisch; keine Laufzeitänderung |
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung | keine Geheimnisse (Suchtest); atomar mit Fachänderung |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
@@ -398,6 +464,17 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E14 | Discard bei Server-, Zuweisungs- und DynDNS-Änderungen gesperrt | freigegeben (H1) |
 | E15/E16 | Serial-Strategie und Migration der Spalte `zones.soa_serial` | **offen** (Meilenstein AS); festgelegt ist nur die Anforderung, 32-Bit-Serials ohne Vorzeichen zu unterstützen (H2a berücksichtigt sie) |
 | E17 | L3 über autoritative SOA-Abfrage an den lokalen BIND, keine sudoers-Erweiterung | entschieden 18.11.2026 |
+| E18 | Migration 002 nur mit den vier Grundtabellen; weitere Tabellen in den zugehörigen Meilensteinen | freigegeben (H2a) |
+| E19 | Spaltentypen der Grundtabellen (Abschnitt 5a), keine FKs auf Fachtabellen | freigegeben (H2a) |
+| E20 | `content_hash` als Primärschlüssel der Snapshots, keine separate `snapshot_hash`-Spalte | freigegeben (H2a) |
+| E21 | Snapshot-Vertrag `zs1` | freigegeben (H2a) |
+| E22 | Diff über Inhaltsschlüssel als Multimenge | freigegeben (H2a) |
+| E23 | Snapshot-Leser mit ausschließlich sperrenden Lesevorgängen nach `zones` X | freigegeben (H2a) |
+| E24 | Baseline-CLI: Try-Lock, je Zone eigene Transaktion, wiederholbar, ohne angenommenen Veröffentlichungsstand | freigegeben (H2a) |
+| E25 | `SchemaCheck` prüft die Grundtabellen vollständig, fail-closed für Login | freigegeben (H2a) |
+| E26 | Migrationsskript: vollständiger Struktur-Preflight vor der ersten DDL; technischer Abbruch mit deterministischem Wiederanlauf | freigegeben (H2a, mit Präzisierung) |
+| E27 | Rückweg: Code-Rollback ohne Löschen der History-Daten; `DROP TABLE` nur als freigegebene Sondermaßnahme | freigegeben (H2a, mit Präzisierung) |
+| E28 | ns1: Migration und Baseline nach isolierten Tests, mit Sicherung und Rückweg; ns2 unverändert | freigegeben (H2a) |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes; Umfang `audit_events` (H2c);
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des
@@ -409,3 +486,5 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 |---|---|
 | 18.11.2026 | Erstfassung nach Abschluss AP1/H1 (Bestandsaufnahme, Review-Nachträge, lesende Inspektion ns1/ns2, Entscheidungen E8, E10, E17; zu E15/E16 nur die 32-Bit-Anforderung, Strategie und Spaltenmigration offen für AS) |
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
+| 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
+| 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |

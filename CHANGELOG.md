@@ -4,6 +4,21 @@ Alle Änderungen am Projekt werden in diesem Dokument nach semantischer Versioni
 
 ## [Unreleased]
 
+### Added
+- Änderungshistorie, Meilenstein H2a (Grundlagen, noch ohne Erfassung in den Schreibpfaden):
+  - Migration 002 (`sql/migrations/002_history_foundation.sql`, `scripts/migrate_002_history_foundation.sh`) mit den
+    Tabellen `history_change_sets`, `zone_snapshots`, `zone_revisions`, `zone_history_state`; vollständiger
+    Struktur-Preflight vor der ersten DDL, Sicherung, Prüfmodus, deterministischer Wiederanlauf
+  - kanonische, versionierte Zonen-Snapshots (Vertrag `zs1`, SHA-256) und Diff nach Inhaltsschlüssel
+  - Baseline-Initialisierung bestehender Zonen (`web/scripts/history_baseline-cli.php`): je Zone eine Revision
+    `baseline` mit Status `baseline_unverified`, ohne konstruierte Historie und ohne angenommenen Veröffentlichungsstand
+  - Tests unter `tests/history`
+
+### Changed
+- `SchemaCheck` prüft zusätzlich die History-Grundtabellen vollständig; ohne Migration 002 antworten Login und
+  geschützte Seiten mit HTTP 503 (fail-closed). Reihenfolge beim Update: Migration 002 vor dem Code
+- Hinweis im Log `event=schema_incompatible` nennt die Migrationen 001 und 002
+
 ## [1.2.5] – 2026-10-17
 
 Stabilitäts- und Sicherheitsrelease: Das Veröffentlichen (Publish) und die Synchronisation mit den BIND-Agenten wurden

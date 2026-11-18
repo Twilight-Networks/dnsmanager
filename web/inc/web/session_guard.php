@@ -67,7 +67,7 @@ function session_guard_require_schema(PDO $pdo): void
 function session_guard_schema_failed(array $problems): never
 {
     appLog('error', 'event=schema_incompatible detail=' . implode('; ', $problems)
-        . ' hinweis=Migration sql/migrations/001 vor dem Code ausrollen', true);
+        . ' hinweis=Migrationen sql/migrations (001, 002) vor dem Code ausrollen', true);
     http_response_code(503);
     exit('Dienst vorübergehend nicht verfügbar.');
 }
