@@ -8,7 +8,8 @@
  * Aufruf (als root auf dem Testsystem): php journal_test.php <App-Verzeichnis> <RR|RC> [<Basis-App-Verzeichnis>]
  *   H2D_ONLY=P,O,…  beschränkt auf Abschnitte; H2D_SLOW=0 überspringt Fälle mit Zeitüberschreitung (je ~35 s).
  *
- * Abschnitte: K Constraints · P Pfade und Hash-Verträge · O Ergebnis je Endpunkt · F Fehlerinjektion · J Ledger und J4a ·
+ * Abschnitte: K Constraints · P Pfade und Hash-Verträge · O Ergebnis je Endpunkt · F Fehlerinjektion · S Backend-Bindung ·
+ *             J Ledger und J4a ·
  *             L Lebendigkeit, Verbindungsabbruch, Prozessende, Verbindungs-ID-Wiederverwendung · N Nebenläufigkeit ·
  *             R Reaktivierung (E70) · X Stresslauf mit Invarianten · B Byte-Gleichheit der Zonendateien mit dem Basis-Commit
  * Schutz (Q1): /etc/bind/zones wird vorher und nachher byte-genau verglichen (Z01).
@@ -352,6 +353,37 @@ if ($run('F')) {
     T::eq(['warning', 0, 1, true], [$rep['status'], count(preg_grep('/zone_cleanup/', J::agentCalls())), J::flags($p)['bind_dirty'], str_contains(implode(' ', $rep['cleanup']['errors']), 'Publish-Journal')],
         'F09', 'Cleanup-Registrierung gescheitert: kein zone_cleanup, Cleanup-Warnung, bind_dirty = 1 (E66)');
     $clean($p, 'F09');
+}
+
+/* ================================================================ S Backend-Bindung (Review S1) */
+if ($run('S')) {
+    T::section('S Fehlschlagende Backend-Bindung: Lauf abgeschlossen, Laufsperre frei, Verbindung weiter nutzbar (Review S1)');
+    $p = J::reset();
+    $p->exec('UPDATE system_status SET bind_dirty = 1 WHERE id = 1');
+    $flags = J::flags($p);
+    $sum = H2b::businessSum($p);
+    $db = (string)H2b::one($p, 'SELECT DATABASE()');
+    $failing = new JFailingBindBackend(new LegacyBindPublishBackend($p, J::client()));
+    $rep = J::report(J::service($p, $failing)->publishAll(H2b::admin()));
+    $r1 = J::runs($p)[0] ?? [];
+    T::eq(['exception', true, 'untouched', 1, $flags, $sum, 0],
+        [$rep['status'], str_contains((string)$rep['exception'], 'Publish-Journal: Bindung an das Backend fehlgeschlagen'), $rep['flags']['outcome'], $failing->bindAttempts, J::flags($p), H2b::businessSum($p), count(J::agentCalls())],
+        'S01', 'Publish All: Bindung scheitert ⇒ exception ohne Flag-Änderung und ohne Agentaufruf');
+    T::eq(['finished', 'exception', null], [$r1['status'] ?? null, $r1['result'] ?? null, H2b::one($p, 'SELECT IS_USED_LOCK(?)', [PublishLedger::runLockName($db, (int)($r1['id'] ?? 0))])],
+        'S02', 'registrierter Lauf abgeschlossen (exception), laufeigene Sperre auf derselben Verbindung freigegeben');
+    T::ok(J::locksFree($p) && !H2b::hasOpenTrx($p) && !(new PublishJournalReader($p))->runAlive((int)$r1['id']), 'S03', 'keine Sperre, keine Transaktion, Lauf nicht lebendig');
+    $rz = J::report(J::service($p, $failing)->publishZone(2));
+    $r2 = J::runs($p)[1] ?? [];
+    T::eq(['exception', '2:1', 'finished', 'exception', null], [$rz['status'], J::flags($p)['changed'][1], $r2['status'] ?? null, $r2['result'] ?? null,
+        H2b::one($p, 'SELECT IS_USED_LOCK(?)', [PublishLedger::runLockName($db, (int)($r2['id'] ?? 0))])], 'S04', 'Publish Zone: ebenso, changed unverändert, Laufsperre frei');
+    // Derselbe PDO-Handle ist danach uneingeschränkt nutzbar
+    $rep = J::publishAll($p);
+    $r3 = J::runs($p)[2] ?? [];
+    T::eq(['success', 'finished', 'success', '1', 0], [$rep['status'], $r3['status'] ?? null, $r3['result'] ?? null, (string)($r3['full_rebuild'] ?? ''), J::flags($p)['bind_dirty']],
+        'S05', 'auf derselben PDO-Verbindung danach ein vollständiger Publish-Lauf möglich');
+    $rz = J::report(J::service($p)->publishZone(2));
+    T::ok(in_array($rz['status'], ['published', 'already_published'], true) && J::locksFree($p), 'S06', 'ebenso Publish Zone; danach alle Sperren frei');
+    $clean($p, 'S06');
 }
 
 /* ================================================================ J Ledger und J4a */

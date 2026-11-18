@@ -41,6 +41,7 @@ final class J
         define('CURL_SSL_VERIFYPEER', false);
         define('CURL_SSL_VERIFYHOST', 0);
         require_once "$app/web/inc/deploy/LegacyBindPublishBackend.php";
+        require_once __DIR__ . '/journal_failing_backend.php';
         register_shutdown_function([self::class, 'shutdown']);
         self::startAgents($app);
     }

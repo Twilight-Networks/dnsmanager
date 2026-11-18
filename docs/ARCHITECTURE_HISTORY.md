@@ -406,7 +406,9 @@ Publish-, keine Fachtransaktion; Fachservices erhalten nie ein Token und kennen 
 `bind_dirty` und `zone_servers` halten ihn) → J1 → laufeigene Sperre → erst dann Übernahme von `bind_dirty`/`changed`.
 Scheitert J6 oder J1: bestehender Status `exception` („Publish-Journal: …“), keine Flag-Änderung, kein Backend-Aufruf.
 Der übernommene Full-Rebuild-Zustand muss der Registrierung entsprechen (sonst Exception mit bestehendem
-Wiederherstellungspfad).
+Wiederherstellungspfad). Scheitert nach der Registrierung die Bindung an das Backend (`bindJournal`), schließt
+`openJournal()` den Lauf mit `exception` ab und gibt seine laufeigene Sperre frei, bevor der Abbruch wie bei J1 erfolgt;
+auf derselben Verbindung bleibt keine Laufsperre zurück (Review S1, Tests S01–S06, Mutationsprobe MJ15).
 
 **Versuch atomar mit der Serial (E59)** – `generate_zone_file()` ruft im Modus `publish` nach `named-checkzone` und vor dem
 Serial-Update den Journal-Hook auf (statisch R13). Der Ledger liest in derselben Transaktion nach der Zonensperre
@@ -507,7 +509,10 @@ Agenten sind damit als ausstehend dokumentiert (PR-Bericht).
 **Tests (E73)** – `tests/history`: `journal_pure_test.php` (rh1-Vektor, Einordnung, Bereinigung, Lese-Regeln),
 `journal_test.php` (RR/RC: K Constraints, P Pfade/Hashes/Akteurskontext, O Endpunkte, F Fehlerinjektion, J Ledger/J4a,
 L Lebendigkeit, N Nebenläufigkeit, R Reaktivierung, X Stress, B Byte-Gleichheit, Z Schutz), `migration005_test.sh`,
-statisch R10–R14, Mutationsproben MJ01–MJ14; Web-Golden mit Reset der Journaltabellen.
+statisch R10–R14, Mutationsproben MJ01–MJ15; Web-Golden mit Reset der Journaltabellen. Die einzige informative
+Web-Golden-Abweichung (`page/admin/system_health`) besteht ausschließlich aus den Dateirechte-Zeilen der sechs neuen
+Dateien unter `web/inc/app/publish/` (Rechteprüfung der Testkopie) und dem entsprechend erhöhten Fehlerzähler; ohne sie
+ist der normalisierte Seiteninhalt byte-identisch zur Basis (Review S2).
 
 ## 6. Atomare History-Erfassung
 

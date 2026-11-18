@@ -820,8 +820,26 @@ final class PublishService
         } catch (Throwable $e) {
             throw new RuntimeException('Publish-Journal: ' . $e->getMessage(), 0, $e);
         }
-        $journal = new PublishJournal($ledger, $run, $this->logger);
-        $this->backend->bindJournal($journal);
+        // Review S1: Scheitert die Bindung an das Backend, erhält der Aufrufer kein Lauf-Token. Der bereits registrierte
+        // Lauf wird deshalb hier abgeschlossen (exception) und seine laufeigene Sperre auf dieser – ggf. weiterverwendeten –
+        // Verbindung freigegeben; danach Abbruch wie J1 ohne Seiteneffekt.
+        try {
+            $journal = new PublishJournal($ledger, $run, $this->logger);
+            $this->backend->bindJournal($journal);
+        } catch (Throwable $e) {
+            try {
+                $ledger->finishRun($run, 'exception');
+            } catch (Throwable $finishError) {
+                // Lauf bleibt running; ohne Laufsperre nicht lebendig (J5 unknown), J6 markiert ihn später abandoned
+            }
+            $ledger->releaseRunLock($run);
+            try {
+                $this->backend->bindJournal(null);
+            } catch (Throwable $unbindError) {
+                // Bindung endet spätestens mit dem Backend
+            }
+            throw new RuntimeException('Publish-Journal: Bindung an das Backend fehlgeschlagen: ' . $e->getMessage(), 0, $e);
+        }
 
         return $journal;
     }

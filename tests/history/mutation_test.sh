@@ -113,5 +113,7 @@ mutate MJ12 "$DI" $'    if ($journal !== null && (!is_string($zone_bytes) || !ha
 mutate MJ13 "$PL" "            \$kind, \$requestedZoneId, \$fullRebuild ? 1 : 0, \$connectionId, (int)\$row['w'], \$ctx->actorType," "            \$kind, \$requestedZoneId, \$fullRebuild ? 1 : 0, \$connectionId, 0, \$ctx->actorType," RR J:P,R 'Wasserstand der Reaktivierung falsch (E70)'
 mutate MJ14 "$PL" $'        $stmt = $this->pdo->prepare(\'SELECT GET_LOCK(?, 0)\');\n        $stmt->execute([$lock]);' $'        $stmt = $this->pdo->prepare(\'SELECT 1\');\n        $stmt->execute([]);' RR J:L 'Lauf ohne laufeigene Sperre (Identität nicht nachweisbar)'
 
+mutate MJ15 "$PS" $'            $ledger->releaseRunLock($run);\n            try {\n                $this->backend->bindJournal(null);' $'            try {\n                $this->backend->bindJournal(null);' RR J:S 'Laufsperre nach gescheiterter Backend-Bindung nicht freigegeben (Review S1)'
+
 echo "ERGEBNIS mutation: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" = 0 ]
