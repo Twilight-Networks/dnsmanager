@@ -162,6 +162,39 @@ function zone_name_is_safe(string $name): bool
 }
 
 /**
+ * Inhalt einer Zonendatei (AP1/H2d, E60): reine Funktion ohne Datei- oder Datenbankzugriff, aus generate_zone_file()
+ * herausgelöst, Bytes unverändert. Mit der Dezimal-Serial ergibt sie die verteilte Datei (file_hash), mit dem
+ * Platzhalter PublishHashContract::SERIAL_PLACEHOLDER das maskierte Rendering des Vertrags rh1 (render_hash).
+ *
+ * @param array  $zone    Zonenzeile (name, ttl, soa_ns, soa_mail, soa_refresh, soa_retry, soa_expire, soa_minimum)
+ * @param array  $records Recordzeilen in der Reihenfolge des Generators
+ * @param string $serial  Serial (Dezimalzahl) bzw. Platzhalter
+ */
+function zone_file_render(array $zone, array $records, string $serial): string
+{
+    $zone_name = (string)$zone['name'];
+    $content = <<<ZONE
+\$TTL {$zone['ttl']}
+@   IN  SOA {$zone['soa_ns']} {$zone['soa_mail']} (
+            $serial   ; Serial
+            {$zone['soa_refresh']}      ; Refresh
+            {$zone['soa_retry']}        ; Retry
+            {$zone['soa_expire']}       ; Expire
+            {$zone['soa_minimum']} )    ; Minimum
+
+ZONE;
+
+    // Alle Records einfügen; je RRset einheitlich die niedrigste effektive TTL (RFC 2181 §5.2), unabhängig von der
+    // Reihenfolge der Records. Gespeicherte Werte bleiben unverändert.
+    $rrset_ttls = zone_file_rrset_ttls($records, $zone['ttl'], $zone_name);
+    foreach ($records as $r) {
+        $content .= zone_file_record_line(zone_file_record_with_rrset_ttl($r, $rrset_ttls, $zone['ttl'], $zone_name), $zone['ttl']) . "\n";
+    }
+
+    return $content;
+}
+
+/**
  * Erzeugt eine Zonendatei (db.<zone>) im angegebenen Zielverzeichnis und validiert sie mit named-checkzone.
  *
  * Verhalten:
@@ -185,11 +218,19 @@ function zone_name_is_safe(string $name): bool
  * @param string $output_dir Zielverzeichnis für die erzeugte Datei (eigenes Arbeitsverzeichnis, BindWorkDir)
  * @param string $mode 'validate' (nur prüfen) oder 'publish' (für Verteilung)
  * @param PDO $pdo Datenbankverbindung des Aufrufers (explizit, keine globale Verbindung)
- * @return array Assoziatives Ergebnis mit 'status', 'path', 'output' und optional 'errors'
+ * @param callable|null $journal AP1/H2d (J2): nur im Modus 'publish'. Wird nach erfolgreichem named-checkzone in der
+ *        offenen Transaktion unter der Zonensperre und VOR dem Serial-Update aufgerufen mit
+ *        ['zone' => Zonenzeile, 'records' => Recordzeilen, 'serial' => int, 'file' => Datei-Bytes,
+ *         'render' => callable(string $serial): string]; der Rückgabewert steht im Ergebnis unter 'journal'.
+ *        Eine Exception führt zu Rollback, Löschen der Datei und status 'error' (keine Serial verbraucht).
+ * @return array Assoziatives Ergebnis mit 'status', 'path', 'output', optional 'errors' und 'journal'
  */
-function generate_zone_file(int $zone_id, string $output_dir, string $mode, PDO $pdo): array {
+function generate_zone_file(int $zone_id, string $output_dir, string $mode, PDO $pdo, ?callable $journal = null): array {
     if ($mode !== 'validate' && $mode !== 'publish') {
         throw new InvalidArgumentException("generate_zone_file: unbekannter Modus '$mode'.");
+    }
+    if ($journal !== null && $mode !== 'publish') {
+        throw new InvalidArgumentException('generate_zone_file: Journal nur im Modus publish.');
     }
 
 
@@ -325,24 +366,8 @@ function generate_zone_file(int $zone_id, string $output_dir, string $mode, PDO 
         }
     }
 
-    // Zonendatei-Inhalt aufbauen
-    $content = <<<ZONE
-\$TTL {$zone['ttl']}
-@   IN  SOA {$zone['soa_ns']} {$zone['soa_mail']} (
-            $serial   ; Serial
-            {$zone['soa_refresh']}      ; Refresh
-            {$zone['soa_retry']}        ; Retry
-            {$zone['soa_expire']}       ; Expire
-            {$zone['soa_minimum']} )    ; Minimum
-
-ZONE;
-
-    // Alle Records einfügen; je RRset einheitlich die niedrigste effektive TTL (RFC 2181 §5.2), unabhängig von der
-    // Reihenfolge der Records. Gespeicherte Werte bleiben unverändert.
-    $rrset_ttls = zone_file_rrset_ttls($records, $zone['ttl'], (string)$zone_name);
-    foreach ($records as $r) {
-        $content .= zone_file_record_line(zone_file_record_with_rrset_ttl($r, $rrset_ttls, $zone['ttl'], (string)$zone_name), $zone['ttl']) . "\n";
-    }
+    // Zonendatei-Inhalt aufbauen (reine Funktion zone_file_render, Bytes unverändert; AP1/H2d)
+    $content = zone_file_render($zone, $records, (string)$serial);
 
     // Datei schreiben
     file_put_contents($zone_file_path, $content);
@@ -371,6 +396,37 @@ ZONE;
         ];
     }
 
+    // AP1/H2d (J2): Versuch und Zielzeilen in derselben Transaktion VOR dem Serial-Commit registrieren.
+    // Scheitert die Registrierung: Rollback, Datei löschen, keine Serial, kein Agentaufruf (Zone bleibt ausstehend).
+    $journal_info = null;
+    if ($journal !== null) {
+        try {
+            $journal_info = $journal([
+                'zone'    => $zone,
+                'records' => $records,
+                'serial'  => (int)$serial,
+                'file'    => $content,
+                'render'  => static fn (string $s): string => zone_file_render($zone, $records, $s),
+            ]);
+        } catch (Throwable $e) {
+            try {
+                if ($tx_started && $pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+            } catch (Throwable $rollbackError) {
+                // Transaktion bereits vom Server beendet (z. B. Fehler 1020/1213)
+            }
+            if (is_file($zone_file_path)) {
+                unlink($zone_file_path);
+            }
+            return [
+                'status' => 'error',
+                'output' => "Publish-Journal: Versuch für $zone_name konnte nicht registriert werden: " . $e->getMessage(),
+                'errors' => ["Journal: " . $e->getMessage()],
+            ];
+        }
+    }
+
     // Serialnummer nur bei publish aktualisieren
     if ($mode === 'publish') {
         try {
@@ -392,11 +448,16 @@ ZONE;
         }
     }
 
-    return [
+    $result = [
         'status' => 'ok',
         'path' => $zone_file_path,
         'output' => trim($check_output)
     ];
+    if ($journal_info !== null) {
+        $result['journal'] = $journal_info;
+    }
+
+    return $result;
 }
 
 /**

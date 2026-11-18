@@ -1,6 +1,6 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2c (Basis `d595180`)
+Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`)
 
 ## 0. Status und Geltung
 
@@ -9,8 +9,9 @@ Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meile
   `ZoneStateSnapshot`/`ZoneSnapshotDiff`/`ZoneSnapshotReader`, Baseline-Initialisierung) und **H2b** (Abschnitt 5b:
   `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden, Drift, Lazy-Baseline, Zonenlöschung,
   `history_dependencies` mit Migration 003) und **H2c** (Abschnitt 5c: `audit_events` mit Migration 004,
-  `AuditPolicy`/`AuditRecorder` in allen Verwaltungspfaden). Alle übrigen hier beschriebenen Tabellen, Klassen,
-  Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere gibt es kein Publish-Journal (H2d).
+  `AuditPolicy`/`AuditRecorder` in allen Verwaltungspfaden) und **H2d** (Abschnitt 5d: Publish-Journal mit Migration 005,
+  `PublishLedger`, Hash-Verträge, strukturierte Zielergebnisse). Alle übrigen hier beschriebenen Tabellen, Klassen,
+  Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere gibt es kein Agent-Fencing (AS).
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -376,6 +377,138 @@ nur bei einem Programmfehler (doppeltes `seq`).
 **Tests (E54)** – `tests/history/audit_test.php` (RR und RC), `migration004_test.sh`, statischer Nachweis R05–R09 in
 `static_rh8_test.php`, Mutationsproben MA01–MA13; Einzelheiten `tests/history/README.md`.
 
+## 5d. Festlegungen H2d (umgesetzt)
+
+**Umfang (E55)** – Migration 005 legt nur `publish_runs`, `zone_publish_attempts`, `zone_publish_targets` und
+`publish_cleanup_results` an. Nicht enthalten: `zone_server_verification` und Agent-Verifikationsfelder (Agent-Serial,
+Agent-Dateihash, Reload-Ergebnis; Q6 – erst mit AS). Keine Agent- oder Protokolländerung, kein Eingriff in
+`generate_next_serial()` oder `zones.soa_serial` (E15/E16 bleiben offen). `deployments` bleibt unberührt.
+
+**Tabellen (E56)** – maßgeblich `sql/migrations/005_publish_journal.sql` und `SchemaCheck` (NULL-sichere CHECKs wie E45,
+Fremdschlüssel nur innerhalb von Historie und Journal, `RESTRICT`, append-only):
+
+| Tabelle | Festlegung |
+|---|---|
+| `publish_runs` | `id` BIGINT UNSIGNED (künftiger Fencing-Token); `kind` all/zone mit `requested_zone_id`; `full_rebuild`; `connection_id`; `history_watermark` (E70); Akteurskontext `actor_type`, `actor_user_id`, `actor_dyndns_account_id`, `channel`, `correlation_id` (Q2, CHECK wie `history_change_sets`); `started_at`; Lebenszyklus `status` running → finished (mit `result` = Service-Status) bzw. abandoned, `finished_at` |
+| `zone_publish_attempts` | `run_id`; `zone_id`, `zone_name`; `revision_no` und `revision_basis` head/head_mismatch/no_head (FK `(zone_id, revision_no, content_hash)` → `zone_revisions`, bei NULL nicht erzwungen); `content_hash` (zs1), `render_hash` (rh1), `file_hash`, Vertragskennungen; `soa_serial` INT UNSIGNED; `target_count`; `generated_at`; Lebenszyklus `outcome` published/partial/failed bzw. abandoned; UNIQUE `(run_id, zone_id)` |
+| `zone_publish_targets` | PK `(attempt_id, server_id)`; `server_name` zum Zeitpunkt; `agent_protocol` = legacy; je Kanal `zone_sync`/`conf_sync` sending → ok/failed/rejected/unknown bzw. abandoned mit Zeitpunkt, HTTP-Status, Fehlercode und bereinigtem Fehlertext (≤ 500 Zeichen); `conf_hash` |
+| `publish_cleanup_results` | PK `(run_id, server_id)`; `server_name`; `agent_protocol`; `status` sending → ok/partial/failed/rejected/unknown bzw. abandoned; nur Zähler (`valid_zone_count`, `removed_conf_count`, `removed_zone_file_count`, Q5), HTTP-Status, Fehlercode/-text |
+
+**Ledger (E57)** – `PublishLedger` ist der einzige Schreiber der Journaltabellen (statisch R10/R11). Autocommit-Rolle:
+`abandonStale` (J6), `registerRun` (J1), `recordZoneTarget`/`recordConfTarget`/`finishAttempt`/`registerCleanup`/
+`recordCleanup`/`finishRun` (J4) – jede weist eine offene Transaktion ab und verlangt den Publish-Lock dieser Verbindung
+(J6/J1). Transaktionale Rolle: ausschließlich `registerAttempt` (J2), nur in der offenen Generator-Transaktion, nur mit
+einem offenen Lauf-Token desselben Ledgers (`PublishRun`, nur unter dem Lock ausgegeben), nur solange dieselbe
+Verbindung Publish-Lock und Laufsperre hält, nur lesende Anweisungen und INSERTs. Die Generator-Transaktion ist eine
+Publish-, keine Fachtransaktion; Fachservices erhalten nie ein Token und kennen das Journal nicht (R-H9).
+
+**Laufbeginn (E58, Q7)** – Lock → J6 → `bind_dirty` und Wasserstand lesen (unter dem Lock stabil: alle Schreiber von
+`bind_dirty` und `zone_servers` halten ihn) → J1 → laufeigene Sperre → erst dann Übernahme von `bind_dirty`/`changed`.
+Scheitert J6 oder J1: bestehender Status `exception` („Publish-Journal: …“), keine Flag-Änderung, kein Backend-Aufruf.
+Der übernommene Full-Rebuild-Zustand muss der Registrierung entsprechen (sonst Exception mit bestehendem
+Wiederherstellungspfad).
+
+**Versuch atomar mit der Serial (E59)** – `generate_zone_file()` ruft im Modus `publish` nach `named-checkzone` und vor dem
+Serial-Update den Journal-Hook auf (statisch R13). Der Ledger liest in derselben Transaktion nach der Zonensperre
+Zuweisung, Zielserver (`zone_servers ⋈ servers WHERE active = 1`) und Head nicht sperrend (unter RR derselbe Read-View wie
+die gerenderten Zeilen) und legt Versuch und Zielzeilen (beide Kanäle `sending`) an. Fehler ⇒ Rollback, Datei gelöscht,
+keine Serial, kein Agentaufruf, Zone 2 → 1 (bestehender Pfad `generation_failed`). Serial verbraucht ⇔ Versuch registriert;
+eine erzeugte Datei ohne Versuch bricht den Lauf vor der Verteilung ab.
+
+**Hash-Verträge (E60)** – `content_hash` = zs1 aus **genau den gerenderten Zeilen** (nie aus `head_hash`); `file_hash` =
+SHA-256 der geschriebenen und gesendeten Bytes (vor dem Senden geprüft, Abweichung ⇒ keine Übertragung,
+`file_hash_mismatch`); `render_hash` (rh1) = SHA-256 der Ausgabe von `zone_file_render()` mit Platzhalter `@SERIAL@`,
+gleichwertig: in der Datei das einzige Vorkommen von `"\n" + 12 Leerzeichen + Serial + "   ; Serial\n"` maskiert
+(`PublishHashContract`, eingefrorener Vektor mit `sha256sum`); `conf_hash` = SHA-256 der je Server gesendeten
+Konfiguration. `zone_file_render()` ist eine reine, byte-identische Extraktion aus dem Generator (Nachweis gegen den
+Basis-Commit, B01).
+
+**Revisionsbezug (E61)** – `revision_basis = head` nur bei nicht gelöschtem Head mit `head_hash = content_hash`; sonst
+`head_mismatch` bzw. `no_head` ohne Revision. Publish schreibt keine Historie. Ein späterer Head ändert den Versuch nie
+(„Revision N mit Datei X verteilt“, J3/J4a).
+
+**Zielmenge (E62)** – Zone- und Conf-Verteilung beliefern ausschließlich die registrierte Zielmenge (unter dem Lock
+identisch mit der aktuellen). Ein registriertes, nicht mehr aktiv zugewiesenes Ziel (nur bei Invariantenbruch,
+z. B. Lock-Verlust) wird nicht beliefert und als `failed`/`target_changed` eingetragen. Null Ziele ⇒ Versuch `failed`
+(heute fataler Verteilungsfehler, Serial bereits verbraucht).
+
+**Einordnung (E63, Q3)** – `PublishTargetClassifier`, je Endpunkt getestet: `ok` = HTTP 200 mit Agent-JSON `success`;
+`rejected` = Agent-JSON `error` mit HTTP ≠ 200 ohne `rollback = failed` (Bestand unverändert); `failed` = sicher nicht
+zugestellt (TLS-Konfiguration, Namensauflösung, Verbindungsaufbau, TLS-Handshake, lokaler Fehler vor dem Senden);
+`unknown` = Zustellung möglich, Ergebnis unbestimmt (Zeitüberschreitung auch beim Verbindungsaufbau, Abbruch, Antwort
+ohne Agent-JSON, `rollback = failed`); Cleanup zusätzlich `partial` (Fehler mit entfernten Dateien). Fehlertexte ohne
+Steuerzeichen, tokenähnliche Folgen geschwärzt, ≤ 500 Zeichen. Die Einordnung ist reines Journalwissen: die operative
+Auswertung (HTTP 200 = Erfolg), `changed`/`bind_dirty`, Meldungen und Web-Verträge bleiben unverändert (J8).
+
+**Operatives Ergebnis ≠ Bestätigung (E65, Präzisierung 4 der Freigabe)** – `outcome` des Versuchs spiegelt den operativen
+Ausgang von `processZone()` (published/partial/failed); eine Exception lässt ihn offen. `published` bedeutet nur, dass
+alle Agenten operativ mit HTTP 200 geantwortet haben; es ist **keine** L2-/L3-Bestätigung. Vor AS sind alle
+Zielbestätigungen `legacy` (`agent_protocol`): ohne Agent-Serial, Agent-Dateihash oder Reload-Nachweis, die das Journal
+auch nicht ableitet. Ein Ziel mit `unknown`, ohne Bestätigung oder mit einer veralteten Bestätigung (E70) gilt nie als
+synchron, unabhängig vom Gesamtstatus des Versuchs (Test O03: operativ veröffentlicht, Ziel `unknown`).
+
+**J4 (E64, Q4)** – Das Backend meldet jede Agentenantwort unmittelbar nach ihrem Eingang (`PublishJournal`). Schreibfehler
+ändern das operative Ergebnis nicht; sie erscheinen im Bericht unter `journal` (`writeFailures`, `errors`) und je Fehler
+in einer Logzeile „[publish] Journal: …“. Der Vorgang bleibt offen (J5 `unknown`, J6 `abandoned`).
+
+**Cleanup (E66)** – Vor dem ersten `zone_cleanup` werden alle aktiven Server mit einer Anweisung als `sending`
+registriert; scheitert das, wird kein Cleanup ausgeführt (bestehender Weg: Cleanup-Warnung, `bind_dirty = 1`).
+
+**Unveränderlichkeit (E67, Q8)** – nur bedingte Übergänge aus dem offenen Zustand; kein UPDATE berührt
+Registrierungsdaten; kein DELETE; kein DB-Trigger. Nachweis statisch (R12–R12d) und dynamisch (J07–J13).
+
+**J5 und Datenbankneustart (E68, E73, Präzisierung 3 der Freigabe)** – Nach der Registrierung hält die Laufverbindung
+zusätzlich die **laufeigene Advisory-Sperre** `dnsmanager_run_<12 Hex des Datenbanknamens>_<Lauf-ID>`. Lebendig ist ein
+Lauf ausschließlich, wenn er `running` ist und dieselbe Verbindung (`connection_id`) Publish-Lock **und** Laufsperre hält
+(`PublishJournalReader`). Advisory-Sperren enden mit der Verbindung und mit jedem Neustart des Datenbankservers; eine
+nach einem Neustart wiederverwendete Verbindungs-ID hält die Laufsperre nie, weil nur der registrierte Lauf sie bezieht.
+Ist ein Lauf nicht eindeutig lebendig, gilt sein offener Zustand konservativ als `unknown`; J6 markiert ihn später als
+`abandoned` und verweigert die Markierung, solange irgendeine Verbindung seine Laufsperre hält. Kein Heartbeat.
+Nachweise: Verbindungsabbruch per `KILL` (L01), Prozessende per SIGKILL (L02), wiederverwendete Verbindungs-ID mit
+Positivkontrolle und fremder Laufsperre (L03), J6 gegen gehaltene Laufsperre (L04), Zustand ohne Sperren wie nach einem
+Neustart (L05). Ein echter Neustart von MariaDB auf ns1 wurde nicht ausgeführt (installierte Testinstanz); er entspricht
+dem geprüften Zustand „alle Advisory-Sperren frei“.
+
+**Laufabschluss und Wiederanlauf (E69)** – J6 in einer eigenen kurzen Transaktion (Ziele → Cleanup → Versuche → Läufe),
+wiederholbar. Der Lauf wird mit dem Service-Status abgeschlossen; danach Freigabe von Laufsperre und Publish-Lock.
+
+**Reaktivierung ohne Journal-Schreibzugriff aus der Fachtransaktion (E70, Präzisierung von Abschnitt 9)** – Abschnitt 9
+(„Aktivierung setzt alle Zonen des Servers … auf unknown“) wird **abgeleitet**, nicht geschrieben (R-H9): Die
+Reaktivierung ist ein Audit-Ereignis `server`/`update` mit `active` false → true (H2c) und hält den Publish-Lock; jeder
+Lauf speichert `history_watermark` = höchste Änderungsmengen-ID bei seiner Registrierung unter dem Lock. Eine Bestätigung
+ist für einen Server veraltet (`unknown`), wenn eine Reaktivierung dieses Servers eine größere Änderungsmengen-ID hat als
+der Wasserstand ihres Laufs (ohne Uhrzeit; `PublishJournalReader`, Tests R01–R03). Die Anzeige folgt mit H3.
+
+**Abgrenzung AS (E71)** – `publish_runs.id` wird vor dem ersten Agentaufruf dauerhaft vergeben (F5-fähig), aber nicht an
+Agenten gesendet. Keine Fencing-Regeln, keine Protokolländerung, keine L3-Prüfung, kein Abbruch der Verteilung bei
+Lock-Verlust (§ 11 bleibt Restrisiko bis AS).
+
+**Akteurskontext (Präzisierung 2 der Freigabe)** – Publish All: Akteur `user` mit Kanal des Actors (`web`), neue
+Korrelation. DynDNS: derselbe `HistoryContext` wie die Fachänderung (Konto-ID, Kanal `api`, dieselbe Korrelation); bei
+einer reinen Wiederholung ohne Änderung entsteht keine Änderungsmenge, der Lauf trägt nur die Korrelation des Aufrufs.
+`publishZone($zoneId, $lockWaitSeconds = 5, ?HistoryContext $context = null)` bleibt kompatibel; ohne Kontext
+Systemakteur, Kanal `system`.
+
+**Web-Verträge (E72)** – Im Normalfall identisch (Web-Golden gegen den Basis-Commit). Abweichungen nur unter
+Fehlerinjektion: J1/J6 ⇒ `exception`; J2 ⇒ `generation_failed`; Cleanup-Registrierung ⇒ Cleanup-Warnung;
+Datei-Hash-Abweichung bzw. nicht mehr zugewiesenes Ziel ⇒ Verteilungsfehler; J4-Fehler ⇒ zusätzliche Logzeile. Die
+Berichte enthalten additiv `runId` und `journal`; die Verteilfunktionen additiv `targets`, `BindAgentClient` additiv
+`curlErrno`/`tlsConfigError`.
+
+**Testumgebung (Präzisierung 1 der Freigabe, Q1)** – Vollständige Szenarien (Erfolg, Teilerfolg, Abbruch,
+Cleanup-Fehler, Full Rebuild, Zeitüberschreitung, Kill) laufen gegen eine **isolierte Zweiserver-Umgebung**: isolierte
+Datenbank `dnsmgr_t21_*` und zwei Testagenten auf 127.0.0.4/127.0.0.5 (`tests/history/journal_agent.py`), die den
+**echten Agent-Code** des geprüften Commits mit Sandbox-Konfiguration ausführen (Zonen, Konfiguration, `zones.conf`,
+`named.conf` und rndc-Platzhalter unter `/tmp`). `/etc/bind/zones` wird vorher/nachher byte-gleich nachgewiesen (Z01).
+Auf ns1/ns2 kein Publish All des installierten Bestands, solange dessen Wirkung auf die ausstehende Zone `example.test`
+nicht gesondert freigegeben ist; keine manuellen Statuskorrekturen. Reale Ende-zu-Ende-Läufe gegen die installierten
+Agenten sind damit als ausstehend dokumentiert (PR-Bericht).
+
+**Tests (E73)** – `tests/history`: `journal_pure_test.php` (rh1-Vektor, Einordnung, Bereinigung, Lese-Regeln),
+`journal_test.php` (RR/RC: K Constraints, P Pfade/Hashes/Akteurskontext, O Endpunkte, F Fehlerinjektion, J Ledger/J4a,
+L Lebendigkeit, N Nebenläufigkeit, R Reaktivierung, X Stress, B Byte-Gleichheit, Z Schutz), `migration005_test.sh`,
+statisch R10–R14, Mutationsproben MJ01–MJ14; Web-Golden mit Reset der Journaltabellen.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -462,8 +595,9 @@ erfasst nur aktive Server). Rückstände sind Warnungen und beeinflussen den Zon
 | `unknown` | offener/abgebrochener Vorgang, reaktivierter Server, nur `legacy`-Bestätigung, Ablehnung `stale_*` |
 | `unverified` | Baseline ohne Ausgangsbestimmung (Abschnitt 15) |
 
-**Topologie:** Aktivierung setzt alle Zonen des Servers in derselben Transaktion auf `unknown` (zusätzlich zum
-bestehenden `bind_dirty = 1`); Zuweisungsänderungen sind Inhaltsänderungen (neue Revision); Deaktivierung entfernt den
+**Topologie:** Aktivierung setzt alle Zonen des Servers auf `unknown` (zusätzlich zum bestehenden `bind_dirty = 1`) –
+abgeleitet über das Audit-Ereignis der Reaktivierung und den Wasserstand der Läufe, ohne Journal-Schreibzugriff aus der
+Fachtransaktion (E70, Abschnitt 5d); Zuweisungsänderungen sind Inhaltsänderungen (neue Revision); Deaktivierung entfernt den
 Server aus der Zielmenge ohne Revision.
 
 `changed ≠ 0` bleibt das operative Pending-Kennzeichen. **`Head > P` ist keine gültige Pending-Definition**:
@@ -644,7 +778,7 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | **H2a** | Schema, Migration 002 mit Skript, `SchemaCheck`, `ZoneStateSnapshot`, Baseline-CLI – **umgesetzt** (Abschnitt 5a, Tests `tests/history`) | Migration wiederholbar inkl. `--check`; alter Code mit neuem Schema lauffähig; Web-Golden identisch; keine Laufzeitänderung |
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` – **umgesetzt** (Abschnitt 5b, Migration 003, Tests `tests/history`) | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung – **umgesetzt** (Abschnitt 5c, Migration 004, Tests `tests/history`) | keine Geheimnisse (Suchtest); atomar mit Fachänderung; RR und RC; Web-Golden identisch |
-| **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
+| **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung – **umgesetzt** (Abschnitt 5d, Migration 005, Tests `tests/history`) | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
 | **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
 | **H3** | Historienoberfläche: Core-Read-Services (`ZoneHistoryReadService`, `ZoneSyncReadService`) **und** Weboberfläche mit Historienliste, Filtern, Detailansichten, Vorher-/Nachher-Vergleich, Berechtigungen und Paginierung | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse; Oberfläche nach `docs/UI_GUIDELINES.md` und `docs/UI_ROLE_MATRIX.md`, Web-Golden für bestehende Seiten unverändert |
 | **H4** | abgeleitete Zustände, `ZoneDiscardService` | alle Sperrgründe; Race-Tests (Lock-Wait, Gegenprobe, Mutationsprobe); Discard nur aus `pending_clean` |
@@ -724,6 +858,25 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E52 | Audit-Fehler als bisherige Fehlercodes, keine neuen Web-Verträge | freigegeben (H2c) |
 | E53 | Kaskadenzähler der Zonenlöschung (sperrend gezählt) | freigegeben (H2c, Q3) |
 | E54 | Invarianten R-A1–R-A8; Tests RR/RC, Fehlerinjektion, Mutationsproben, Web-Golden; ns1 ohne echten BIND-Reload als Pflicht (Q6) | freigegeben (H2c) |
+| E55 | Migration 005 nur mit den vier Journaltabellen; keine Agent-Verifikationsfelder vor AS (Q6) | freigegeben (H2d) |
+| E56 | Tabellen des Journals mit NULL-sicheren CHECKs, Revisionsbezug per FK auf `zone_revisions`, Akteurskontext (Q2) | freigegeben (H2d) |
+| E57 | `PublishLedger` mit Autocommit-Rolle und genau einer transaktionalen Methode (`registerAttempt`, Lauf-Token, Sperrennachweis) | freigegeben (H2d) |
+| E58 | J6 und J1 unter dem Lock vor jedem Seiteneffekt; Fehler als bestehender Status `exception` (Q7) | freigegeben (H2d) |
+| E59 | Versuch und Zielzeilen in der Generator-Transaktion vor dem Serial-Commit | freigegeben (H2d) |
+| E60 | Hash-Verträge zs1/rh1/file/conf; `zone_file_render()` als byte-identische Extraktion | freigegeben (H2d) |
+| E61 | Revisionsbezug nur bei identischem Head-Inhalt (head/head_mismatch/no_head) | freigegeben (H2d) |
+| E62 | Verteilung an die registrierte Zielmenge, Datei nur mit registriertem `file_hash` | freigegeben (H2d) |
+| E63 | Einordnung ok/rejected/failed/unknown (Cleanup partial), Timeout ⇒ unknown (Q3); operative Auswertung unverändert | freigegeben (H2d) |
+| E64 | J4 je Antwort; Schreibfehler nur im Bericht und als Logzeile (Q4) | freigegeben (H2d) |
+| E65 | Versuchsergebnis = operativer Ausgang, keine L2/L3-Bestätigung; vor AS nur `legacy` | freigegeben (H2d, Präzisierung 4) |
+| E66 | Cleanup-Vorregistrierung; Fehler ⇒ kein Cleanup (bestehender Wiederholungsweg); nur Zähler (Q5) | freigegeben (H2d) |
+| E67 | J4a über bedingte Übergänge, statisch und dynamisch nachgewiesen; kein Trigger (Q8) | freigegeben (H2d) |
+| E68 | Lese-Regel J5: nicht nachweisbar lebendig ⇒ unknown | freigegeben (H2d, Präzisierung 3) |
+| E69 | J6 in eigener kurzer Transaktion, nie für einen Lauf mit gehaltener Laufsperre | freigegeben (H2d) |
+| E70 | Reaktivierung über Audit-Ereignis und Wasserstand statt Journal-Schreibzugriff aus der Fachtransaktion | freigegeben (H2d) |
+| E71 | Lauf-ID als künftiger Fencing-Token, keine AS-Vorwegnahme | freigegeben (H2d) |
+| E72 | Web-Verträge unverändert; Abweichungen nur unter Fehlerinjektion | freigegeben (H2d) |
+| E73 | Laufeigene Advisory-Sperre als Identitätsnachweis (Neustart, Verbindungs-ID-Wiederverwendung); Testumgebung isoliert (Q1) | umgesetzt (H2d, Präzisierungen 1 und 3) – zur Bestätigung im Review |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des
@@ -737,5 +890,6 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
+| 18.11.2026 | H2d umgesetzt: Abschnitt 5d (Publish-Journal, Migration 005), Präzisierung von Abschnitt 9 (Reaktivierung abgeleitet, E70), Entscheidungen E55–E73 mit den Präzisierungen der Freigabe (isolierte Testumgebung, Akteurskontext, J5/Neustart über laufeigene Sperre, operatives Ergebnis ≠ Bestätigung) |
 | 18.11.2026 | H2c umgesetzt: Abschnitt 5c (Audit-Ereignisse, Migration 004), Regeln R-A1–R-A8 (Abschnitt 6), Leserechte für H3 (Abschnitt 16), Entscheidungen E43–E54 mit den Präzisierungen aus dem Plan-Review (NULL-sichere CHECKs und `seq`, Serverstand unter Sperre, gemeinsame Änderungsmenge, strikte Policy); Korrektur in 5b (Publish gehört zu H2d) |
 | 18.11.2026 | H2b umgesetzt: Abschnitt 5b, Präzisierung von R-H2/R-H9 (Abschnitt 6), Entscheidungen E29–E42 mit den Präzisierungen aus dem Plan-Review (E33 Duplicate-Key-Pfad, E35 fehlende Heads ohne Gap-Sperre, E39 Bindung des Wächters an Verbindung und Transaktion, E42 Schutz von ns1), Migration 003 |

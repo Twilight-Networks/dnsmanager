@@ -19,6 +19,15 @@
  *   Generierungs-/Publish-Pfad mehr). Die Datei gehört dem Aufrufer (Arbeitsverzeichnis), der sie entfernt.
  * - Konfigurationsdateien entstehen im übergebenen Arbeitsverzeichnis (keine festen /tmp-Pfade, S34).
  *
+ * Publish-Journal (AP1/H2d, E62–E66): Alle drei Funktionen nehmen optional eine Journal-Anbindung entgegen und liefern
+ * zusätzlich 'targets' => [serverId => Einordnung nach PublishTargetClassifier]. Mit Journal
+ * - wird ausschließlich an die registrierte Zielmenge verteilt (unter dem Publish-Lock identisch mit der aktuellen;
+ *   ein registriertes, nicht mehr aktiv zugewiesenes Ziel wird nicht beliefert und als Fehler gemeldet),
+ * - sendet distribute_zone_file() nur eine Datei mit dem registrierten file_hash,
+ * - registriert distribute_zone_cleanup() vor dem ersten Agentaufruf alle Server (scheitert das: kein Cleanup),
+ * - wird jede Agentenantwort unmittelbar nach ihrem Eingang gemeldet (J4).
+ * Status, errors und output – und damit die operative Auswertung im PublishService – bleiben unverändert (J8).
+ *
  * Sicherheit:
  * - Die Übertragung erfolgt per HTTPS mit Token-basierter Authentifizierung.
  * - Nur Server mit gültigem API-Token und API-IP dürfen Zonendaten empfangen.
@@ -31,6 +40,32 @@
 require_once __DIR__ . '/bind_file_generator.php';
 require_once __DIR__ . '/BindAgentClient.php';
 require_once __DIR__ . '/BindWorkDir.php';
+require_once __DIR__ . '/../app/publish/PublishTargetClassifier.php';
+require_once __DIR__ . '/../app/publish/PublishHashContract.php';
+
+/**
+ * Filtert die aktuell geladenen Server auf die registrierte Zielmenge (AP1/H2d, E62).
+ *
+ * @param array<int, array<string, mixed>> $servers   aktuelle Server (Schlüssel $idKey)
+ * @param array<int, string>               $registered registrierte Ziele server_id => Name
+ * @return array{0: array<int, array<string, mixed>>, 1: array<int, string>} [zu beliefernde Server, fehlende Ziele]
+ */
+function distribute_registered_targets(array $servers, array $registered, string $idKey): array
+{
+    $current = [];
+    foreach ($servers as $srv) {
+        $current[(int)$srv[$idKey]] = true;
+    }
+    $missing = [];
+    foreach ($registered as $sid => $name) {
+        if (!isset($current[(int)$sid])) {
+            $missing[(int)$sid] = (string)$name;
+        }
+    }
+    $filtered = array_values(array_filter($servers, static fn (array $srv): bool => array_key_exists((int)$srv[$idKey], $registered)));
+
+    return [$filtered, $missing];
+}
 
 /**
  * Verteilt eine Zonendatei (db.<zone>) an alle aktiven, zugewiesenen Server (lokal und remote) über die API (zone_sync.php).
@@ -44,11 +79,26 @@ require_once __DIR__ . '/BindWorkDir.php';
  * @param BindAgentClient $agent Agent-Client
  * @param int $zone_id ID der zu verteilenden Zone (muss in `zones` existieren)
  * @param string|null $zone_path Pfad der erzeugten Zonendatei
- * @return array Assoziatives Array mit 'status', 'errors', 'output'
+ * @param array|null $journal AP1/H2d: ['targets' => [serverId => Name], 'fileHash' => string,
+ *                            'onResult' => callable(int $serverId, array $einordnung): void]
+ * @return array Assoziatives Array mit 'status', 'errors', 'output', 'targets'
  */
-function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?string $zone_path): array {
+function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?string $zone_path, ?array $journal = null): array {
     $errors = [];
     $outputs = [];
+    $targets = [];
+    $report = static function (int $sid, array $c) use (&$targets, $journal): void {
+        $targets[$sid] = $c;
+        if ($journal !== null) {
+            ($journal['onResult'])($sid, $c);
+        }
+    };
+    $failAll = static function (array $registered, string $code, string $detail) use ($report): void {
+        foreach (array_keys($registered) as $sid) {
+            $report((int)$sid, PublishTargetClassifier::localFailure($code, $detail));
+        }
+    };
+    $registered = $journal['targets'] ?? [];
 
     // Zonennamen anhand der ID abfragen (zur Anzeige)
     $zone_stmt = $pdo->prepare("SELECT name FROM zones WHERE id = ?");
@@ -57,10 +107,12 @@ function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?s
     if (!$zone_name) {
         $msg = "Zone-ID $zone_id nicht gefunden.";
         error_log("[distribute_zone_file] $msg");
+        $failAll($registered, 'target_changed', $msg);
         return [
             'status' => 'error',
             'errors' => [$msg],
-            'output' => $msg
+            'output' => $msg,
+            'targets' => $targets,
         ];
     }
 
@@ -74,27 +126,55 @@ function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?s
     $stmt->execute([$zone_id]);
     $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // AP1/H2d (E62): nur die registrierte Zielmenge beliefern
+    if ($journal !== null) {
+        [$servers, $missing] = distribute_registered_targets($servers, $registered, 'server_id');
+        foreach ($missing as $sid => $name) {
+            $msg = "Zielserver $name (ID $sid) ist der Zone $zone_name nicht mehr aktiv zugewiesen – keine Übertragung.";
+            $errors[] = $msg;
+            $report($sid, PublishTargetClassifier::localFailure('target_changed', $msg));
+        }
+    }
+
     if (empty($servers)) {
         $msg = "Keine aktiven Server für Zone $zone_name.";
         error_log("[distribute_zone_file] $msg");
         return [
             'status' => 'error',
-            'errors' => [$msg],
-            'output' => $msg
+            'errors' => array_merge($errors, [$msg]),
+            'output' => $msg,
+            'targets' => $targets,
         ];
     }
 
     // Keine Generierung an dieser Stelle (früherer versteckter Publish-Pfad entfernt)
     if (!is_string($zone_path) || $zone_path === '' || !file_exists($zone_path)) {
+        $failAll(array_column($servers, 'name', 'server_id'), 'no_file', 'Zonendatei fehlt oder ungültiger Pfad');
         return [
             'status' => 'error',
             'errors' => ["Zonendatei fehlt oder ungültiger Pfad."],
-            'output' => "Zonendatei nicht vorhanden oder ungültiger Pfad: " . var_export($zone_path, true)
+            'output' => "Zonendatei nicht vorhanden oder ungültiger Pfad: " . var_export($zone_path, true),
+            'targets' => $targets,
+        ];
+    }
+
+    $zone_bytes = file_get_contents($zone_path);
+
+    // AP1/H2d (E60/E62): nur die Datei mit dem registrierten file_hash senden
+    if ($journal !== null && (!is_string($zone_bytes) || !hash_equals((string)$journal['fileHash'], PublishHashContract::sha256($zone_bytes)))) {
+        $msg = "Zonendatei für $zone_name weicht vom registrierten Stand ab (file_hash) – keine Übertragung.";
+        error_log("[distribute_zone_file] $msg");
+        $failAll(array_column($servers, 'name', 'server_id'), 'file_hash_mismatch', $msg);
+        return [
+            'status' => 'error',
+            'errors' => array_merge($errors, [$msg]),
+            'output' => $msg,
+            'targets' => $targets,
         ];
     }
 
     // Dateiinhalt base64-kodieren für Versand über HTTP
-    $zone_data = base64_encode(file_get_contents($zone_path));
+    $zone_data = base64_encode((string)$zone_bytes);
 
     foreach ($servers as $srv) {
         // Nur die konkrete Zone
@@ -103,6 +183,9 @@ function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?s
             'zone_name'   => $zone_name,
             'zone_data'   => $zone_data
         ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
+
+        // Journal (J4): Ergebnis unmittelbar nach der Antwort
+        $report((int)$srv['server_id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_ZONE, $r));
 
         // Fehlerauswertung für diesen Server
         if (!empty($r['curlError'])) {
@@ -125,7 +208,8 @@ function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?s
     return [
         'status' => $status,
         'errors' => $errors,
-        'output' => $output
+        'output' => $output,
+        'targets' => $targets,
     ];
 }
 
@@ -140,18 +224,32 @@ function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?s
  * @param BindAgentClient $agent Agent-Client
  * @param BindWorkDir $work Arbeitsverzeichnis des Aufrufers
  * @param string $zone_name Name der Zone, für die die Konfiguration erzeugt und verteilt werden soll.
- * @return array Assoziatives Array mit 'status', 'errors', 'output'
+ * @param array|null $journal AP1/H2d: ['targets' => [serverId => Name],
+ *                            'onResult' => callable(int $serverId, array $einordnung, ?string $confHash): void]
+ * @return array Assoziatives Array mit 'status', 'errors', 'output', 'targets'
  */
-function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir $work, string $zone_name): array {
+function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir $work, string $zone_name, ?array $journal = null): array {
     $errors = [];
     $outputs = [];
+    $targets = [];
+    $report = static function (int $sid, array $c, ?string $confHash) use (&$targets, $journal): void {
+        $targets[$sid] = $c + ['confHash' => $confHash];
+        if ($journal !== null) {
+            ($journal['onResult'])($sid, $c, $confHash);
+        }
+    };
+    $registered = $journal['targets'] ?? [];
 
     // S33: Zonenname geht in Pfade und in die BIND-Konfiguration
     if (!zone_name_is_safe($zone_name)) {
+        foreach ($registered as $sid => $name) {
+            $report((int)$sid, PublishTargetClassifier::localFailure('conf_missing', 'Ungültiger Zonenname'), null);
+        }
         return [
             'status' => 'error',
             'errors' => ['Ungültiger Zonenname: unzulässige Zeichen'],
-            'output' => '[conf-distribute] Ungültiger Zonenname – keine Konfiguration erzeugt.'
+            'output' => '[conf-distribute] Ungültiger Zonenname – keine Konfiguration erzeugt.',
+            'targets' => $targets,
         ];
     }
 
@@ -165,6 +263,16 @@ function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir
     $stmt->execute([$zone_name]);
     $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // AP1/H2d (E62): nur die registrierte Zielmenge beliefern
+    if ($journal !== null) {
+        [$servers, $missing] = distribute_registered_targets($servers, $registered, 'id');
+        foreach ($missing as $sid => $name) {
+            $msg = "Zielserver $name (ID $sid) ist der Zone $zone_name nicht mehr aktiv zugewiesen – keine Konfiguration übertragen";
+            $errors[] = $msg;
+            $report($sid, PublishTargetClassifier::localFailure('target_changed', $msg), null);
+        }
+    }
+
     if (empty($servers)) {
         $msg = "[conf-distribute] Keine aktiven Server für Zone $zone_name.";
         error_log($msg);
@@ -172,7 +280,8 @@ function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir
         return [
             'status' => 'error',
             'errors' => $errors,
-            'output' => $msg
+            'output' => $msg,
+            'targets' => $targets,
         ];
     }
 
@@ -185,16 +294,21 @@ function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir
         $conf_path = $tmp_dir . "/conf/{$zone_name}.conf";
         if (!file_exists($conf_path)) {
             $errors[] = "Remote-Conf fehlt für {$srv['name']} ($zone_name)";
+            $report((int)$srv['id'], PublishTargetClassifier::localFailure('conf_missing', "Konfiguration für {$srv['name']} nicht erzeugt"), null);
             continue;
         }
 
-        $conf_data = base64_encode(file_get_contents($conf_path));
+        $conf_bytes = (string)file_get_contents($conf_path);
+        $conf_data = base64_encode($conf_bytes);
 
         // API-Payload senden (nur die konkrete Zone)
         $r = $agent->postJson($srv['api_ip'], '/zones/conf_sync.php', (string)$srv['api_token'], [
             'zone_name' => $zone_name,
             'conf_data' => $conf_data
         ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
+
+        // Journal (J4): Ergebnis unmittelbar nach der Antwort, mit conf_hash der gesendeten Bytes
+        $report((int)$srv['id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_CONF, $r), PublishHashContract::sha256($conf_bytes));
 
         if (!empty($r['curlError'])) {
             $errors[] = "CURL-Fehler bei {$srv['name']}: {$r['curlError']}";
@@ -220,7 +334,8 @@ function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir
     return [
         'status' => $status,
         'errors' => $errors,
-        'output' => $output
+        'output' => $output,
+        'targets' => $targets,
     ];
 }
 
@@ -238,11 +353,20 @@ function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir
  *
  * @param PDO $pdo Datenbankverbindung
  * @param BindAgentClient $agent Agent-Client
- * @return array Assoziatives Array mit 'status', 'errors', 'output'
+ * @param array|null $journal AP1/H2d: ['register' => callable(array $servers): bool,
+ *                            'onResult' => callable(int $serverId, array $einordnung, ?int $validZoneCount): void]
+ * @return array Assoziatives Array mit 'status', 'errors', 'output', 'targets'
  */
-function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent): array {
+function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent, ?array $journal = null): array {
     $errors = [];
     $outputs = [];
+    $targets = [];
+    $report = static function (int $sid, array $c, ?int $valid) use (&$targets, $journal): void {
+        $targets[$sid] = $c + ['validZoneCount' => $valid];
+        if ($journal !== null) {
+            ($journal['onResult'])($sid, $c, $valid);
+        }
+    };
 
     // Alle aktiven Server laden (nicht nur Server mit veröffentlichten Zonen)
     try {
@@ -257,7 +381,18 @@ function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent): array {
         return [
             'status' => 'warning',
             'errors' => ["Aktive Server für Cleanup konnten nicht geladen werden: " . $e->getMessage()],
-            'output' => ''
+            'output' => '',
+            'targets' => $targets,
+        ];
+    }
+
+    // AP1/H2d (E66): alle angesprochenen Server vor dem ersten Agentaufruf registrieren; sonst kein Cleanup
+    if ($journal !== null && !($journal['register'])(array_column($servers, 'name', 'id'))) {
+        return [
+            'status' => 'warning',
+            'errors' => ['Publish-Journal: Cleanup konnte nicht registriert werden – kein Cleanup ausgeführt'],
+            'output' => '',
+            'targets' => $targets,
         ];
     }
 
@@ -268,6 +403,7 @@ function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent): array {
             $valid_zones = $stmt_valid->fetchAll(PDO::FETCH_COLUMN);
         } catch (Throwable $e) {
             $errors[] = "Soll-Zonenliste für {$srv['name']} konnte nicht ermittelt werden: " . $e->getMessage();
+            $report((int)$srv['id'], PublishTargetClassifier::localFailure('zone_list_failed', 'Soll-Zonenliste nicht ermittelbar'), null);
             continue;
         }
 
@@ -276,6 +412,9 @@ function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent): array {
             'valid_zones' => array_values($valid_zones),
             'allow_empty' => empty($valid_zones)
         ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
+
+        // Journal (J4): Ergebnis unmittelbar nach der Antwort (nur Zähler, Q5)
+        $report((int)$srv['id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_CLEANUP, $r), count($valid_zones));
 
         if (!empty($r['curlError'])) {
             $errors[] = "CURL-Fehler bei Cleanup auf {$srv['name']} ({$srv['api_ip']}): {$r['curlError']}";
@@ -303,6 +442,7 @@ function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent): array {
     return [
         'status' => empty($errors) ? 'ok' : 'warning',
         'errors' => $errors,
-        'output' => implode("\n", $outputs)
+        'output' => implode("\n", $outputs),
+        'targets' => $targets,
     ];
 }
