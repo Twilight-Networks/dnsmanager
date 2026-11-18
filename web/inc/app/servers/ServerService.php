@@ -24,6 +24,11 @@
  *   Zwischenstand veröffentlichen. Ein Fehler beim Neuaufbau rollt die gesamte Änderung zurück. Die
  *   Master-Prüfung bei Deaktivierung läuft wie bisher nach dem Topologie-Lock; Serverzuweisungen ändern sich
  *   nur unter demselben Lock (ZoneService).
+ *   Historie (AP1/H2b): Bei Änderung von Name/DNS-IP werden die zugewiesenen Zonen vor der Transaktion unter dem
+ *   Topologie-Lock ermittelt (E34) und fehlende Heads angelegt (E35); nach den Zonensperren sperrt beginZones() die
+ *   Heads und liest den Vorher-Stand; vor dem Commit entsteht eine Änderungsmenge server.update mit je einer
+ *   Revision je geänderter Zone (R-H6). Änderungen nur an active, api_ip, Token oder is_local berühren den
+ *   DNS-Inhalt nicht und erzeugen keine Revision.
  * - Anlegen: Transaktion → users (S) → servers (X, vorhandene lokale Server) → INSERT. Die Prüfung "nur ein
  *   lokaler Server" läuft für die bisherige Meldungsreihenfolge zusätzlich ungesperrt in der Validierung und
  *   wird mit SELECT … WHERE is_local = 1 FOR UPDATE wiederholt.
@@ -49,6 +54,8 @@ require_once __DIR__ . '/../zones/SoaMname.php';
 require_once __DIR__ . '/../../validators.php';
 require_once __DIR__ . '/ServerControlBackend.php';
 require_once __DIR__ . '/ServerInput.php';
+require_once __DIR__ . '/../history/HistoryContext.php';
+require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
 
 final class ServerService
 {
@@ -242,7 +249,24 @@ final class ServerService
         }
 
         $ok = false;
+        $history = null;
         try {
+            // Zugewiesene Zonen für den NS-/Glue-Neuaufbau (AP1/H2b, E34): vor der Transaktion unter dem Topologie-Lock
+            // ermittelt (alle Schreiber von zone_servers halten ihn; das Ergebnis ist bis zum Commit stabil). Ein
+            // einfaches SELECT in der Transaktion würde den Read-View vor den Zonensperren festlegen; nachfolgende
+            // sperrende Lesevorgänge der Historie könnten dann unter innodb_snapshot_isolation mit 1020 scheitern.
+            $zone_ids = [];
+            $historyCtx = HistoryContext::forUser($actor, 'server.update');
+            if ($server_data_changed) {
+                $stmt = $this->pdo->prepare("SELECT zone_id FROM zone_servers WHERE server_id = ? ORDER BY zone_id");
+                $stmt->execute([$serverId]);
+                $zone_ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+                $stmt->closeCursor();
+
+                // Historie: fehlende Heads vor der Transaktion anlegen (E35)
+                ZoneHistoryRecorder::ensureHeads($this->pdo, $zone_ids, $historyCtx);
+            }
+
             $this->pdo->beginTransaction();
 
             if ($this->dbRole($actor->userId) !== 'admin') {
@@ -304,16 +328,15 @@ final class ServerService
             // Transaktion (atomar mit der Serveränderung), Zonenzeilen aufsteigend gesperrt. Ein Fehler in einer
             // Zone rollt die gesamte Änderung zurück.
             if ($server_data_changed) {
-                $stmt = $this->pdo->prepare("SELECT zone_id FROM zone_servers WHERE server_id = ? ORDER BY zone_id");
-                $stmt->execute([$serverId]);
-                $zone_ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
-                $stmt->closeCursor();
-
                 $stmtLock = $this->pdo->prepare('SELECT id FROM zones WHERE id = ? FOR UPDATE');
                 foreach ($zone_ids as $zid) {
                     $stmtLock->execute([$zid]);
                     $stmtLock->closeCursor();
                 }
+
+                // Historie: Heads aller zugewiesenen Zonen sperren und Vorher-Stand lesen (R-H2, R-H6)
+                $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
+                $history->beginZones($zone_ids);
 
                 // Umbenennung: SOA-NS der Master-Zonen nachführen, sofern er dem bisherigen Namen entsprach. Sperrendes
                 // Lesen (die Zonenzeilen sind bereits gesperrt): aktueller Stand auch unter REPEATABLE READ. Der
@@ -351,6 +374,7 @@ final class ServerService
                 }
             }
 
+            $history?->finish();
             $this->pdo->commit();
 
             foreach ($rebuildWarnings as $w) {
@@ -362,6 +386,8 @@ final class ServerService
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             $m[] = new ServiceMessage('error', 'server.update.failed', ['detail' => $e->getMessage()] + $ctx);
+        } finally {
+            $history?->close();
         }
 
         // Lock (falls gehalten) nach Commit/Rollback und Zonen-Rebuilds freigeben

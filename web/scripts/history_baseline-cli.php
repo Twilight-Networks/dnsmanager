@@ -2,7 +2,8 @@
 <?php
 /**
  * Datei: history_baseline-cli.php
- * Zweck: Baseline-Initialisierung der Änderungshistorie für bestehende Zonen (AP1/H2a, E24).
+ * Zweck: Baseline-Initialisierung der Änderungshistorie für bestehende Zonen (AP1/H2a, E24) und Abgleich der Heads
+ *        gelöschter Zonen (AP1/H2b, E36).
  *
  * Details:
  * - CLI-Adapter: Die Fachlogik liegt in HistoryBaselineService (inc/app/history).
@@ -17,20 +18,22 @@
  *   php history_baseline-cli.php --check      Zonen ohne History-Head auflisten (ändert nichts)
  *   php history_baseline-cli.php --dry-run    Baseline je Zone berechnen, nichts schreiben
  *   php history_baseline-cli.php --apply      Baseline schreiben
+ *   php history_baseline-cli.php --reconcile-dry-run   Heads gelöschter Zonen ermitteln, nichts schreiben (AP1/H2b, E36)
+ *   php history_baseline-cli.php --reconcile           Heads gelöschter Zonen als gelöscht kennzeichnen (Revision "delete")
  *
  * Exitcodes:
- *   0  --check: alle Zonen haben einen Head; --dry-run/--apply: erfolgreich
+ *   0  --check: alle Zonen haben einen Head; übrige Modi: erfolgreich
  *   1  --check: mindestens eine Zone ohne Head
  *   2  Aufruffehler, Schema nicht passend, Lock belegt oder Prüffehler (keine Änderung)
- *   3  Abbruch während --apply (abgeschlossene Zonen bleiben bestehen; erneut ausführen)
+ *   3  Abbruch während --apply bzw. --reconcile (abgeschlossene Zonen bleiben bestehen; erneut ausführen)
  */
 
 require_once __DIR__ . '/../inc/helpers_cli.php';
 cliGuard();
 
 $mode = $argv[1] ?? '';
-if (!in_array($mode, ['--check', '--dry-run', '--apply'], true) || count($argv) !== 2) {
-    fwrite(STDERR, "Aufruf: php history_baseline-cli.php --check|--dry-run|--apply\n");
+if (!in_array($mode, ['--check', '--dry-run', '--apply', '--reconcile-dry-run', '--reconcile'], true) || count($argv) !== 2) {
+    fwrite(STDERR, "Aufruf: php history_baseline-cli.php --check|--dry-run|--apply|--reconcile-dry-run|--reconcile\n");
     exit(2);
 }
 
@@ -70,6 +73,64 @@ if ($mode === '--check') {
             default:
                 echo "[Fehler] Unbehandelte Meldung {$m->code}\n";
                 appLog('error', "event=history_baseline unbehandelte_meldung={$m->code}");
+        }
+    }
+    exit($exit);
+}
+
+if ($mode === '--reconcile' || $mode === '--reconcile-dry-run') {
+    $apply = $mode === '--reconcile';
+    $result = $service->reconcile($apply);
+    $exit = $result->ok ? 0 : 2;
+    foreach ($result->messages as $m) {
+        $ctx = $m->context;
+        switch ($m->code) {
+            case 'history.reconcile.zone_planned':
+                echo "geplant:       {$ctx['zoneId']} {$ctx['zoneName']} revision={$ctx['revisionNo']} (Zone gelöscht)
+";
+                break;
+            case 'history.reconcile.zone_recorded':
+                echo "gekennzeichnet: {$ctx['zoneId']} {$ctx['zoneName']} revision={$ctx['revisionNo']}
+";
+                appLog('info', "event=history_reconcile_zone zone_id={$ctx['zoneId']} zone={$ctx['zoneName']} revision={$ctx['revisionNo']} change_set={$ctx['changeSetId']}");
+                break;
+            case 'history.reconcile.success':
+                $line = "mode={$ctx['mode']} heads={$ctx['total']} gekennzeichnet={$ctx['recorded']} geplant={$ctx['planned']} lauf={$ctx['correlationId']}";
+                echo "OK: $line
+";
+                appLog('info', "event=history_reconcile_done $line");
+                break;
+            case 'history.reconcile.failed':
+                $exit = $apply ? 3 : 2;
+                $zone = $ctx['zoneId'] ?? '-';
+                echo "[Fehler] Abbruch bei Zone $zone: {$ctx['errorClass']} {$ctx['errorCode']} {$ctx['detail']}
+";
+                appLog('error', "event=history_reconcile_failed zone_id=$zone error={$ctx['errorClass']} code={$ctx['errorCode']}");
+                break;
+            case 'history.reconcile.locked':
+                echo "[Fehler] Advisory-Lock dnsmanager_publish_all belegt (Publish oder Topologieänderung aktiv) – keine Änderung
+";
+                appLog('warning', 'event=history_reconcile_locked');
+                break;
+            case 'history.reconcile.lock_failed':
+                echo "[Fehler] Advisory-Lock nicht beziehbar – keine Änderung
+";
+                appLog('error', 'event=history_reconcile_lock_failed');
+                break;
+            case 'history.reconcile.schema_incompatible':
+                echo "[Fehler] Schema nicht passend: " . implode('; ', $ctx['problems']) . "
+";
+                appLog('error', 'event=history_reconcile_schema_incompatible detail=' . implode('; ', $ctx['problems']));
+                break;
+            case 'history.reconcile.in_transaction':
+                echo "[Fehler] Interner Fehler: offene Transaktion
+";
+                break;
+            default:
+                $exit = $exit === 0 ? 2 : $exit;
+                echo "[Fehler] Unbehandelte Meldung {$m->code}
+";
+                appLog('error', "event=history_reconcile unbehandelte_meldung={$m->code}");
         }
     }
     exit($exit);

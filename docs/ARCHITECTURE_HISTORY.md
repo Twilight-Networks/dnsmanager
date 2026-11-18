@@ -1,14 +1,16 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2a (Basis `98cd0d5`)
+Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2b (Basis `bbfb717`)
 
 ## 0. Status und Geltung
 
-- **Dieses Dokument beschreibt eine freigegebene Architekturentscheidung.** Umgesetzt ist bisher nur Meilenstein
-  **H2a** (Abschnitt 5a): die vier History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung,
-  `ZoneStateSnapshot`/`ZoneSnapshotDiff`/`ZoneSnapshotReader` und die Baseline-Initialisierung. Alle übrigen hier
-  beschriebenen Tabellen, Klassen, Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere schreibt
-  kein Fachpfad Historie (H2b) und es gibt kein Publish-Journal (H2d).
+- **Dieses Dokument beschreibt eine freigegebene Architekturentscheidung.** Umgesetzt sind die Meilensteine **H2a**
+  (Abschnitt 5a: History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung,
+  `ZoneStateSnapshot`/`ZoneSnapshotDiff`/`ZoneSnapshotReader`, Baseline-Initialisierung) und **H2b** (Abschnitt 5b:
+  `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden, Drift, Lazy-Baseline, Zonenlöschung,
+  `history_dependencies` mit Migration 003). Alle übrigen hier beschriebenen Tabellen, Klassen, Agent-Erweiterungen und
+  Abläufe existieren im Code noch nicht; insbesondere gibt es keine Audit-Ereignisse (H2c) und kein Publish-Journal
+  (H2d).
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -180,6 +182,116 @@ angelegte Tabellen bleiben, Wiederanlauf deterministisch. Ein Code-Rollback lös
 als freigegebene, datenverlustbehaftete Sondermaßnahme mit Sicherung. Reihenfolge: Migration → Code → Baseline (die
 Initialisierungs-CLI ist Teil des Codes; H2a nutzt die Historie zur Laufzeit nicht).
 
+## 5b. Festlegungen H2b (umgesetzt)
+
+**Bausteine (E29, E30)** – `web/inc/app/history/`:
+- `ZoneHistoryRecorder`, eine Instanz je Fachtransaktion. Ablauf im Service: `ensureHeads()` **vor** der Transaktion
+  → Transaktion mit Berechtigungs- und **allen** Zonensperren → `open()` → `beginZones()` bzw. `zoneCreated()` →
+  Fachänderung (`zoneDeleting()` vor `DELETE FROM zones`) → `finish()` unmittelbar vor `commit()` → `close()` im
+  `finally`.
+- `HistoryContext`: Akteurart (`user`, `dyndns_account`, `system`), Benutzer- bzw. Konto-ID, Kanal (`Actor::$channel`,
+  DynDNS-API `api`, CLI `cli`), Operation und Korrelation (UUIDv4 je Service-Aufruf). `actor_label` liest der Recorder
+  in der Transaktion aus der dort bereits S-gesperrten `users`-Zeile (Name zum Zeitpunkt, nicht aus der Session).
+  Kontext und Recorder erzeugen die Services selbst; Konstruktoren und Web-Adapter bleiben unverändert. Abweichend vom
+  Plan gibt es keine Test-Factory: Fehlerinjektion erfolgt über Trigger in isolierten Testdatenbanken.
+- `HistoryWriter` (gemeinsame Schreibbausteine, auch für die CLI-Baseline) und `ZoneSnapshotStore` (E33).
+
+**Schreibpfade und Operationen (E31):**
+
+| Pfad | Operation | Revisionen |
+|---|---|---|
+| `ZoneService::createZone` | `zone.create` | Revision 1 `create`, `tracking = tracked` |
+| `ZoneService::updateZone` | `zone.update` | `change` bei geändertem DNS-Inhalt (auch Serverzuweisung) |
+| `ZoneService::deleteZone` | `zone.delete` | `delete` mit dem Inhalt vor dem DELETE, `deleted_at` |
+| `RecordService::createRecord` / `updateRecord` / `deleteRecords` | `record.create` / `record.update` / `record.delete` | `change` je Zone; `deleteRecords` mehrzonig |
+| `RecordService::createAutoPtr` (T2) | `record.auto_ptr` | `change` der Reverse-Zone, Korrelation von T1, `history_dependencies` |
+| `ServerService::updateServer` (Name/DNS-IP) | `server.update` | `change` je zugewiesener Zone, eine Änderungsmenge |
+| `DyndnsAccountService::updateAccount` / `deleteAccount` | `dyndns_account.update` / `dyndns_account.delete` | `change`; bei Zonenwechsel in beiden Zonen |
+| `DyndnsUpdateService::update` | `dyndns.api_update` | `change`; Akteur `dyndns_account` (nur Konto-ID), Kanal `api` |
+
+Ohne Revision, weil der DNS-Inhalt nach `zs1` unverändert bleibt: Beschreibung und `allow_dyndns` von Zonen,
+DynDNS-Kontoanlage und Passwortänderung, Serveranlage, Serveränderungen nur an `active`, `api_ip`, Token oder
+`is_local`, Benutzer- und Rechteverwaltung, Publish und Generator (`soa_serial`, `changed`, `bind_dirty`). Diese
+Vorgänge erfasst H2c als Audit-Ereignisse. `deleteServer` ist nur ohne Zuweisung zulässig; ein Cascade auf
+`records.server_id` träfe nur Altdaten, die die Invariante verletzen, und erschiene als Drift.
+
+**Änderungsmengen und Revisionen (E31, E32):** Änderungsmengen entstehen erst mit der ersten Revision. Je
+Fachtransaktion höchstens eine Änderungsmenge des Akteurs und eine `history.drift` (Akteur `system`), beide mit
+derselben Korrelation; die Lazy-Baseline (`history.baseline_lazy`) läuft in eigener Transaktion. Je Zone in dieser
+Reihenfolge: `drift` (Vorher-Hash ≠ Head) → `change` (Nachher-Hash ≠ Head) bzw. `delete`. `diff_summary` =
+`ZoneSnapshotDiff::summary()` gegenüber der Vorgängerrevision (Anlage gegen leer, Löschung `NULL`);
+`source_revision_no` bleibt `NULL`. `tracking` bestehender Heads ändert H2b nicht.
+
+**Sperr- und Lesereihenfolge (E34, Präzisierung von R-H2 und R-H9):**
+1. Advisory-Lock (wo bisher) → Transaktion → `users` (S) → `user_zones` (S bzw. X bei Zonenlöschung) → **alle**
+   betroffenen `zones` (X, aufsteigend) → `zone_history_state` (X, aufsteigend, nur vorhandene Zeilen, Satzsperre) →
+   Vorher-Snapshot (`zone_servers`/`records` S) → Fachtabellen → `finish()` (History-INSERTs, Head-UPDATE) → Commit.
+2. **Kein nicht sperrendes Lesen vor dem Ende von `beginZones()`**; `beginZones()` selbst liest ausschließlich
+   sperrend. Nachweis auf MariaDB 11.8 (`innodb_snapshot_isolation = 1`): Ein sperrendes Lesen, ein Schreiben oder eine
+   Fremdschlüsselprüfung auf eine Zeile, die nach dem Read-View der Transaktion bestätigt wurde, ergibt Fehler 1020,
+   und der Server setzt dann die **gesamte** Transaktion zurück (`PDO::inTransaction()` bleibt dennoch `true`). Ein
+   Read-View in `beginZones()` würde z. B. das nachfolgende `dyndns_accounts … FOR UPDATE` gegen eine parallele
+   Passwortänderung (ohne Zonensperre) scheitern lassen (Test N03, Mutationsprobe M03).
+3. `ServerService::updateServer` ermittelt die zugewiesenen Zonen deshalb **vor** der Transaktion unter dem
+   Topologie-Lock (alle Schreiber von `zone_servers` halten ihn; das Ergebnis ist bis zum Commit stabil). Bisher legte
+   dieses einfache Lesen den Read-View vor den Zonensperren fest (Test N02, Mutationsprobe M04). Alle übrigen Pfade
+   erfüllen die Reihenfolge unverändert.
+4. READ COMMITTED: Read-View je Anweisung, keine Gap-Sperren, kein 1020; die Reihenfolge gilt einheitlich.
+
+**Zonen ohne Head (E35, Präzisierung von R-H2):** Fehlende Heads legt `ensureHeads()` vor der Fachtransaktion an –
+je Zone in einer eigenen, kurzen Transaktion nach dem Muster der H2a-Baseline: `zones` X → Snapshot sperrend lesen →
+Head **nicht sperrend** prüfen (der Read-View entsteht erst nach der Zonensperre; Heads werden nur unter ihr angelegt)
+→ Baseline → Commit. Es entsteht keine Gap-Sperre; zwei Zonen ohne Head blockieren sich unter keiner Isolationsstufe
+(Test N04). Gegenprobe: `FOR UPDATE` auf die fehlende Zeile führt unter REPEATABLE READ zum Deadlock 1213, unter
+READ COMMITTED nicht (N04b, Mutationsprobe M10). In der Fachtransaktion sperrt `beginZones()` nur vorhandene Heads;
+fehlt ein Head dort (nur bei einer Zonenanlage durch Code ohne Historie zwischen Vorprüfung und Transaktion), folgen
+`RuntimeException` und vollständiger Rollback, ohne auf eine Gap-Sperre zu warten (D06). Die Zonenanlage legt ihren
+Head ohne vorheriges Lesen per INSERT an. Die Lazy-Baseline ist ein Systemvorgang und bleibt bestehen, auch wenn die
+anschließende Fachänderung abgelehnt wird oder scheitert (D04).
+
+**Snapshot-Ablage (E33):** Existenzprüfung nicht sperrend (Snapshots sind unveränderlich), sonst einfaches INSERT – keine
+Gap-Sperre im gemeinsamen Hash-Raum. Duplicate-Key-Pfad: Nach jedem Fehler wird `@@in_transaction` geprüft. Bei 1062
+mit bestehender Transaktion wird der vorhandene Eintrag sperrend gelesen und byte-genau verglichen (identisch ⇒ Erfolg,
+abweichend ⇒ `RuntimeException`). Bei 1020 (REPEATABLE READ mit Snapshot-Isolation, Eintrag jünger als der Read-View)
+hat der Server die Transaktion bereits zurückgesetzt; der Store bricht ohne weitere Anweisung ab (nie Weiterarbeit im
+Autocommit). Fachlich ist dieser Fall nicht erreichbar: Gleicher Inhalt bedeutet gleichen Zonennamen, also dieselbe
+Zonensperre, und der Read-View entsteht erst nach ihr; ein solcher Eintrag ist stets sichtbar (S03c). Tests S01–S05.
+
+**Abgleich gelöschter Zonen (E36):** `history_baseline-cli.php --reconcile-dry-run|--reconcile` unter dem
+Advisory-Lock; je Zone eigene Transaktion: Head `FOR UPDATE` (vorhandene Zeile) → Zone weiterhin nicht vorhanden →
+Revision `delete` mit dem letzten bekannten Hash (`history.reconcile_deleted`, Akteur `system`, Kanal `cli`) →
+`deleted_at`. Wiederholbar.
+
+**Abhängigkeiten (E37, E38):** Migration 003 legt `history_dependencies` an (Record-Schlüssel `(name, type, content)`
+beider Seiten, Änderungsmenge und Revision beider Seiten, `kind = auto_ptr`; Fremdschlüssel nur auf
+`history_change_sets` und `zone_revisions (zone_id, revision_no)`, alle `RESTRICT`). Ein Eintrag entsteht nur bei
+`ptrOutcome = created` in T2, nicht bei `exists`, `skipped`, `failed` oder einem Prozessende zwischen T1 und T2.
+
+**Wächter (E39):** `BindZoneBuildBackend::validateAndFlag()` und `rebuildNsGlueAndFlag()` verlangen eine offene,
+nicht abgeschlossene Erfassung derselben Verbindung, die die Zone erfasst. Die Bindung an die laufende Transaktion wird
+in der Datenbank nachgewiesen: `open()` legt einen Savepoint an, der Wächter prüft ihn per `RELEASE SAVEPOINT` /
+`SAVEPOINT`. Savepoints enden mit Commit oder Rollback; eine frühere Klammer autorisiert damit keine spätere
+Transaktion, auch ohne `close()` (G02, G03). Zusätzlich: Freigabe durch `finish()` und `close()` (im `finally` jedes
+Pfads), Register je Verbindung (`WeakReference`), eine neue Klammer entwertet die vorherige. Ergänzend statische Prüfung
+aller Schreibstellen (`tests/history/static_rh8_test.php`).
+
+**Fehlerverhalten (E40):** Jeder Fehler der Historie ist eine Exception in der Fachtransaktion und erscheint als
+bisheriger Fehlercode des Pfads (`zone.*.failed`, `record.*.db_save_failed`, `record.delete.failed`,
+`record.create.ptr_db_failed`, `server.update.failed`, `dyndns.*.failed`, `dyndns.api.exception`). Keine neuen Codes,
+Sprachschlüssel, HTTP-Status oder Redirects; im Fehlerfall enthält das bisherige `detail` einen Text „History: …“ ohne
+Geheimnisse. Bekannte Grenze: Ein Fehler 1062 aus der Historie würde in `DyndnsAccountService` wie bisher jeder
+Duplicate-Key-Fehler als `duplicate_username` gemeldet; der Recorder erzeugt 1062 nur bei inkonsistenten Daten
+(Wiederverwendung einer Zonen-ID nach einem Datenbank-Restore).
+
+**Web-Golden (E41):** `tests/ui` leert die History-Tabellen je Fall (sofern im Schema vorhanden); der Vergleich bleibt
+auf die Fachtabellen beschränkt. Die History-Erwartungen je Pfad prüft `tests/history/recorder_test.php`
+(Abweichung vom Plan: keine History-Zusammenfassung je Golden-Fall).
+
+**Betrieb (E42):** Mutierende Pfad-, Drift-, AutoPTR-, Rollback- und Nebenläufigkeitstests ausschließlich in isolierten
+Datenbanken. Auf ns1 Migration 003, Code per SHA, `--check` und `--reconcile`; Testzonen in der installierten
+Anwendung nur mit festgelegtem Rückbau, ohne Publish All. Historieneinträge gelöschter Testzonen bleiben erhalten (E8).
+ns2 unverändert.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -193,6 +305,14 @@ Initialisierungs-CLI ist Teil des Codes; H2a nutzt die Historie zur Laufzeit nic
 | R-H7 | AutoPTR (T2) erhält eine eigene Änderungsmenge mit `correlation_id` auf T1 und einen Eintrag in `history_dependencies` (Forward-Record ↔ PTR). |
 | R-H8 | Jede Schreibstelle mit `validateAndFlag`, `rebuildNsGlueAndFlag` oder `DELETE FROM zones` hat einen Recorder-Aufruf; statisch und dynamisch geprüft (Muster Paket 6). |
 | R-H9 | Lock-Reihenfolge (Ziel): Advisory-Lock (wo bisher) → Transaktion → users (S) → user_zones (S) → zones (X, aufsteigend) → zone_history_state (X) → Fachtabellen → Historien-INSERTs. Publish-Journaltabellen werden **nie** aus Fachtransaktionen geändert. |
+
+**Präzisierung H2b (E34, E35):** R-H2 gilt für **vorhandene** Heads: Sie werden nach **allen** Zonensperren der
+Transaktion mit `FOR UPDATE` (Satzsperre) gesperrt, und bis zum Ende von `beginZones()` findet kein nicht sperrendes
+Lesen statt. Ein **fehlender** Head wird nicht in der Fachtransaktion gesperrt oder angelegt, sondern vorher in eigener
+Transaktion ohne Gap-Sperre (Lazy-Baseline); fehlt er dennoch in der Fachtransaktion, wird sie zurückgerollt. Die
+Zonenanlage legt ihren Head ohne vorheriges Lesen an. R-H9 lautet damit: … → zones (X, alle, aufsteigend) →
+zone_history_state (X, vorhandene, aufsteigend) → Vorher-Snapshot (S) → Fachtabellen → Historien-INSERTs. Einzelheiten
+und Nachweise: Abschnitt 5b.
 
 ## 7. Audit-Ereignisse
 
@@ -380,8 +500,9 @@ Vorschau aller betroffenen Zonen und Änderungen, Berechtigung für alle Zonen.
      vollständige `rndc reload`;
    - **Abgleich ohne Republish (nach AS):** Agent meldet Serial und Hash der vorhandenen Datei; Baseline wird mit
      dieser Serial gerendert und verglichen; bei Dateien eines älteren Generator-Stands Rückfall auf die anderen Wege.
-4. Fehlt ein Head (z. B. Code ohne Initialisierung), legt der Recorder lazy eine Baseline `baseline_unverified` an.
-   Lief nach der Migration wieder alter Code, erkennt die Vorher-Prüfung (R-H3) die ungetrackten Änderungen.
+4. Fehlt ein Head (z. B. Code ohne Initialisierung), legt der Recorder lazy eine Baseline `baseline_unverified` an
+   (H2b: vor der Fachtransaktion, E35). Lief nach der Migration wieder alter Code, erkennt die Vorher-Prüfung (R-H3)
+   die ungetrackten Änderungen; Heads zwischenzeitlich gelöschter Zonen kennzeichnet `--reconcile` (E36).
 
 ## 16. Berechtigung und Datenschutz
 
@@ -419,7 +540,7 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 |---|---|---|
 | **H1** | Bestandsaufnahme, Architektur (dieses Dokument) | Freigabe 18.11.2026; Merge dieses Dokuments |
 | **H2a** | Schema, Migration 002 mit Skript, `SchemaCheck`, `ZoneStateSnapshot`, Baseline-CLI – **umgesetzt** (Abschnitt 5a, Tests `tests/history`) | Migration wiederholbar inkl. `--check`; alter Code mit neuem Schema lauffähig; Web-Golden identisch; keine Laufzeitänderung |
-| **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
+| **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` – **umgesetzt** (Abschnitt 5b, Migration 003, Tests `tests/history`) | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung | keine Geheimnisse (Suchtest); atomar mit Fachänderung |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
 | **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
@@ -475,6 +596,20 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E26 | Migrationsskript: vollständiger Struktur-Preflight vor der ersten DDL; technischer Abbruch mit deterministischem Wiederanlauf | freigegeben (H2a, mit Präzisierung) |
 | E27 | Rückweg: Code-Rollback ohne Löschen der History-Daten; `DROP TABLE` nur als freigegebene Sondermaßnahme | freigegeben (H2a, mit Präzisierung) |
 | E28 | ns1: Migration und Baseline nach isolierten Tests, mit Sicherung und Rückweg; ns2 unverändert | freigegeben (H2a) |
+| E29 | Recorder in zwei Phasen: `beginZones()` nur sperrend lesend, `finish()` schreibt unmittelbar vor dem Commit; `close()` im `finally` | freigegeben (H2b) |
+| E30 | `HistoryContext` (Akteur, Kanal, Operation, Korrelation); Label aus der gesperrten `users`-Zeile; Services erzeugen Kontext und Recorder, Konstruktoren unverändert | freigegeben (H2b) |
+| E31 | Änderungsmengen erst mit der ersten Revision; Akteur und `history.drift` je Transaktion, gleiche Korrelation | freigegeben (H2b) |
+| E32 | Revisionsregeln `create`/`change`/`delete`/`drift`, `diff_summary`, `tracking` unverändert | freigegeben (H2b) |
+| E33 | `ZoneSnapshotStore`: nicht sperrende Existenzprüfung; Duplicate-Key-Pfad mit Payload-Vergleich, nach 1020 fail-closed ohne Weiterarbeit | freigegeben (H2b, mit Präzisierung) |
+| E34 | Sperr- und Lesereihenfolge (Abschnitt 5b); Zonenliste der Serveränderung vor der Transaktion | freigegeben (H2b) |
+| E35 | Lazy-Baseline vor der Fachtransaktion ohne Gap-Sperre; fehlender Head in der Fachtransaktion ⇒ Rollback; Präzisierung R-H2 | freigegeben (H2b, mit Präzisierung) |
+| E36 | Abgleich gelöschter Zonen per CLI (`--reconcile`) | freigegeben (H2b) |
+| E37 | Migration 003 `history_dependencies` | freigegeben (H2b) |
+| E38 | AutoPTR: eigene Änderungsmenge mit Korrelation; Abhängigkeit nur bei `created` | freigegeben (H2b) |
+| E39 | Wächter im `ZoneBuildBackend`, Bindung an Verbindung und Transaktion per Savepoint, explizite Freigabe; statische Prüfung | freigegeben (H2b, mit Präzisierung) |
+| E40 | Fehler der Historie als bisherige Fehlercodes, keine neuen Web-Verträge | freigegeben (H2b) |
+| E41 | Web-Golden mit Reset der History-Tabellen; History-Erwartungen in der Pfadsuite | freigegeben (H2b) |
+| E42 | Tests in isolierten Datenbanken; ns1 mit festgelegtem Rückbau, ohne Publish All; Historie append-only (E8); ns2 unverändert | freigegeben (H2b, mit Präzisierung) |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes; Umfang `audit_events` (H2c);
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des
@@ -488,3 +623,4 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
+| 18.11.2026 | H2b umgesetzt: Abschnitt 5b, Präzisierung von R-H2/R-H9 (Abschnitt 6), Entscheidungen E29–E42 mit den Präzisierungen aus dem Plan-Review (E33 Duplicate-Key-Pfad, E35 fehlende Heads ohne Gap-Sperre, E39 Bindung des Wächters an Verbindung und Transaktion, E42 Schutz von ns1), Migration 003 |

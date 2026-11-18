@@ -30,6 +30,10 @@
  * - Passwortänderung: Transaktion → users (S) → UPDATE dyndns_accounts (keine Zonensperre, wie bisher).
  * - Rebuild betroffener Zonen in derselben Transaktion über ZoneBuildBackend::validateAndFlag()
  *   (bisher rebuild_zone_and_flag_if_valid()).
+ * - Historie (AP1/H2b): Ändern und Löschen legen fehlende Heads vor der Transaktion an (E35), sperren direkt nach
+ *   dyndnsLockZones() die Heads und lesen den Vorher-Stand (beginZones), und schreiben vor dem Commit Drift- und
+ *   Änderungsrevisionen (dyndns_account.update – bei Zonenwechsel eine Änderungsmenge mit Revisionen in beiden Zonen
+ *   –, dyndns_account.delete). Anlegen und Passwortänderung ändern keinen DNS-Inhalt und erfassen keine Revision.
  */
 
 declare(strict_types=1);
@@ -40,6 +44,8 @@ require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/../zones/ZoneBuildBackend.php';
 require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/DyndnsAccountInput.php';
+require_once __DIR__ . '/../history/HistoryContext.php';
+require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
 
 /** Interne fachliche Ablehnung (nur innerhalb des Service verwendet) */
 final class DyndnsServiceReject extends RuntimeException
@@ -212,8 +218,13 @@ final class DyndnsAccountService
 
         $warnings       = [];
         $zonesToRebuild = [];
+        $history        = null;
 
         try {
+            // Historie: fehlende Heads vor der Transaktion anlegen (E35)
+            $historyCtx = HistoryContext::forUser($actor, 'dyndns_account.update');
+            ZoneHistoryRecorder::ensureHeads($this->pdo, [$oldZoneId, $zone_id], $historyCtx);
+
             $this->pdo->beginTransaction();
 
             if (!$this->isDbAdmin($actor)) {
@@ -223,6 +234,10 @@ final class DyndnsAccountService
 
             // 1. Alte und neue Zone sperren (aufsteigende ID-Reihenfolge)
             $zones = dyndnsLockZones($this->pdo, [$oldZoneId, $zone_id]);
+
+            // Historie: Heads sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
+            $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
+            $history->beginZones(array_keys($zones));
 
             // 2. Account unter Sperre neu laden und auf zwischenzeitliche Änderungen prüfen
             $stmt = $this->pdo->prepare("
@@ -382,10 +397,13 @@ final class DyndnsAccountService
                 }
             }
 
+            $history->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::one(false, ...self::errorMessage('update', $e, $username));
+        } finally {
+            $history?->close();
         }
 
         $m = [];
@@ -486,8 +504,13 @@ final class DyndnsAccountService
         $warnings    = [];
         $sharedWith  = [];
         $keptRecords = 0;
+        $history     = null;
 
         try {
+            // Historie: fehlender Head vor der Transaktion anlegen (E35)
+            $historyCtx = HistoryContext::forUser($actor, 'dyndns_account.delete');
+            ZoneHistoryRecorder::ensureHeads($this->pdo, [$preZoneId], $historyCtx);
+
             $this->pdo->beginTransaction();
 
             if (!$this->isDbAdmin($actor)) {
@@ -497,6 +520,10 @@ final class DyndnsAccountService
 
             // 1. Zone sperren
             $zones = dyndnsLockZones($this->pdo, [$preZoneId]);
+
+            // Historie: Head sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
+            $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
+            $history->beginZones(array_keys($zones));
 
             // 2. Account unter Sperre neu laden
             $stmt = $this->pdo->prepare("
@@ -565,10 +592,13 @@ final class DyndnsAccountService
                 }
             }
 
+            $history->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::one(false, ...self::errorMessage('delete', $e, null));
+        } finally {
+            $history?->close();
         }
 
         $m = [];

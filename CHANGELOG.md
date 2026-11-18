@@ -13,8 +13,23 @@ Alle Änderungen am Projekt werden in diesem Dokument nach semantischer Versioni
   - Baseline-Initialisierung bestehender Zonen (`web/scripts/history_baseline-cli.php`): je Zone eine Revision
     `baseline` mit Status `baseline_unverified`, ohne konstruierte Historie und ohne angenommenen Veröffentlichungsstand
   - Tests unter `tests/history`
+- Änderungshistorie, Meilenstein H2b (Erfassung in den Schreibpfaden):
+  - `ZoneHistoryRecorder`: Jede DNS-relevante Fachänderung (Zonen anlegen, ändern, löschen; Records anlegen, ändern,
+    löschen inkl. AutoPTR; Serverumbenennung bzw. DNS-IP; DynDNS-Konten ändern und löschen; DynDNS-API) schreibt in
+    derselben Transaktion Änderungsmenge, Snapshot und Revision; Fehler der Historie rollen die Fachänderung zurück
+  - Drift-Erkennung: Änderungen ohne History-Erfassung (z. B. alter Code) erscheinen als Revision `drift` des Akteurs
+    `system` vor der Revision des Benutzers; Zonen ohne Head erhalten vor der Fachtransaktion eine Lazy-Baseline
+  - Migration 003 (`sql/migrations/003_history_dependencies.sql`, `scripts/migrate_003_history_dependencies.sh`) mit
+    `history_dependencies` (AutoPTR ↔ Forward-Record)
+  - `history_baseline-cli.php --reconcile-dry-run|--reconcile`: Heads gelöschter Zonen als gelöscht kennzeichnen
+  - Tests: Pfade, Berechtigung, Drift, Wächter, Fehlerinjektion, Nebenläufigkeit, Stresslauf und Mutationsproben unter
+    REPEATABLE READ (Snapshot-Isolation) und READ COMMITTED
 
 ### Changed
+- `ZoneBuildBackend` (`BindZoneBuildBackend`) verlangt eine offene History-Erfassung der Zone in der laufenden
+  Transaktion (R-H8); `SchemaCheck` prüft zusätzlich `history_dependencies` (ohne Migration 003: HTTP 503)
+- `ServerService::updateServer` ermittelt die zugewiesenen Zonen vor der Transaktion unter dem Topologie-Lock
+  (unverändertes Ergebnis; Read-View entsteht erst nach den Zonensperren)
 - `SchemaCheck` prüft zusätzlich die History-Grundtabellen vollständig; ohne Migration 002 antworten Login und
   geschützte Seiten mit HTTP 503 (fail-closed). Reihenfolge beim Update: Migration 002 vor dem Code
 - Hinweis im Log `event=schema_incompatible` nennt die Migrationen 001 und 002

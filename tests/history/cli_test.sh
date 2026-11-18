@@ -68,10 +68,22 @@ run 2 "L08 Advisory-Lock belegt" "$DB" --apply
 ok "$(has out 'Advisory-Lock dnsmanager_publish_all belegt' && echo 1)" "L08b Meldung"
 wait $LP
 run 2 "L09 --check ohne Migration 002 (fail-closed)" "$DBO" --check
-ok "$(has out 'Schema nicht passend: history_change_sets fehlt; zone_snapshots fehlt; zone_revisions fehlt; zone_history_state fehlt' && echo 1)" "L09b Befunde"
+ok "$(has out 'Schema nicht passend: history_change_sets fehlt; zone_snapshots fehlt; zone_revisions fehlt; zone_history_state fehlt; history_dependencies fehlt' && echo 1)" "L09b Befunde (inkl. Migration 003)"
 run 2 "L10 --apply ohne Migration 002 (fail-closed)" "$DBO" --apply
 ok "$([ "$(php "$W/app/web/scripts/schema_history-cli.php" sql | grep -c 'information_schema')" -ge 5 ] && echo 1)" "L11 schema_history-cli.php sql"
 printf 'x\n' | php "$W/app/web/scripts/schema_history-cli.php" evaluate > /dev/null 2>&1; ok "$([ $? = 2 ] && echo 1)" "L12 schema_history-cli.php evaluate: ungültige Eingabe ⇒ Exit 2"
+
+# AP1/H2b, E36: Abgleich gelöschter Zonen (DML-Benutzer)
+mariadb "$DB" -e "DELETE FROM zones WHERE id = 5"
+run 0 "L13 --reconcile-dry-run" "$DB" --reconcile-dry-run
+ok "$(has out '^geplant: +5 empty.h2a.test revision=2' && has out '^OK: mode=dry_run heads=1 gekennzeichnet=0 geplant=1' && echo 1)" "L13b Prüflauf nennt die gelöschte Zone"
+ok "$([ "$(mariadb -N -e "SELECT deleted_at IS NULL FROM \`$DB\`.zone_history_state WHERE zone_id = 5")" = 1 ] && echo 1)" "L13c Prüflauf schreibt nichts"
+run 0 "L14 --reconcile" "$DB" --reconcile
+ok "$(has out '^gekennzeichnet: 5 empty.h2a.test revision=2' && has err 'event=history_reconcile_zone zone_id=5 zone=empty.h2a.test revision=2' && has err 'event=history_reconcile_done mode=apply' && echo 1)" "L14b Ausgabe und Logzeilen"
+ok "$([ "$(mariadb -N -e "SELECT CONCAT(s.head_revision_no, s.deleted_at IS NOT NULL, r.kind, c.operation, c.actor_type, c.channel) FROM \`$DB\`.zone_history_state s JOIN \`$DB\`.zone_revisions r ON r.zone_id = s.zone_id AND r.revision_no = s.head_revision_no JOIN \`$DB\`.history_change_sets c ON c.id = r.change_set_id WHERE s.zone_id = 5")" = '21deletehistory.reconcile_deletedsystemcli' ] && echo 1)" "L14c Revision delete, Head gelöscht, Änderungsmenge system/cli"
+run 0 "L15 --reconcile erneut (wiederholbar)" "$DB" --reconcile
+ok "$(has out 'heads=0 gekennzeichnet=0' && echo 1)" "L15b nichts mehr zu tun"
+run 2 "L16 --reconcile ohne Migration (fail-closed)" "$DBO" --reconcile
 
 echo "ERGEBNIS cli: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" = 0 ]

@@ -35,6 +35,13 @@
  * - Zonendatei-Erzeugung über ZoneBuildBackend; die Generatorprüfungen (SOA- und Record-Felder) wirken
  *   unverändert mit.
  *
+ * Historie (AP1/H2b, docs/ARCHITECTURE_HISTORY.md Abschnitt 5b):
+ * - Anlage: nach dem INSERT der Zone wird die Anlage erfasst; vor dem Commit Revision 1 "create" (zone.create).
+ * - Ändern/Löschen: Lazy-Baseline fehlender Heads vor der Transaktion (ensureHeads, E35); in der Transaktion direkt
+ *   nach zones FOR UPDATE: zone_history_state FOR UPDATE und Vorher-Snapshot (beginZones), vor dem Commit Drift-,
+ *   Änderungs- bzw. Löschrevision (zone.update, zone.delete). Ein Fehler der Historie rollt die Fachänderung zurück
+ *   und erscheint als bisheriger Fehlercode zone.<operation>.failed.
+ *
  * Bearbeitungsstand (S21):
  * - updateZone() verlangt den Bearbeitungsstand (ZoneEditVersion), auf dem die Eingabe beruht, und
  *   vergleicht ihn in der Transaktion mit dem gesperrten Stand: nach den Berechtigungssperren und
@@ -56,6 +63,8 @@ require_once __DIR__ . '/ZoneEditVersion.php';
 require_once __DIR__ . '/ZoneInput.php';
 require_once __DIR__ . '/ZoneUpdateInput.php';
 require_once __DIR__ . '/SoaMname.php';
+require_once __DIR__ . '/../history/HistoryContext.php';
+require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
 
 final class ZoneService
 {
@@ -153,6 +162,7 @@ final class ZoneService
             return self::fail($m, 'warning', 'zone.create.topology_locked', ['name' => $name]);
         }
 
+        $history = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -178,6 +188,10 @@ final class ZoneService
             if ($zone_id < 1) {
                 throw new Exception("Fehler: Keine gültige Zonen-ID erzeugt.");
             }
+
+            // Historie: Anlage erfassen (Revision 1 "create" vor dem Commit)
+            $history = ZoneHistoryRecorder::open($this->pdo, HistoryContext::forUser($actor, 'zone.create'));
+            $history->zoneCreated($zone_id);
 
             // NS-, A- und AAAA-Records für alle zugewiesenen Server (unverändert)
             $stmt_server = $this->pdo->prepare("SELECT name, dns_ip4, dns_ip6 FROM servers WHERE id = ?");
@@ -232,6 +246,7 @@ final class ZoneService
                 $m[] = new ServiceMessage('warning', 'zone.create.zonefile_warning', ['output' => $rebuild['output']]);
             }
 
+            $history->finish();
             $this->pdo->commit();
             $this->releaseLock('create', $m);
             $m[] = new ServiceMessage('success', 'zone.create.success', ['name' => $name, 'zoneId' => $zone_id]);
@@ -242,6 +257,7 @@ final class ZoneService
             $this->releaseLock('create', $m);
             return self::fail($m, 'error', 'zone.create.failed', ['name' => $name, 'detail' => $e->getMessage()]);
         } finally {
+            $history?->close();
             // Sicherheitsnetz (z. B. unerwartete Fehler außerhalb von Throwable-Pfaden)
             $this->releaseLock('create', $m);
         }
@@ -351,9 +367,14 @@ final class ZoneService
             }
         }
 
+        $historyCtx = HistoryContext::forUser($actor, 'zone.update');
+        $history = null;
         try {
             // ---- Transaktion: Berechtigung und gesperrter Altstand (E12/E13/E14) ----
             try {
+                // Historie: fehlender Head ⇒ Lazy-Baseline in eigener Transaktion vor der Fachtransaktion (E35)
+                ZoneHistoryRecorder::ensureHeads($this->pdo, [$id], $historyCtx);
+
                 $this->pdo->beginTransaction();
 
                 if ($this->dbRole($actor->userId) !== $actor->role) {
@@ -385,6 +406,10 @@ final class ZoneService
                     $this->releaseLock('update', $m);
                     return self::fail($m, 'error', 'zone.update.not_found', ['zoneId' => $id]);
                 }
+
+                // Historie: Head sperren und Vorher-Stand lesen, unmittelbar nach der Zonensperre (R-H2)
+                $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
+                $history->beginZones([$id]);
 
                 // Bearbeitungsstand zoneadmin (ohne Serverzuweisung) auf der gesperrten Zonenzeile
                 if (!$adminPath) {
@@ -528,6 +553,7 @@ final class ZoneService
                     }
                 }
 
+                $history->finish();
                 $this->pdo->commit();
             } catch (Throwable $e) {
                 $this->rollbackIfActive();
@@ -541,6 +567,7 @@ final class ZoneService
             return new ServiceResult(true, $m, $id);
         } finally {
             $this->rollbackIfActive();
+            $history?->close();
             $this->releaseLock('update', $m);
         }
     }
@@ -580,7 +607,12 @@ final class ZoneService
         }
 
         $ok = false;
+        $history = null;
         try {
+            // Historie: fehlender Head ⇒ Lazy-Baseline in eigener Transaktion vor der Fachtransaktion (E35)
+            $historyCtx = HistoryContext::forUser($actor, 'zone.delete');
+            ZoneHistoryRecorder::ensureHeads($this->pdo, [$id], $historyCtx);
+
             $this->pdo->beginTransaction();
 
             if ($this->dbRole($actor->userId) !== 'admin') {
@@ -602,8 +634,14 @@ final class ZoneService
                     $this->rollbackIfActive();
                     $m[] = new ServiceMessage('error', 'zone.delete.not_found', ['zoneId' => $id]);
                 } else {
+                    // Historie: Head sperren, Inhalt vor dem DELETE festhalten (R-H2, R-H5)
+                    $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
+                    $history->beginZones([$id]);
+                    $history->zoneDeleting($id);
+
                     $this->pdo->prepare("DELETE FROM zones WHERE id = ?")->execute([$id]);
                     $this->pdo->exec("UPDATE system_status SET bind_dirty = 1 WHERE id = 1");
+                    $history->finish();
                     $this->pdo->commit();
                     $ok = true;
                     $m[] = new ServiceMessage('success', 'zone.delete.success', ['zoneId' => $id, 'name' => $name]);
@@ -613,6 +651,7 @@ final class ZoneService
             $this->rollbackIfActive();
             $m[] = new ServiceMessage('error', 'zone.delete.failed', ['zoneId' => $id, 'name' => $name, 'detail' => $e->getMessage()]);
         } finally {
+            $history?->close();
             // Lock nach Commit bzw. Rollback freigeben (wie bisher nach der Meldung)
             $this->releaseLock('delete', $m);
         }

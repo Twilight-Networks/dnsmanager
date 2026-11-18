@@ -39,6 +39,15 @@
  *   history.baseline.success (mode: apply | dry_run, total, recorded, planned, skipped, correlationId)
  *   history.baseline.status (total, withHead, missing: list<array{id: int, name: string}>)     status()
  *   history.baseline.status_failed (errorClass, errorCode)
+ *
+ * Abgleich gelöschter Zonen (AP1/H2b, E36) – reconcile():
+ *   Heads (deleted_at IS NULL) von Zonen, die in zones nicht mehr existieren (z. B. von Code ohne History-Erfassung
+ *   gelöscht), erhalten eine Revision "delete" mit dem letzten bekannten Inhalt (Head-Hash) in einer Änderungsmenge
+ *   history.reconcile_deleted (Akteur system, Kanal cli) und deleted_at. Unter dem Advisory-Lock; je Zone eine eigene
+ *   Transaktion: Head FOR UPDATE (vorhandene Zeile, Satzsperre) → Zone weiterhin nicht vorhanden → Revision → Head.
+ *   Wiederholbar. Codes wie oben mit Präfix history.reconcile: zone_planned (zoneId, zoneName, revisionNo),
+ *   zone_recorded (zoneId, zoneName, revisionNo, changeSetId), failed, success (mode, total, recorded, planned,
+ *   correlationId) sowie schema_incompatible, in_transaction, locked, lock_failed.
  */
 
 require_once __DIR__ . '/../ServiceResult.php';
@@ -47,6 +56,8 @@ require_once __DIR__ . '/../SchemaCheck.php';
 require_once __DIR__ . '/../TopologyLock.php';
 require_once __DIR__ . '/ZoneStateSnapshot.php';
 require_once __DIR__ . '/ZoneSnapshotReader.php';
+require_once __DIR__ . '/HistoryContext.php';
+require_once __DIR__ . '/HistoryWriter.php';
 
 final class HistoryBaselineService
 {
@@ -54,6 +65,7 @@ final class HistoryBaselineService
     public const CHANNEL = 'cli';
     public const KIND = 'baseline';
     public const TRACKING = 'baseline_unverified';
+    public const OP_RECONCILE = 'history.reconcile_deleted';
 
     public function __construct(private readonly PDO $pdo)
     {
@@ -178,37 +190,12 @@ final class HistoryBaselineService
                     continue;
                 }
 
-                $this->storeSnapshot($snapshot);
-
-                $stmt = $this->pdo->prepare(
-                    'INSERT INTO history_change_sets (operation, actor_type, actor_user_id, actor_label,'
-                    . ' actor_dyndns_account_id, channel, correlation_id) VALUES (?, \'system\', NULL, NULL, NULL, ?, ?)'
+                $changeSetId = HistoryWriter::baselineZone(
+                    $this->pdo,
+                    $zoneId,
+                    $snapshot,
+                    HistoryContext::system(self::OPERATION, self::CHANNEL, $correlationId)
                 );
-                $stmt->execute([self::OPERATION, self::CHANNEL, $correlationId]);
-                $changeSetId = (int)$this->pdo->lastInsertId();
-                if ($changeSetId < 1) {
-                    throw new RuntimeException('Keine ID für die Änderungsmenge erhalten');
-                }
-
-                $stmt = $this->pdo->prepare(
-                    'INSERT INTO zone_revisions (zone_id, zone_name, revision_no, change_set_id, kind, content_hash,'
-                    . ' source_revision_no, diff_summary) VALUES (?, ?, 1, ?, ?, ?, NULL, NULL)'
-                );
-                $stmt->bindValue(1, $zoneId, PDO::PARAM_INT);
-                $stmt->bindValue(2, $snapshot->zoneName());
-                $stmt->bindValue(3, $changeSetId, PDO::PARAM_INT);
-                $stmt->bindValue(4, self::KIND);
-                $stmt->bindValue(5, $snapshot->contentHash());
-                $stmt->execute();
-
-                $stmt = $this->pdo->prepare(
-                    'INSERT INTO zone_history_state (zone_id, head_revision_no, head_hash, tracking, deleted_at)'
-                    . ' VALUES (?, 1, ?, ?, NULL)'
-                );
-                $stmt->bindValue(1, $zoneId, PDO::PARAM_INT);
-                $stmt->bindValue(2, $snapshot->contentHash());
-                $stmt->bindValue(3, self::TRACKING);
-                $stmt->execute();
 
                 $this->pdo->commit();
                 $recorded++;
@@ -234,27 +221,114 @@ final class HistoryBaselineService
     }
 
     /**
-     * Speichert den Snapshot inhaltsadressiert; ein vorhandener Eintrag muss byte-identisch sein.
+     * Abgleich: Heads gelöschter Zonen als gelöscht kennzeichnen (apply = true) oder nur ermitteln (apply = false).
      */
-    private function storeSnapshot(ZoneStateSnapshot $snapshot): void
+    public function reconcile(bool $apply): ServiceResult
     {
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO zone_snapshots (content_hash, contract, payload, record_count) VALUES (?, ?, ?, ?)'
-            . ' ON DUPLICATE KEY UPDATE content_hash = content_hash'
-        );
-        $stmt->bindValue(1, $snapshot->contentHash());
-        $stmt->bindValue(2, $snapshot->contract());
-        $stmt->bindValue(3, $snapshot->payload());
-        $stmt->bindValue(4, $snapshot->recordCount(), PDO::PARAM_INT);
-        $stmt->execute();
-
-        $stmt = $this->pdo->prepare('SELECT contract, payload FROM zone_snapshots WHERE content_hash = ? LOCK IN SHARE MODE');
-        $stmt->execute([$snapshot->contentHash()]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        $stmt->closeCursor();
-        if ($row === false || $row['contract'] !== $snapshot->contract() || !hash_equals((string)$row['payload'], $snapshot->payload())) {
-            throw new RuntimeException('Gespeicherter Snapshot weicht vom berechneten Inhalt ab: ' . $snapshot->contentHash());
+        $schema = $this->schemaProblems();
+        if ($schema !== []) {
+            return new ServiceResult(false, [new ServiceMessage('error', 'history.reconcile.schema_incompatible', ['problems' => $schema])]);
         }
+        if ($this->pdo->inTransaction()) {
+            return new ServiceResult(false, [new ServiceMessage('error', 'history.reconcile.in_transaction')]);
+        }
+
+        $lock = new TopologyLock($this->pdo);
+        $acquired = $lock->acquire();
+        if ($acquired['error'] !== null) {
+            return new ServiceResult(false, [new ServiceMessage('error', 'history.reconcile.lock_failed', ['detail' => $acquired['error']])]);
+        }
+        if (!$acquired['acquired']) {
+            return new ServiceResult(false, [new ServiceMessage('error', 'history.reconcile.locked')]);
+        }
+
+        try {
+            return $this->reconcileLocked($apply);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function reconcileLocked(bool $apply): ServiceResult
+    {
+        $ctx = HistoryContext::system(self::OP_RECONCILE, self::CHANNEL);
+        $messages = [];
+        $recorded = $planned = 0;
+
+        try {
+            $zoneIds = array_map('intval', $this->pdo->query(
+                'SELECT s.zone_id FROM zone_history_state s LEFT JOIN zones z ON z.id = s.zone_id'
+                . ' WHERE z.id IS NULL AND s.deleted_at IS NULL ORDER BY s.zone_id'
+            )->fetchAll(PDO::FETCH_COLUMN));
+        } catch (Throwable $e) {
+            return new ServiceResult(false, [new ServiceMessage('error', 'history.reconcile.failed', ['zoneId' => null] + self::errorContext($e))]);
+        }
+
+        foreach ($zoneIds as $zoneId) {
+            try {
+                $this->pdo->beginTransaction();
+
+                // Vorhandene Head-Zeile exklusiv (Satzsperre); danach erst nicht sperrend lesen
+                $stmt = $this->pdo->prepare('SELECT head_revision_no, head_hash, deleted_at FROM zone_history_state WHERE zone_id = ? FOR UPDATE');
+                $stmt->bindValue(1, $zoneId, PDO::PARAM_INT);
+                $stmt->execute();
+                $head = $stmt->fetch(PDO::FETCH_ASSOC);
+                $stmt->closeCursor();
+
+                $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM zones WHERE id = ?');
+                $stmt->bindValue(1, $zoneId, PDO::PARAM_INT);
+                $stmt->execute();
+                $zoneExists = (int)$stmt->fetchColumn() > 0;
+                $stmt->closeCursor();
+
+                if ($head === false || $head['deleted_at'] !== null || $zoneExists) {
+                    $this->rollbackIfActive();
+                    continue;   // zwischenzeitlich bereinigt oder (bei Wiederverwendung der ID) vorhanden
+                }
+
+                $headNo = (int)$head['head_revision_no'];
+                $stmt = $this->pdo->prepare('SELECT zone_name FROM zone_revisions WHERE zone_id = ? AND revision_no = ?');
+                $stmt->bindValue(1, $zoneId, PDO::PARAM_INT);
+                $stmt->bindValue(2, $headNo, PDO::PARAM_INT);
+                $stmt->execute();
+                $zoneName = $stmt->fetchColumn();
+                $stmt->closeCursor();
+                if ($zoneName === false) {
+                    throw new RuntimeException("Head-Revision der Zone $zoneId fehlt");
+                }
+
+                if (!$apply) {
+                    $this->rollbackIfActive();
+                    $planned++;
+                    $messages[] = new ServiceMessage('success', 'history.reconcile.zone_planned', [
+                        'zoneId' => $zoneId, 'zoneName' => (string)$zoneName, 'revisionNo' => $headNo + 1,
+                    ]);
+                    continue;
+                }
+
+                $changeSetId = HistoryWriter::insertChangeSet($this->pdo, $ctx, null);
+                HistoryWriter::insertRevision($this->pdo, $zoneId, (string)$zoneName, $headNo + 1, $changeSetId, 'delete', (string)$head['head_hash'], null);
+                HistoryWriter::updateState($this->pdo, $zoneId, $headNo + 1, (string)$head['head_hash'], true);
+                $this->pdo->commit();
+
+                $recorded++;
+                $messages[] = new ServiceMessage('success', 'history.reconcile.zone_recorded', [
+                    'zoneId' => $zoneId, 'zoneName' => (string)$zoneName, 'revisionNo' => $headNo + 1, 'changeSetId' => $changeSetId,
+                ]);
+            } catch (Throwable $e) {
+                $this->rollbackIfActive();
+                $messages[] = new ServiceMessage('error', 'history.reconcile.failed', ['zoneId' => $zoneId] + self::errorContext($e));
+
+                return new ServiceResult(false, $messages);
+            }
+        }
+
+        $messages[] = new ServiceMessage('success', 'history.reconcile.success', [
+            'mode' => $apply ? 'apply' : 'dry_run', 'total' => count($zoneIds), 'recorded' => $recorded,
+            'planned' => $planned, 'correlationId' => $ctx->correlationId,
+        ]);
+
+        return new ServiceResult(true, $messages);
     }
 
     /** @return string[] */
@@ -292,11 +366,6 @@ final class HistoryBaselineService
 
     private static function uuid4(): string
     {
-        $b = random_bytes(16);
-        $b[6] = chr((ord($b[6]) & 0x0f) | 0x40);
-        $b[8] = chr((ord($b[8]) & 0x3f) | 0x80);
-        $h = bin2hex($b);
-
-        return substr($h, 0, 8) . '-' . substr($h, 8, 4) . '-' . substr($h, 12, 4) . '-' . substr($h, 16, 4) . '-' . substr($h, 20);
+        return HistoryContext::uuid4();
     }
 }

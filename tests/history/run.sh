@@ -1,6 +1,6 @@
 #!/bin/bash
 # Datei: tests/history/run.sh
-# Zweck: Alle History-Tests (AP1/H2a) reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
+# Zweck: Alle History-Tests (AP1/H2a, H2b) reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
 #
 #   bash run.sh <App-SHA> <Basis-SHA>
 #     <App-SHA>   zu prüfender Commit (40 Zeichen)
@@ -11,6 +11,7 @@
 #   2. Migrationstests (migration_test.sh)
 #   3. Datenbanktests der Baseline unter REPEATABLE READ (innodb_snapshot_isolation = ON) und READ COMMITTED
 #   4. CLI-Test mit DML-Benutzer (cli_test.sh)
+#   5. H2b: Migration 003, statischer R-H8-Nachweis, Recorder-Tests (RR und RC), Mutationsproben
 # Nur isolierte Datenbanken dnsmgr_t21_r<RUN>_* und der Benutzer h2a<RUN> (Lauf-Kennung H2A_RUN, 8 Hex-Zeichen; optional
 # vorgebbar, sonst zufällig). Eigentum nach tests/history/owned.sh: Jede Suite legt ihre Ressourcen ohne IF NOT EXISTS an
 # und trägt sie danach in das gemeinsame Register dieses Laufs ein; aufgeräumt werden ausschließlich registrierte
@@ -24,7 +25,7 @@ SHA="${1:-}"; BASE="${2:-}"
 [ "$(id -u)" = 0 ] || { echo "als root ausführen"; exit 2; }
 REPO="${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}"
 
-echo "History-Tests H2a – $(hostname) $(date '+%F %T')"
+echo "History-Tests H2a/H2b – $(hostname) $(date '+%F %T')"
 export H2A_RUN="${H2A_RUN:-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 [[ "$H2A_RUN" =~ ^[0-9a-f]{8}$ ]] || { echo "ABBRUCH: ungültige Lauf-Kennung H2A_RUN"; exit 2; }
 echo "Lauf-Kennung: $H2A_RUN (Datenbanken dnsmgr_t21_r${H2A_RUN}_*, Benutzer h2a${H2A_RUN})"
@@ -59,6 +60,12 @@ bash "$H/migration_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
 php "$H/db_test.php" "$T/app" RR || RC=1
 php "$H/db_test.php" "$T/app" RC || RC=1
 bash "$H/cli_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
+# AP1/H2b: Migration 003, statischer R-H8-Nachweis, Recorder-Tests unter RR und RC, Mutationsproben
+bash "$H/migration003_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
+php "$H/static_rh8_test.php" "$T/app" || RC=1
+php "$H/recorder_test.php" "$T/app" RR || RC=1
+php "$H/recorder_test.php" "$T/app" RC || RC=1
+[ "${H2B_SKIP_MUTATION:-0}" = 1 ] && echo "Hinweis: Mutationsproben übersprungen (H2B_SKIP_MUTATION=1)" || bash "$H/mutation_test.sh" "$T/app" || RC=1
 
 echo "GESAMT: $([ $RC = 0 ] && echo 'alle Suiten bestanden' || echo 'FEHLER')"
 exit $RC

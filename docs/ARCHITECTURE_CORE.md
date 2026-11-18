@@ -5,7 +5,7 @@ Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6); **Core-Abschluss** m
 
 **Einordnung ns1/ns2 (Klarstellung 18.11.2026):** ns1 (192.168.53.122) und ns2 (192.168.53.125) sind die dedizierten Entwicklungs- und Testmaschinen des Projekts, keine externen Produktivsysteme. „Produktiv“, „Produktivstand“, „Produktivübernahme“ und „Produktion“ bezeichnen in diesem Dokument den dort installierten und abgenommenen Softwarestand. Die historischen Beschreibungen der Abnahmen bleiben unverändert.
 
-**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026; umgesetzt ist bisher Meilenstein H2a: History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung, Snapshot/Diff/Leser unter `web/inc/app/history/` und die Baseline-CLI, ohne Integration in die Schreibpfade). Die dort vorgesehenen Erweiterungen der Lock-Reihenfolge (Abschnitt 6, R-H9) und der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den jeweiligen Meilensteinen H2b–H5 und AS.
+**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026; umgesetzt sind H2a – History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung, Snapshot/Diff/Leser unter `web/inc/app/history/`, Baseline-CLI – und H2b – `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden mit Migration 003). Die Lock-Reihenfolge ist mit H2b um `zone_history_state` erweitert (dort Abschnitt 5b und R-H9); die Erweiterungen der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den Meilensteinen H2d–H5 und AS.
 
 ## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
@@ -136,6 +136,9 @@ Keine neuen Core-Baustellen; als Nächstes folgt die UI-Modernisierung.
 - **Lock-Reihenfolge** (verbindlich, unverändert übernehmen):
   - Topologie-/Publish-Advisory-Lock `dnsmanager_publish_all` (Try-Lock) → Transaktion → `users` (S) → `user_zones` (S) → `zones` (X, aufsteigend) → `zone_servers`/`records`/`dyndns_accounts`.
   - Serverpfade: Topologie-Lock → Transaktion → `users` (S) → `servers` (X).
+  - Historie (AP1/H2b): nach **allen** Zonensperren `zone_history_state` (X, vorhandene Zeilen, aufsteigend) und der
+    Vorher-Snapshot (S); kein nicht sperrendes Lesen davor. Fehlende Heads entstehen vorher in eigener Transaktion.
+    Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5b.
 - **Ziel:** Web-UI und ein späterer MCP-Adapter rufen dieselben Services auf, ohne Geschäftslogik zu duplizieren.
 
 ## 2. Stand je Fachbereich
