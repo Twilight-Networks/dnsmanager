@@ -8,7 +8,9 @@ Stand: 18.11.2026 · Basis `main` = `6e8133c` · Arbeitspaket AP1/H1
   beschriebenen Tabellen, Klassen, Agent-Erweiterungen oder Abläufe existiert im Code mit Stand `6e8133c`.
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
-  (Abschnitte 8–13) und der Entscheidungen E8, E10, E15/E16, E17.
+  (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
+  ohne Vorzeichen zu unterstützen; Serial-Strategie und Migration der bestehenden Spalte `zones.soa_serial` werden im
+  Meilenstein AS entschieden.
 - **Verbindlich** sind Begriffe, Zustandsdefinitionen, Invarianten (I-…, F-…, R-…) und die Meilensteinfolge.
   Tabellen- und Spaltennamen, Schnittstellensignaturen und Codes sind **Entwurf** und werden im jeweiligen Meilenstein
   festgelegt. Ausdrücklich offene Punkte sind mit **[offen]** gekennzeichnet und in Abschnitt 20 gesammelt.
@@ -148,6 +150,7 @@ Grundsätze:
 | J2 | **Versuch atomar mit der Serial:** In der Generator-Transaktion werden vor dem Serial-Commit `zone_publish_attempts` (Revision, Hashes, Serial, Lauf) und je Zielserver `zone_publish_targets` mit `sending` angelegt. Serial verbraucht ⇔ Versuch registriert. Scheitert die Registrierung: Rollback, keine Datei, kein Agent-Aufruf, Zone bleibt ausstehend (2 → 1). |
 | J3 | Revision und Hashes werden im Generator unter der Zonensperre bestimmt; der Versuch meldet „Revision N mit Datei X verteilt“, nie „aktueller Stand verteilt“. |
 | J4 | Ergebnisse nach jeder Agentenantwort eintragen. Diese Schreibvorgänge sind nicht sicherheitsrelevant; scheitern sie, bleibt der Vorgang offen. |
+| J4a | **Unveränderlich** sind die Registrierungsdaten: Lauf (ID, Art, Full-Rebuild, `connection_id`, Start), Versuch (Lauf, Zone, Revision, `content_hash`, `render_hash`, `file_hash`, Serial, Generierungszeit) und Zielzeile (Versuch, Server, Servername zum Zeitpunkt). **Aktualisiert** werden ausschließlich die Lebenszyklusfelder – Lauf: Ende und Status; Versuch: `outcome`; Ziel: `zone_sync`/`conf_sync` und die Ergebnisangaben (`conf_hash`, Agent-Serial, Agent-Dateihash, Reload-Ergebnis, Fehlercode/-text) – und zwar nur einmal vom offenen in einen Endzustand (Ergebnis nach J4 oder `abandoned` nach J6). Ein Endzustand und die mit ihm gespeicherten Ergebnisse werden nie mehr geändert. |
 | J5 | **Lese-Regel:** Zielzeile `sending` oder Versuch ohne `outcome` ⇒ Ziel `unknown`, sobald der zugehörige Lauf den Advisory-Lock nicht mehr hält (`IS_USED_LOCK` ≠ registrierte `connection_id`). Kein zusätzlicher Schreibvorgang nötig. |
 | J6 | **Wiederanlauf:** Jeder neue Lauf und jedes Discard markiert offene Vorgänge beendeter Läufe unter dem Advisory-Lock als `abandoned` (nur Lesbarkeit). Scheitert die Markierung, bricht der neue Vorgang vor dem ersten Seiteneffekt ab. |
 | J7 | Ordnung von Bestätigungen ausschließlich über Lauf-/Versuchs-IDs (DB-vergeben, monoton, Läufe serialisiert) – nie über die Serial. |
@@ -157,7 +160,7 @@ Grundsätze:
 
 | Ebene | Bedeutung |
 |---|---|
-| **L1 Versuche** | was erzeugt und gesendet wurde (unveränderlich) |
+| **L1 Versuche** | was erzeugt und gesendet wurde; Registrierungsdaten unveränderlich, Lebenszyklusfelder nur einmal vom offenen in einen Endzustand (J4a) |
 | **L2 Agent-bestätigt** | letzter vom Agenten angenommener Stand je Server (Datei übernommen, Konfiguration geprüft); vor AS ohne Reload-Nachweis und als `legacy` gekennzeichnet |
 | **L3 Verifiziert** | tatsächlich geladener Stand; nach AS über autoritative SOA-Abfrage an den lokalen BIND (E17) |
 | **L4 Synchronisation** | abgeleitet aus aktueller Zielmenge, Head und L2 (optional L3); nur berechnet |
@@ -218,8 +221,8 @@ entfernt eine von einem neueren Lauf angelegte Zone, wenn der neuere Lauf keinen
 |---|---|
 | F1 | **Ein** Fencing-Höchststand H je Agent für alle schreibenden Endpunkte: `zone_sync`, `conf_sync`, `zone_cleanup` (**[offen]**: Einbeziehung `system/control reload`). |
 | F2 | Annahme ⇔ Token t ≥ H; danach H := t. Gleichheit zulässig (ein Lauf sendet mehrere Anfragen nacheinander). |
-| F3 | Prüfen, dauerhaft Fortschreiben und Ausführen unter dem exklusiven `flock` des Agenten; Prüfung von t **nach** Erwerb des `flock`. Reihenfolge: `flock` → H lesen → ablehnen oder H per Temp-Datei, `fsync`, `rename` schreiben → ändern → Reload. |
-| F4 | H liegt dauerhaft im Zonenverzeichnis des Agenten (neben `.dnsmanager-agent.lock`, ext4). Fehlt H im Erzwingungsmodus ⇒ alle Schreibvorgänge abgelehnt (`fence_uninitialized`); Initialisierung nur ausdrücklich durch Admin mit Wert ≥ höchster vergebener Lauf-ID. |
+| F3 | Prüfen, dauerhaft Fortschreiben und Ausführen unter dem exklusiven `flock` des Agenten; Prüfung von t **nach** Erwerb des `flock`. Reihenfolge: `flock` → H lesen → ablehnen oder H per Temp-Datei, `fsync` der Datei, `rename`, `fsync` des Verzeichnisses schreiben → erst danach ändern → Reload. Schlägt einer dieser Persistenzschritte fehl, wird die Anfrage ohne Änderung abgelehnt (fail-closed). |
+| F4 | H liegt dauerhaft im Zonenverzeichnis des Agenten (neben `.dnsmanager-agent.lock`, ext4). **Absturzsicherheit:** Der persistierte Höchststand darf auch nach einem Systemabsturz oder Stromausfall nie auf einen Wert unterhalb eines bereits akzeptierten Tokens zurückfallen; eine Änderung wird erst ausgeführt, wenn H dauerhaft geschrieben ist. Fehlt H, ist H unlesbar oder ungültig, oder schlägt eine Datei- bzw. Verzeichnisoperation fehl ⇒ im Erzwingungsmodus alle Schreibvorgänge abgelehnt (`fence_uninitialized` bzw. Persistenzfehler); Initialisierung nur ausdrücklich durch Admin mit Wert ≥ höchster vergebener Lauf-ID. Dauerhaftigkeit der Datei- und Verzeichnisoperationen und fail-closed-Verhalten sind in AS nachzuweisen. |
 | F5 | Token = `publish_runs.id`, dauerhaft vergeben vor dem ersten Agent-Aufruf (J1); dieselbe Folge für Publish All und Publish Zone. |
 | I-A1 | Serial-Regel: Zonendatei nur ersetzen, wenn neue Serial nach RFC 1982 größer als die vorhandene; gleiche Serial nur bei byte-identischem Inhalt. |
 | I-A3 | Antwort enthält übernommene Serial, `sha256` der installierten Datei und ausgewerteten Reload-Exit-Code; Reload-Fehler ist ein eigener Status. |
@@ -353,8 +356,8 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung | keine Geheimnisse (Suchtest); atomar mit Fachänderung |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
-| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; gestufte Einführung |
-| **H3** | Read-Services (UI separat) | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse |
+| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
+| **H3** | Historienoberfläche: Core-Read-Services (`ZoneHistoryReadService`, `ZoneSyncReadService`) **und** Weboberfläche mit Historienliste, Filtern, Detailansichten, Vorher-/Nachher-Vergleich, Berechtigungen und Paginierung | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse; Oberfläche nach `docs/UI_GUIDELINES.md` und `docs/UI_ROLE_MATRIX.md`, Web-Golden für bestehende Seiten unverändert |
 | **H4** | abgeleitete Zustände, `ZoneDiscardService` | alle Sperrgründe; Race-Tests (Lock-Wait, Gegenprobe, Mutationsprobe); Discard nur aus `pending_clean` |
 | **H4b** | Gruppen-Discard | Abhängigkeitshülle, Vorschau, Berechtigung für alle Zonen |
 | **H5** | `ZoneRestoreService`, Wiederherstellen und neu verteilen | Serial monoton; DynDNS-/Systemrecords geschützt; Revalidierung; Rollback |
@@ -393,7 +396,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E12 | Journal: Registrierung vor Seiteneffekt, Lese-Regel `unknown` (ersetzt „unrecorded“) | freigegeben (H1) |
 | E13 | AS vor Freischaltung von Discard | freigegeben (H1) |
 | E14 | Discard bei Server-, Zuweisungs- und DynDNS-Änderungen gesperrt | freigegeben (H1) |
-| E15/E16 | Serial-Wahl nach RFC 1982, Spaltentyp `zones.soa_serial` | **offen** (Meilenstein AS; H2a berücksichtigt 32 Bit ohne Vorzeichen) |
+| E15/E16 | Serial-Strategie und Migration der Spalte `zones.soa_serial` | **offen** (Meilenstein AS); festgelegt ist nur die Anforderung, 32-Bit-Serials ohne Vorzeichen zu unterstützen (H2a berücksichtigt sie) |
 | E17 | L3 über autoritative SOA-Abfrage an den lokalen BIND, keine sudoers-Erweiterung | entschieden 18.11.2026 |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes; Umfang `audit_events` (H2c);
@@ -404,4 +407,5 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
-| 18.11.2026 | Erstfassung nach Abschluss AP1/H1 (Bestandsaufnahme, Review-Nachträge, lesende Inspektion ns1/ns2, Entscheidungen E8, E10, E15/E16, E17) |
+| 18.11.2026 | Erstfassung nach Abschluss AP1/H1 (Bestandsaufnahme, Review-Nachträge, lesende Inspektion ns1/ns2, Entscheidungen E8, E10, E17; zu E15/E16 nur die 32-Bit-Anforderung, Strategie und Spaltenmigration offen für AS) |
+| 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
