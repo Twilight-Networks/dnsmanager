@@ -5,7 +5,7 @@ Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6); **Core-Abschluss** m
 
 **Einordnung ns1/ns2 (Klarstellung 18.11.2026):** ns1 (192.168.53.122) und ns2 (192.168.53.125) sind die dedizierten Entwicklungs- und Testmaschinen des Projekts, keine externen Produktivsysteme. „Produktiv“, „Produktivstand“, „Produktivübernahme“ und „Produktion“ bezeichnen in diesem Dokument den dort installierten und abgenommenen Softwarestand. Die historischen Beschreibungen der Abnahmen bleiben unverändert.
 
-**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026, **noch nicht implementiert**). Die dort vorgesehenen Erweiterungen der Lock-Reihenfolge (Abschnitt 1) und der Backend-Schnittstellen (Abschnitt 4) gelten erst mit den jeweiligen Meilensteinen H2a–H5 und AS.
+**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026, **noch nicht implementiert**). Die dort vorgesehenen Erweiterungen der Lock-Reihenfolge (Abschnitt 6, R-H9) und der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den jeweiligen Meilensteinen H2a–H5 und AS.
 
 ## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
