@@ -273,8 +273,8 @@ foreach (SchemaCheck::HISTORY_TABLES as $t => $lines) {
     }
 }
 $all = static fn (array $res): array => array_map(static fn (array $x): string => $x['state'], $res);
-T::eq(['history_change_sets' => 'ok', 'zone_snapshots' => 'ok', 'zone_revisions' => 'ok', 'zone_history_state' => 'ok', 'history_dependencies' => 'ok'], $all(SchemaCheck::evaluateHistory($rows)), 'C01', 'Erwartung ⇒ alle ok');
-T::eq(['history_change_sets' => 'absent', 'zone_snapshots' => 'absent', 'zone_revisions' => 'absent', 'zone_history_state' => 'absent', 'history_dependencies' => 'absent'], $all(SchemaCheck::evaluateHistory([])), 'C02', 'leer ⇒ alle absent');
+T::eq(['history_change_sets' => 'ok', 'zone_snapshots' => 'ok', 'zone_revisions' => 'ok', 'zone_history_state' => 'ok', 'history_dependencies' => 'ok', 'audit_events' => 'ok'], $all(SchemaCheck::evaluateHistory($rows)), 'C01', 'Erwartung ⇒ alle ok');
+T::eq(['history_change_sets' => 'absent', 'zone_snapshots' => 'absent', 'zone_revisions' => 'absent', 'zone_history_state' => 'absent', 'history_dependencies' => 'absent', 'audit_events' => 'absent'], $all(SchemaCheck::evaluateHistory([])), 'C02', 'leer ⇒ alle absent');
 $mut = $rows;
 $mut[] = ['zone_snapshots', 'idx|idx_extra|1|1|contract|~|BTREE'];
 $res = SchemaCheck::evaluateHistory($mut);

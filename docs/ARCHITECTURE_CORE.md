@@ -5,7 +5,8 @@ Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6); **Core-Abschluss** m
 
 **Einordnung ns1/ns2 (Klarstellung 18.11.2026):** ns1 (192.168.53.122) und ns2 (192.168.53.125) sind die dedizierten Entwicklungs- und Testmaschinen des Projekts, keine externen Produktivsysteme. „Produktiv“, „Produktivstand“, „Produktivübernahme“ und „Produktion“ bezeichnen in diesem Dokument den dort installierten und abgenommenen Softwarestand. Die historischen Beschreibungen der Abnahmen bleiben unverändert.
 
-**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026; umgesetzt sind H2a – History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung, Snapshot/Diff/Leser unter `web/inc/app/history/`, Baseline-CLI – und H2b – `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden mit Migration 003). Die Lock-Reihenfolge ist mit H2b um `zone_history_state` erweitert (dort Abschnitt 5b und R-H9); die Erweiterungen der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den Meilensteinen H2d–H5 und AS.
+**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026; umgesetzt sind H2a – History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung, Snapshot/Diff/Leser unter `web/inc/app/history/`, Baseline-CLI – H2b – `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden mit Migration 003 – und H2c – Audit-Ereignisse
+`audit_events` mit Migration 004, `AuditPolicy`/`AuditRecorder` in den Verwaltungspfaden). Die Lock-Reihenfolge ist mit H2b um `zone_history_state` erweitert (dort Abschnitt 5b und R-H9); die Erweiterungen der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den Meilensteinen H2d–H5 und AS.
 
 ## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
@@ -139,6 +140,9 @@ Keine neuen Core-Baustellen; als Nächstes folgt die UI-Modernisierung.
   - Historie (AP1/H2b): nach **allen** Zonensperren `zone_history_state` (X, vorhandene Zeilen, aufsteigend) und der
     Vorher-Snapshot (S); kein nicht sperrendes Lesen davor. Fehlende Heads entstehen vorher in eigener Transaktion.
     Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5b.
+  - Audit (AP1/H2c): `audit_events`-INSERTs zuletzt vor dem Commit (nach den Historien-INSERTs); bis dahin nur
+    sperrendes Lesen des Akteursnamens. Serveränderungen prüfen DNS-Relevanz und `active` auf dem gesperrten Stand
+    (Abbruch `topology_locked`). Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5c.
 - **Ziel:** Web-UI und ein späterer MCP-Adapter rufen dieselben Services auf, ohne Geschäftslogik zu duplizieren.
 
 ## 2. Stand je Fachbereich
@@ -348,7 +352,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 ## 4. Wiederverwendbare Bausteine
 
 - **Basis:** `Actor`, `ActorAccess`, `ZoneAccess`, `TopologyLock`, `ServiceResult`/`ServiceMessage`, `SchemaCheck`, `AppBootstrap`.
-- **Historie (H2a):** `ZoneStateSnapshot` (kanonischer Snapshot, Vertrag `zs1`), `ZoneSnapshotDiff`, `ZoneSnapshotReader`, `HistoryBaselineService` (siehe `ARCHITECTURE_HISTORY.md` Abschnitt 5a).
+- **Historie (H2a–H2c):** `ZoneStateSnapshot` (kanonischer Snapshot, Vertrag `zs1`), `ZoneSnapshotDiff`, `ZoneSnapshotReader`, `HistoryBaselineService` (Abschnitt 5a), `ZoneHistoryRecorder`, `HistoryContext`, `HistoryWriter` (5b), `AuditPolicy`, `AuditRecorder` (5c) – siehe `ARCHITECTURE_HISTORY.md`.
 - **Validierung** (rein): `validators.php` – `validateDnsRecord`, `validateZoneInput`, `isValidFqdn`, `isValidSoaName`, `validateDyndnsHostname`, `normalizeDyndnsHostname`; `isDuplicateRecord` liest die DB.
 - **DynDNS:** `dyndns_guard.php` (siehe 3.2).
 - **Records:** `glue_check.php` (`isGlueRecord`, `isNsRecordReferencedByGlue` rein; `isProtectedNsRecord` liest), `ttl_defaults.php`, `soa_serial.php`, `dkim_helpers.php`, `AutoPtr`.

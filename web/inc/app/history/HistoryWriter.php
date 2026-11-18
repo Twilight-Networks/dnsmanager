@@ -104,6 +104,62 @@ final class HistoryWriter
     }
 
     /**
+     * Audit-Ereignis (AP1/H2c, E45). $changes ist das bereits von AuditPolicy geprüfte, kanonische JSON.
+     */
+    public static function insertAuditEvent(
+        PDO $pdo,
+        int $changeSetId,
+        int $seq,
+        string $entityType,
+        int $entityId,
+        string $entityLabel,
+        ?int $zoneId,
+        string $action,
+        string $changes
+    ): void {
+        $stmt = $pdo->prepare(
+            'INSERT INTO audit_events (change_set_id, seq, entity_type, entity_id, entity_label, zone_id, action, changes)'
+            . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->bindValue(1, $changeSetId, PDO::PARAM_INT);
+        $stmt->bindValue(2, $seq, PDO::PARAM_INT);
+        $stmt->bindValue(3, $entityType);
+        $stmt->bindValue(4, $entityId, PDO::PARAM_INT);
+        $stmt->bindValue(5, $entityLabel);
+        $stmt->bindValue(6, $zoneId, $zoneId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(7, $action);
+        $stmt->bindValue(8, $changes);
+        $stmt->execute();
+    }
+
+    /**
+     * Benutzername des Akteurs zum Zeitpunkt (nur Benutzerakteure) per sperrendem Lesen (LOCK IN SHARE MODE) – in
+     * den Fachtransaktionen ist die users-Zeile bereits gesperrt; es entsteht kein Read-View.
+     *
+     * @param bool $allowMissing true: fehlender Akteur ergibt null (nur nicht transaktionale Nachträge, E51)
+     * @throws RuntimeException bei fehlendem Akteur (ohne $allowMissing)
+     */
+    public static function actorLabel(PDO $pdo, HistoryContext $ctx, bool $allowMissing = false): ?string
+    {
+        if ($ctx->actorType !== HistoryContext::ACTOR_USER) {
+            return null;
+        }
+        $stmt = $pdo->prepare('SELECT username FROM users WHERE id = ? LOCK IN SHARE MODE');
+        $stmt->bindValue(1, $ctx->userId, PDO::PARAM_INT);
+        $stmt->execute();
+        $name = $stmt->fetchColumn();
+        $stmt->closeCursor();
+        if ($name === false) {
+            if ($allowMissing) {
+                return null;
+            }
+            throw new RuntimeException('History: Akteur ' . $ctx->userId . ' nicht vorhanden');
+        }
+
+        return (string)$name;
+    }
+
+    /**
      * Baseline einer Zone ohne Head (Revision 1 "baseline", Head "baseline_unverified") mit eigener Änderungsmenge.
      * Voraussetzung (Aufrufer): offene Transaktion, Zone gesperrt, kein Head und keine Revision der Zone vorhanden.
      *

@@ -50,9 +50,10 @@ bizsum() {
         | sha256sum | cut -c1-64
 }
 tables() { mariadb -N -B -e "SELECT IFNULL(GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME), '') FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME IN ('history_change_sets','zone_snapshots','zone_revisions','zone_history_state')"; }
-# Bewertung der vier Tabellen aus Migration 002; history_dependencies (Migration 003, AP1/H2b) prüft migration003_test.sh
-php_states() { php "$H/schemacheck.php" "$APP" "$1" | grep -v '^problem' | grep -v '^history_dependencies' | cut -f2 | tr '\n' ' ' | sed 's/ $//'; }
-php_problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'history_dependencies fehlt$' | cut -f2-; }
+# Bewertung der vier Tabellen aus Migration 002; history_dependencies (Migration 003, AP1/H2b) prüft migration003_test.sh,
+# audit_events (Migration 004, AP1/H2c) migration004_test.sh
+php_states() { php "$H/schemacheck.php" "$APP" "$1" | grep -v '^problem' | grep -v '^history_dependencies' | grep -v '^audit_events' | cut -f2 | tr '\n' ' ' | sed 's/ $//'; }
+php_problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'history_dependencies fehlt$' | grep -v 'audit_events fehlt$' | cut -f2-; }
 
 echo "== Migration 002 – $(mariadb -N -e 'SELECT VERSION()'), PHP $(php -r 'echo PHP_VERSION;')"
 
@@ -156,7 +157,8 @@ expect_exit 0 "M08 Neuinstallation: --check ohne Migration" bash "$MIG" --db "$D
 ok "$([ -z "$(php_problems "$D")" ] && echo 1)" "M08b Neuinstallation: SchemaCheck::problems() leer"
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
 bash "$APP/scripts/migrate_003_history_dependencies.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 003 auf m1"
-ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}m1")" ] && echo 1)" "M08c Struktursignatur Neuinstallation = Migration 002 + 003 (byte-gleich)"
+bash "$APP/scripts/migrate_004_audit_events.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 004 auf m1"
+ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}m1")" ] && echo 1)" "M08c Struktursignatur Neuinstallation = Migration 002 + 003 + 004 (byte-gleich)"
 
 echo "ERGEBNIS migration: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" = 0 ]

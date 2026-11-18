@@ -34,6 +34,10 @@
  *   dyndnsLockZones() die Heads und lesen den Vorher-Stand (beginZones), und schreiben vor dem Commit Drift- und
  *   Änderungsrevisionen (dyndns_account.update – bei Zonenwechsel eine Änderungsmenge mit Revisionen in beiden Zonen
  *   –, dyndns_account.delete). Anlegen und Passwortänderung ändern keinen DNS-Inhalt und erfassen keine Revision.
+ * - Audit (AP1/H2c): Anlage, Änderung, Passwortänderung und Löschung schreiben in derselben Transaktion ein
+ *   Audit-Ereignis (AuditRecorder; dyndns_account.create/.update/.password/.delete). Label ist der Hostname, nie der
+ *   Kontoname; Kontoname und Passwort erscheinen nur als Kennzeichen (set/changed), Client-IPs (current_ipv4/6) nie.
+ *   Bei Änderung und Löschung dieselbe Änderungsmenge wie die Revisionen.
  */
 
 declare(strict_types=1);
@@ -46,6 +50,7 @@ require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/DyndnsAccountInput.php';
 require_once __DIR__ . '/../history/HistoryContext.php';
 require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
+require_once __DIR__ . '/../history/AuditRecorder.php';
 
 /** Interne fachliche Ablehnung (nur innerhalb des Service verwendet) */
 final class DyndnsServiceReject extends RuntimeException
@@ -100,6 +105,7 @@ final class DyndnsAccountService
 
         $hash = password_hash($in->password, PASSWORD_BCRYPT);
 
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -107,6 +113,7 @@ final class DyndnsAccountService
                 $this->rollbackIfActive();
                 return self::one(false, 'audit', 'dyndns.create.access_denied', ['actorId' => $actor->userId, 'reason' => 'db_role']);
             }
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'dyndns_account.create'));
 
             // 1. Zone sperren (serialisiert mit DynDNS-API und Publish)
             $zones = dyndnsLockZones($this->pdo, [$zone_id]);
@@ -150,11 +157,20 @@ final class DyndnsAccountService
                 VALUES (?, ?, ?, ?)
             ");
             $stmt->execute([$username, $hash, $hostname, $zone_id]);
+            $accountId = (int)$this->pdo->lastInsertId();
+            if ($accountId < 1) {
+                throw new RuntimeException('Keine Account-ID erhalten');
+            }
 
+            $audit->record('dyndns_account', $accountId, $hostname, $zone_id, 'create', [],
+                ['hostname' => $hostname, 'zone_id' => $zone_id], ['username' => 'set', 'password' => 'set']);
+            $audit->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::one(false, ...self::errorMessage('create', $e, $username));
+        } finally {
+            $audit?->close();
         }
 
         return self::one(true, 'success', 'dyndns.create.success', ['username' => $username, 'hostname' => $hostname, 'zoneId' => $zone_id]);
@@ -219,6 +235,7 @@ final class DyndnsAccountService
         $warnings       = [];
         $zonesToRebuild = [];
         $history        = null;
+        $audit          = null;
 
         try {
             // Historie: fehlende Heads vor der Transaktion anlegen (E35)
@@ -238,6 +255,7 @@ final class DyndnsAccountService
             // Historie: Heads sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
             $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
             $history->beginZones(array_keys($zones));
+            $audit = AuditRecorder::open($this->pdo, $historyCtx, $history);
 
             // 2. Account unter Sperre neu laden und auf zwischenzeitliche Änderungen prüfen
             $stmt = $this->pdo->prepare("
@@ -397,13 +415,28 @@ final class DyndnsAccountService
                 }
             }
 
+            // Audit (AP1/H2c): Vorher-Werte aus der gesperrten Kontozeile; Kontoname und Passwort nur als Kennzeichen
+            $auditSecrets = [];
+            if ((string)$account['username'] !== $username) {
+                $auditSecrets['username'] = 'changed';
+            }
+            if ($passwordChanged) {
+                $auditSecrets['password'] = 'changed';
+            }
+            $audit->record('dyndns_account', $id, $newHostname, $newZoneId, 'update',
+                ['hostname' => $oldHostname, 'zone_id' => $oldZoneId],
+                ['hostname' => $newHostname, 'zone_id' => $newZoneId],
+                $auditSecrets);
+
             $history->finish();
+            $audit->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::one(false, ...self::errorMessage('update', $e, $username));
         } finally {
             $history?->close();
+            $audit?->close();
         }
 
         $m = [];
@@ -441,6 +474,7 @@ final class DyndnsAccountService
             return self::one(false, 'error', 'dyndns.password.hash_failed', []);
         }
 
+        $audit = null;
         try {
             $this->pdo->beginTransaction();
 
@@ -449,23 +483,30 @@ final class DyndnsAccountService
                 return self::one(false, 'audit', 'dyndns.password.access_denied', ['actorId' => $actor->userId, 'reason' => 'db_role']);
             }
 
-            // F3: Account unter Sperre laden; ein nicht (mehr) vorhandener Account erhält keine Erfolgsmeldung
-            $stmt = $this->pdo->prepare("SELECT id FROM dyndns_accounts WHERE id = ? FOR UPDATE");
+            // F3: Account unter Sperre laden; ein nicht (mehr) vorhandener Account erhält keine Erfolgsmeldung.
+            // Hostname und Zone nur für das Audit-Ereignis (AP1/H2c).
+            $stmt = $this->pdo->prepare("SELECT id, hostname, zone_id FROM dyndns_accounts WHERE id = ? FOR UPDATE");
             $stmt->execute([$id]);
-            $exists = $stmt->fetchColumn();
+            $account = $stmt->fetch(PDO::FETCH_ASSOC);
             $stmt->closeCursor();
-            if ($exists === false) {
+            if ($account === false) {
                 $this->rollbackIfActive();
                 return self::one(false, 'error', 'dyndns.password.not_found', ['accountId' => $id]);
             }
 
+            $audit = AuditRecorder::open($this->pdo, HistoryContext::forUser($actor, 'dyndns_account.password'));
             $stmt = $this->pdo->prepare("UPDATE dyndns_accounts SET password_hash = ? WHERE id = ?");
             $stmt->execute([$hash, $id]);
 
+            $audit->record('dyndns_account', $id, (string)$account['hostname'], (int)$account['zone_id'], 'update', [], [],
+                ['password' => 'changed']);
+            $audit->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::one(false, 'error', 'dyndns.password.failed', ['detail' => $e->getMessage()]);
+        } finally {
+            $audit?->close();
         }
 
         return self::one(true, 'success', 'dyndns.password.success', ['accountId' => $id]);
@@ -505,6 +546,7 @@ final class DyndnsAccountService
         $sharedWith  = [];
         $keptRecords = 0;
         $history     = null;
+        $audit       = null;
 
         try {
             // Historie: fehlender Head vor der Transaktion anlegen (E35)
@@ -524,6 +566,7 @@ final class DyndnsAccountService
             // Historie: Head sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
             $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
             $history->beginZones(array_keys($zones));
+            $audit = AuditRecorder::open($this->pdo, $historyCtx, $history);
 
             // 2. Account unter Sperre neu laden
             $stmt = $this->pdo->prepare("
@@ -592,13 +635,17 @@ final class DyndnsAccountService
                 }
             }
 
+            $audit->record('dyndns_account', $id, $hostname, $zid, 'delete', ['hostname' => $hostname, 'zone_id' => $zid], []);
+
             $history->finish();
+            $audit->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return self::one(false, ...self::errorMessage('delete', $e, null));
         } finally {
             $history?->close();
+            $audit?->close();
         }
 
         $m = [];

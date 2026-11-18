@@ -16,6 +16,11 @@
  *   record-create <zoneId> <Name> <IPv4>                     RecordService::createRecord (admin)
  *   api-update <IPv4>                                        DynDNS-API für Konto 1
  *   stress <Sekunden> <Startwert>                            zufällige Fachänderungen auf Zonen 1–4
+ *   AP1/H2c:
+ *   hold-server <serverId> <Sekunden> <Marke> <none|Spalte> [Wert]  Serverzeile sperren, optional Spalte ändern (wie
+ *                                                             alter Code), Marke, warten, Commit
+ *   server-local <serverId>                                  ServerService::updateServer: Server wird lokaler Server
+ *   audit-stress <Sekunden> <Startwert>                      zufällige Verwaltungsvorgänge mit Audit-Ereignis
  */
 
 require_once __DIR__ . '/h2b_lib.php';
@@ -102,6 +107,60 @@ try {
             $s = $pdo->query("SELECT name, dns_ip4, dns_ip6, api_ip, is_local, active FROM servers WHERE id = $id")->fetch(PDO::FETCH_ASSOC);
             $in = new ServerInput($a[1], (string)$s['dns_ip4'], (string)($s['dns_ip6'] ?? ''), (string)$s['api_ip'], '', (bool)$s['is_local'], (bool)$s['active']);
             out(res(H2b::servers($pdo)->updateServer(H2b::admin(), $id, $in)));
+
+        case 'hold-server':
+            [$sid, $sec, $mark, $col] = [(int)$a[0], (float)$a[1], $a[2], $a[3]];
+            if (!in_array($col, ['none', 'name', 'active', 'api_ip', 'is_local'], true)) {
+                out(['ok' => false, 'message' => 'Spalte nicht zulässig']);
+            }
+            $pdo->beginTransaction();
+            $pdo->query("SELECT id FROM servers WHERE id = $sid FOR UPDATE")->fetchAll();
+            if ($col !== 'none') {
+                $pdo->prepare("UPDATE servers SET $col = ? WHERE id = ?")->execute([$a[4], $sid]);
+            }
+            touch($mark);
+            usleep((int)($sec * 1e6));
+            $pdo->commit();
+            out(['ok' => true]);
+
+        case 'server-local':
+            $id = (int)$a[0];
+            $s = $pdo->query("SELECT name, dns_ip4, dns_ip6, api_ip, active FROM servers WHERE id = $id")->fetch(PDO::FETCH_ASSOC);
+            $in = new ServerInput((string)$s['name'], (string)$s['dns_ip4'], (string)($s['dns_ip6'] ?? ''), (string)$s['api_ip'], '', true, (bool)$s['active']);
+            out(res(H2b::servers($pdo)->updateServer(H2b::admin(), $id, $in)));
+
+        case 'audit-stress':
+            [$sec, $seed] = [(float)$a[0], (int)$a[1]];
+            if (!defined('PASSWORD_MIN_LENGTH')) {
+                define('PASSWORD_MIN_LENGTH', 12);
+            }
+            mt_srand($seed);
+            $stats = ['ok' => 0, 'fail' => 0, 'codes' => [], 'ops' => []];
+            $end = microtime(true) + $sec;
+            $i = 0;
+            while (microtime(true) < $end) {
+                $i++;
+                $k = mt_rand(0, 4);
+                $z = [1, 2, 4][mt_rand(0, 2)];
+                $r = match ($k) {
+                    0 => H2b::zones($pdo)->updateZone(H2b::admin(), $z, H2b::zoneInput($pdo, H2b::admin(), $z, ['description' => "s{$seed}-$i"])),
+                    1 => (function () use ($pdo, $seed, $i): ServiceResult {
+                        $s = H2b::all($pdo, 'SELECT * FROM servers WHERE id = 2')[0];
+                        return H2b::servers($pdo)->updateServer(H2b::admin(), 2, new ServerInput((string)$s['name'], (string)$s['dns_ip4'], (string)($s['dns_ip6'] ?? ''),
+                            '192.0.2.' . (100 + ($seed * 37 + $i) % 100), '', (bool)$s['is_local'], (bool)$s['active']));
+                    })(),
+                    2 => H2b::dyndns($pdo)->changePassword(H2b::admin(), 1, "Stress-Passwort-$seed-$i"),
+                    3 => (new UserService($pdo))->changePassword(H2b::admin(), 22, "Stress-Benutzer-$seed-$i", null),
+                    default => H2b::records($pdo)->createRecord(H2b::admin(), $z, H2b::record('TXT', "a{$seed}x$i", '"audit ' . $i . '"', 300)),
+                };
+                $r->ok ? $stats['ok']++ : $stats['fail']++;
+                $stats['ops'][$k] = ($stats['ops'][$k] ?? 0) + ($r->ok ? 1 : 0);
+                if (!$r->ok) {
+                    $c = ($r->messages[count($r->messages) - 1] ?? null)?->code ?? '?';
+                    $stats['codes'][$c] = ($stats['codes'][$c] ?? 0) + 1;
+                }
+            }
+            out($stats);
 
         case 'record-create':
             out(res(H2b::records($pdo)->createRecord(H2b::admin(), (int)$a[0], H2b::record('A', $a[1], $a[2]))));

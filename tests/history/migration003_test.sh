@@ -39,7 +39,8 @@ mkdb() { # <Name> <base|m2|new>
 }
 has_dep() { [ "$(mariadb -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME = 'history_dependencies'")" = 1 ]; }
 state() { php "$H/schemacheck.php" "$APP" "$1" | grep "^$2"$'\t' | cut -f2; }
-problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | cut -f2- | tr '\n' ';'; }
+# audit_events (Migration 004, AP1/H2c) prüft migration004_test.sh
+problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'audit_events fehlt$' | cut -f2- | tr '\n' ';'; }
 basecount() { mariadb -N -e "SELECT CONCAT_WS('/', (SELECT COUNT(*) FROM $1.history_change_sets), (SELECT COUNT(*) FROM $1.zone_snapshots), (SELECT COUNT(*) FROM $1.zone_revisions), (SELECT COUNT(*) FROM $1.zone_history_state))"; }
 
 echo "== Migration 003 – $(mariadb -N -e 'SELECT VERSION()')"
@@ -94,7 +95,8 @@ expect_exit 0 "N06c danach --check" bash "$MIG3" --db "$D" --check
 D=$(mkdb n7 new)
 expect_exit 0 "N07 Neuinstallation: --check ohne Migration" bash "$MIG3" --db "$D" --check
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
-ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}n2")" ] && echo 1)" "N07b Struktursignatur Neuinstallation = Migration (byte-gleich)"
+bash "$APP/scripts/migrate_004_audit_events.sh" --db "${H2A_PREFIX}n2" --apply --no-backup > "$W/m4.out" 2>&1 || ok 0 "N07b Vorbereitung: Migration 004 auf n2"
+ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}n2")" ] && echo 1)" "N07b Struktursignatur Neuinstallation = Migration 002 + 003 + 004 (byte-gleich)"
 
 # N08 Migration 002-Skript des neuen Codes bleibt nach Migration 003 konsistent
 expect_exit 0 "N08 migrate_002 --check nach Migration 003" bash "$MIG2" --db "${H2A_PREFIX}n2" --check
