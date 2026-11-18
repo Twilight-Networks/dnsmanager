@@ -13,3 +13,6 @@
 *.cache
 *.tmp
 *.swp
+
+# Lokale Claude-Code-Anweisungen (nicht versioniert)
+/CLAUDE.local.md
