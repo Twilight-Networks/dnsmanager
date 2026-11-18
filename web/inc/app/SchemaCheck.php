@@ -17,6 +17,10 @@
  * scripts/migrate_002_history_foundation.sh (über web/scripts/schema_history-cli.php) für Preflight und
  * Nachprüfung; es gibt nur diese eine Definition der Erwartung.
  *
+ * AP1/H2b (E37): Ebenso history_dependencies aus Migration 003 (sql/migrations/003_history_dependencies.sql). Jedes
+ * Migrationsskript bewertet nur seine eigenen Tabellen aus derselben Erwartung (002: vier Grundtabellen, 003:
+ * history_dependencies).
+ *
  * Es werden niemals Schemaänderungen vorgenommen (keine automatische Migration beim Seitenaufruf).
  * Das Ergebnis wird je Prozess zwischengespeichert (eine Prüfung je Anfrage).
  */
@@ -114,6 +118,38 @@ final class SchemaCheck
             'fk|fk_zhs_head|1|zone_id|zone_revisions|zone_id|RESTRICT|RESTRICT',
             'fk|fk_zhs_head|2|head_revision_no|zone_revisions|revision_no|RESTRICT|RESTRICT',
             'fk|fk_zhs_head|3|head_hash|zone_revisions|content_hash|RESTRICT|RESTRICT',
+        ],
+        'history_dependencies' => [
+            'table|BASE TABLE|InnoDB',
+            'col|id|bigint(20) unsigned|NO|~|auto_increment|~|~',
+            'col|change_set_id|bigint(20) unsigned|NO|~||~|~',
+            'col|zone_id|int(11)|NO|~||~|~',
+            'col|revision_no|int(10) unsigned|NO|~||~|~',
+            'col|record_name|varchar(255)|NO|~||utf8mb4|utf8mb4_bin',
+            'col|record_type|varchar(10)|NO|~||ascii|ascii_bin',
+            'col|record_content|text|NO|~||utf8mb4|utf8mb4_bin',
+            'col|dep_change_set_id|bigint(20) unsigned|NO|~||~|~',
+            'col|dep_zone_id|int(11)|NO|~||~|~',
+            'col|dep_revision_no|int(10) unsigned|NO|~||~|~',
+            'col|dep_record_name|varchar(255)|NO|~||utf8mb4|utf8mb4_bin',
+            'col|dep_record_type|varchar(10)|NO|~||ascii|ascii_bin',
+            'col|dep_record_content|text|NO|~||utf8mb4|utf8mb4_bin',
+            "col|kind|enum('auto_ptr')|NO|~||ascii|ascii_bin",
+            'col|created_at|datetime(6)|NO|current_timestamp(6)||~|~',
+            'idx|idx_hd_change_set|1|1|change_set_id|~|BTREE',
+            'idx|idx_hd_dep_change_set|1|1|dep_change_set_id|~|BTREE',
+            'idx|idx_hd_dep_zone_revision|1|1|dep_zone_id|~|BTREE',
+            'idx|idx_hd_dep_zone_revision|1|2|dep_revision_no|~|BTREE',
+            'idx|idx_hd_zone_revision|1|1|zone_id|~|BTREE',
+            'idx|idx_hd_zone_revision|1|2|revision_no|~|BTREE',
+            'idx|PRIMARY|0|1|id|~|BTREE',
+            'fk|fk_hd_change_set|1|change_set_id|history_change_sets|id|RESTRICT|RESTRICT',
+            'fk|fk_hd_dep_change_set|1|dep_change_set_id|history_change_sets|id|RESTRICT|RESTRICT',
+            'fk|fk_hd_dep_revision|1|dep_zone_id|zone_revisions|zone_id|RESTRICT|RESTRICT',
+            'fk|fk_hd_dep_revision|2|dep_revision_no|zone_revisions|revision_no|RESTRICT|RESTRICT',
+            'fk|fk_hd_revision|1|zone_id|zone_revisions|zone_id|RESTRICT|RESTRICT',
+            'fk|fk_hd_revision|2|revision_no|zone_revisions|revision_no|RESTRICT|RESTRICT',
+            'chk|chk_hd_distinct|Table|`change_set_id` <> `dep_change_set_id`',
         ],
     ];
 

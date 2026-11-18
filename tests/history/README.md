@@ -1,4 +1,4 @@
-# History-Tests (AP1/H2a)
+# History-Tests (AP1/H2a, H2b)
 
 Regressionstests der History-Grundlagen: Migration 002, `SchemaCheck`, kanonische Zonen-Snapshots (Vertrag `zs1`),
 Diff und Baseline-Initialisierung. Architektur: [`docs/ARCHITECTURE_HISTORY.md`](../../docs/ARCHITECTURE_HISTORY.md).
@@ -36,7 +36,15 @@ bash /root/dnsmgr-h2a-harness/tests/history/cleanup_test.sh <App-SHA> <Basis-SHA
 | `migration_test.sh` | `--check`/`--apply`, Wiederholbarkeit, Sicherung, `--no-backup` nur für `dnsmgr_tNN_*`, Preflight **vor** der ersten DDL (Abweichung ⇒ Exit 2 ohne Änderung), technischer Abbruch mitten in der DDL (Fehlerinjektion) mit deterministischem Wiederanlauf, Erkennung von Mutationen (Spalte, Index, FK-Regel, CHECK entfernt, CHECK-Ausdruck bei gleichem Namen geändert, Sortierung, ENUM, NULL, Standardwert, Sicht) durch Skript **und** `SchemaCheck`, Neuinstallation = Migration (Struktursignatur), Fachtabellen unverändert (Inhalts-Prüfsumme) |
 | `db_test.php` | Baseline unter REPEATABLE READ (`innodb_snapshot_isolation = ON`) und READ COMMITTED: Ergebnisstruktur, Hash = Payload = unabhängig gelesener DB-Stand, Fachdaten/Flags/Serials unverändert, Prüflauf, Wiederholbarkeit, neue Zone, Advisory-Lock, fail-closed Schema, Fehlerinjektion je INSERT (Trigger) mit vollständigem Rollback, Teilabbruch mit Wiederanlauf, Revisionen ohne Head, **tatsächlicher Lock-Wait** gegen eine laufende Fachtransaktion mit **Mutationsprobe** (Leser ohne Sperren wird erkannt), gelöschte Zone während des Laufs, Suche nach Geheimnissen |
 | `cleanup_test.sh` | Eigentumsnachweis (S2): vollständiger `run.sh`-Lauf im Hintergrund; währenddessen fremde Datenbanken (beliebig, anderer Lauf, **gleiches Laufpräfix**) und ein fremder Benutzer angelegt; danach alle fremden Ressourcen erhalten, alle eigenen entfernt |
+| `migration003_test.sh` | H2b: Migration 003 (`history_dependencies`): ohne Migration 002 Abbruch, `--check`/`--apply` mit Sicherung, Wiederholbarkeit, abweichende Tabelle bzw. Grundtabelle ⇒ Exit 2 ohne DDL, technischer Abbruch mit Wiederanlauf, Neuinstallation = Migration |
+| `static_rh8_test.php` | H2b, R-H8 statisch: festgeschriebene Menge der Schreibstellen; je Stelle `open`, `beginZones`/`zoneCreated`, `zoneDeleting` (Löschung), `finish` vor `commit`, `close`; Laufzeitwächter vorhanden; History-Tabellen nur unter `web/inc/app/history` geschrieben |
+| `recorder_test.php` | H2b unter RR (Snapshot-Isolation) und RC, Fixture `fixture_h2b.sql`: alle elf Schreibpfade mit exakten Änderungsmengen und Revisionen (P), Berechtigung (A), Drift, Lazy-Baseline, Abgleich gelöschter Zonen, fehlender Head (D), Wächter und Transaktionsbindung (G), Snapshot-Store mit Duplicate-Key-Pfad und Nebenläufigkeit (S), Fehlerinjektion je History-Schreibvorgang (F), Lock-Wait-Fälle und Zonen ohne Head mit Gegenprobe (N), Stresslauf mit Invarianten und Suche nach Geheimnissen (X) |
+| `mutation_test.sh` | H2b: zwölf Mutationsproben (Drift, Commit-Reihenfolge, Head-Sperre, Read-View vor Zonensperren, fehlende Erfassung, Revisionsnummer, AutoPTR-Abhängigkeit, Savepoint-Bindung, Duplicate-Key-Pfad, Gap-Sperre, Wächter, `deleted_at`) – jede muss erkannt werden |
 | `cli_test.sh` | `history_baseline-cli.php` mit einem Datenbankbenutzer nur mit DML-Rechten (wie der Anwendungsbenutzer): Exitcodes, Ausgabe, Logzeilen, Lock, fail-closed ohne Migration; `schema_history-cli.php` |
 
 Hilfsdateien: `owned.sh` (Lauf-Kennung und Eigentumsregister), `lib.php` (Prüfhilfen), `fixture.sql` (Testdaten mit
 erkennbaren Platzhalter-Geheimnissen), `schemacheck.php` und `baseline_worker.php` (Gegenprobe bzw. eigener Prozess für Nebenläufigkeit).
+H2b: `fixture_h2b.sql` (gültige Zonen für `named-checkzone`), `h2b_lib.php` (Datenbank, Services, Abfragen, Invarianten),
+`h2b_worker.php` (eigener Prozess für Sperr- und Stressfälle), `h2b_fake_publish.php` (Publish-Backend ohne Agenten).
+`run.sh` führt alle Suiten aus; `H2B_SKIP_MUTATION=1` überspringt die Mutationsproben, `H2B_ONLY=P,D,…` beschränkt
+`recorder_test.php` auf Abschnitte.

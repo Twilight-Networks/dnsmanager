@@ -281,3 +281,51 @@ DROP TABLE history_change_sets;
 ```
 
 Danach verweigert ein Code ab H2a den Dienst (503), bis die Migration erneut ausgeführt wurde.
+
+## 003 – Zonenübergreifende Abhängigkeiten der Historie (AP1/H2b)
+
+| Datei | Zweck |
+|---|---|
+| `003_history_dependencies.sql` | wiederholbares SQL (`CREATE TABLE IF NOT EXISTS`, atomar) |
+| `../../scripts/migrate_003_history_dependencies.sh` | Preflight, Sicherung, Ausführung, Nachprüfung (Muster und Exitcodes wie 002) |
+
+Neue Tabelle `history_dependencies` (E37): Ein Record einer Änderungsmenge (AutoPTR in der Reverse-Zone, T2) hängt von
+einem Record einer früheren Änderungsmenge ab (Forward-Record, T1). Schlüssel ist der Inhalt `(name, type, content)`
+wie gespeichert, nie die Record-ID. Fremdschlüssel nur auf `history_change_sets` und `zone_revisions (zone_id,
+revision_no)`, alle `RESTRICT`; keine auf Fachtabellen. Bestehende Tabellen werden nicht verändert.
+
+### Verbindliche Reihenfolge
+
+1. **Sicherung und Migration 003** (Code noch alt; Migration 002 muss vorhanden und unverändert sein).
+2. **Prüfung** `--check` → Exitcode 0.
+3. **Code** ausrollen (per festem SHA). Ab diesem Stand schreiben alle DNS-relevanten Fachänderungen Historie (H2b).
+4. **Abgleich** `history_baseline-cli.php --check` (Zonen ohne Head; der Recorder legt sie bei Bedarf selbst an) und
+   `--reconcile-dry-run` / `--reconcile` (Heads von Zonen, die zwischen Baseline und Code-Update gelöscht wurden).
+
+Der alte Code bleibt mit dem erweiterten Schema lauffähig (er liest und schreibt die Tabelle nicht). Der neue Code mit
+altem Schema antwortet bei Login und geschützten Seiten mit 503 (`SchemaCheck`, fail-closed). Änderungen, die zwischen
+H2a-Baseline und Code-Update mit altem Code vorgenommen wurden, erkennt der Recorder bei der nächsten Fachänderung der
+Zone als Revision `drift` (Akteur `system`); sie werden nie dem nächsten Benutzer zugeschrieben.
+
+### Ablauf
+
+```bash
+bash scripts/migrate_003_history_dependencies.sh --db dnsmanager --check
+#    Exit 1 = Migration erforderlich, 0 = vorhanden, 2 = Migration 002 fehlt/abweichend oder Tabelle abweichend
+bash scripts/migrate_003_history_dependencies.sh --db dnsmanager --apply --backup-dir /root/dnsmanager-backup
+bash scripts/migrate_003_history_dependencies.sh --db dnsmanager --check
+
+# nach dem Code-Update
+php web/scripts/history_baseline-cli.php --check
+php web/scripts/history_baseline-cli.php --reconcile-dry-run
+php web/scripts/history_baseline-cli.php --reconcile
+```
+
+- **Preflight:** wie 002; zusätzlich müssen die vier Grundtabellen aus 002 exakt der Erwartung entsprechen
+  (Voraussetzung der Fremdschlüssel). Eine vorhandene, abweichende `history_dependencies` ⇒ Exit 2 ohne Änderung.
+- **Nachprüfung:** alle fünf History-Tabellen exakt wie erwartet; Zeilenzahl der Grundtabellen unverändert.
+- **Wiederanlauf:** Die Anweisung ist atomar; nach einem Abbruch (Exit 3) das Skript erneut ausführen.
+- **Rückweg:** Code-Rollback auf H2a ohne Löschen der Tabelle (E27); der H2a-Code nutzt sie nicht. Nach einem erneuten
+  Code-Update erkennt der Recorder zwischenzeitliche Änderungen als Drift, neue Zonen erhalten eine Lazy-Baseline,
+  gelöschte Zonen kennzeichnet `--reconcile`. `DROP TABLE` nur als freigegebene, datenverlustbehaftete Sondermaßnahme
+  mit Sicherung.

@@ -16,6 +16,10 @@
  *   (DELETE + INSERT) zusammen mit der auslösenden Änderung atomar.
  * - Der Aufrufer hält die Zonenzeile gesperrt (zones FOR UPDATE), bevor er den Neuaufbau auslöst.
  *
+ * Historie (AP1/H2b, R-H8, E39): Beide Operationen verlangen eine offene Erfassung (ZoneHistoryRecorder) der
+ * laufenden Transaktion, die die Zone erfasst; sonst LogicException. Damit kann keine DNS-relevante Fachänderung
+ * ohne Historie festgeschrieben werden.
+ *
  * Temporäre Dateien: Die Prüfdatei entsteht in einem eigenen Arbeitsverzeichnis (BindWorkDir), das im
  * finally entfernt wird (S34). Kein Web-Bootstrap, keine globale Verbindung.
  */
@@ -24,6 +28,7 @@ require_once __DIR__ . '/../app/zones/ZoneBuildBackend.php';
 require_once __DIR__ . '/../app/zones/ZoneNameserver.php';
 require_once __DIR__ . '/bind_file_generator.php';
 require_once __DIR__ . '/BindWorkDir.php';
+require_once __DIR__ . '/../app/history/ZoneHistoryRecorder.php';
 
 final class BindZoneBuildBackend implements ZoneBuildBackend
 {
@@ -38,11 +43,12 @@ final class BindZoneBuildBackend implements ZoneBuildBackend
      * Zonendatei erzeugen und prüfen; bei Erfolg Zone als geändert markieren (changed = 1).
      *
      * @return array{status: string, output: string}
-     * @throws LogicException ohne offene Transaktion des Aufrufers
+     * @throws LogicException ohne offene Transaktion des Aufrufers oder ohne History-Erfassung der Zone (R-H8)
      */
     public function validateAndFlag(int $zoneId): array
     {
         $this->assertCallerTransaction('validateAndFlag');
+        ZoneHistoryRecorder::assertOpenFor($this->pdo, $zoneId);
 
         $work = BindWorkDir::create();
         try {
@@ -80,11 +86,12 @@ final class BindZoneBuildBackend implements ZoneBuildBackend
      * NS- und Glue-Records der Zone aus der Serverzuweisung neu aufbauen, danach wie validateAndFlag().
      *
      * @return array{status: string, output: string}
-     * @throws LogicException ohne offene Transaktion des Aufrufers
+     * @throws LogicException ohne offene Transaktion des Aufrufers oder ohne History-Erfassung der Zone (R-H8)
      */
     public function rebuildNsGlueAndFlag(int $zoneId): array
     {
         $this->assertCallerTransaction('rebuildNsGlueAndFlag');
+        ZoneHistoryRecorder::assertOpenFor($this->pdo, $zoneId);
 
         $pdo = $this->pdo;
 

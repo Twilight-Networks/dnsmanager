@@ -10,6 +10,9 @@
  *
  * Paket 4b (S32) – Reihenfolge:
  * 1. Transaktion: prüfen, Records/Account schreiben, Zonenprüfung und changed = 1 (ZoneBuildBackend), Commit.
+ *    Historie (AP1/H2b): fehlender Head ⇒ Lazy-Baseline vor der Transaktion (E35); direkt nach der Zonensperre
+ *    Head sperren und Vorher-Stand lesen; vor dem Commit Drift- und Änderungsrevision in einer Änderungsmenge
+ *    dyndns.api_update mit Akteur dyndns_account (nur Konto-ID, Kanal api).
  *    Ein Prüffehler oder eine Ablehnung verwirft die Änderung vollständig (Rollback).
  * 2. Danach Veröffentlichung über PublishService::publishZone() (gemeinsame Zonenlogik und Lock mit Publish
  *    All; Serial vor der Verteilung festgeschrieben). Ein Verteilungsfehler rollt die festgeschriebene Änderung
@@ -54,6 +57,8 @@ require_once __DIR__ . '/../zones/ZoneBuildBackend.php';
 require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/../publish/PublishService.php';
 require_once __DIR__ . '/../auth/DummyPasswordHash.php';
+require_once __DIR__ . '/../history/HistoryContext.php';
+require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
 
 /**
  * Interne fachliche Ablehnung des Updates (nur innerhalb des Service verwendet). Die Ausnahmenachricht lautet
@@ -143,8 +148,13 @@ final class DyndnsUpdateService
 
         $m = [];
         $results = [];
+        $history = null;
 
         try {
+            // Historie: Akteur ist das DynDNS-Konto (nur Konto-ID); fehlender Head ⇒ Lazy-Baseline vor der Transaktion
+            $historyCtx = HistoryContext::forDyndnsAccount($account_id, 'dyndns.api_update');
+            ZoneHistoryRecorder::ensureHeads($this->pdo, [$zone_id], $historyCtx);
+
             $this->pdo->beginTransaction();
 
             // 1. Zone sperren – erste Abfrage der Transaktion
@@ -153,6 +163,10 @@ final class DyndnsUpdateService
             if ($zone === null) {
                 throw new DyndnsUpdateReject(false, 'zone_not_found', "zone_id={$zone_id}");
             }
+
+            // Historie: Head sperren und Vorher-Stand lesen (nur sperrende Lesevorgänge, vor jedem einfachen SELECT)
+            $history = ZoneHistoryRecorder::open($this->pdo, $historyCtx);
+            $history->beginZones([$zone_id]);
 
             // 2. Account unter Sperre neu laden und mit den authentifizierten Daten abgleichen
             $stmt = $this->pdo->prepare("
@@ -270,7 +284,8 @@ final class DyndnsUpdateService
                 }
             }
 
-            // 9. Festschreiben – vor jeder Verteilung (S32)
+            // 9. Festschreiben – vor jeder Verteilung (S32); Historie unmittelbar davor
+            $history->finish();
             $this->pdo->commit();
         } catch (Throwable $e) {
             try {
@@ -290,6 +305,8 @@ final class DyndnsUpdateService
             }
 
             return new ServiceResult(false, $m);
+        } finally {
+            $history?->close();
         }
 
         // 10. Veröffentlichen – nach dem Commit; ein Verteilungsfehler rollt die festgeschriebene Änderung nicht zurück.

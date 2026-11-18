@@ -24,6 +24,13 @@
  * Lesezugriffe und Prüfungen erfolgen unter diesen Sperren. Die Garantie gilt nur für Schreibpfade,
  * die dieselben Sperren verwenden. AutoPTR (createAutoPtr) nutzt eine eigene, nachgelagerte
  * Transaktion, die die Berechtigung für die Reverse-Zone sperrt und ausschließlich diese Zone sperrt.
+ *
+ * Historie (AP1/H2b, docs/ARCHITECTURE_HISTORY.md Abschnitt 5b): Fehlende Heads legt ZoneHistoryRecorder::ensureHeads()
+ * vor der Transaktion an (E35). Direkt nach dyndnsLockZones() – vor jedem einfachen SELECT – sperrt beginZones() die
+ * Heads und liest den Vorher-Stand; finish() schreibt Drift- und Änderungsrevisionen unmittelbar vor dem Commit
+ * (record.create, record.update, record.delete). AutoPTR (T2) erhält eine eigene Änderungsmenge record.auto_ptr mit
+ * der Korrelation von T1 und einen Eintrag in history_dependencies (PTR ↔ Forward-Record, R-H7). Ein Fehler der
+ * Historie rollt die jeweilige Transaktion zurück und erscheint als bisheriger Fehlercode.
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -35,6 +42,8 @@ require_once __DIR__ . '/../../validators.php';
 require_once __DIR__ . '/../../dyndns_guard.php';
 require_once __DIR__ . '/RecordInput.php';
 require_once __DIR__ . '/AutoPtr.php';
+require_once __DIR__ . '/../history/HistoryContext.php';
+require_once __DIR__ . '/../history/ZoneHistoryRecorder.php';
 
 final class RecordService
 {
@@ -96,6 +105,7 @@ final class RecordService
         $pdo = $this->pdo;
         $messages = [];
         $lastZoneId = null;
+        $history = null;
 
         try {
             // Zonen der Records ohne Sperre ermitteln (nur zur Bestimmung der Sperrmenge).
@@ -122,6 +132,10 @@ final class RecordService
                 }
             }
 
+            // Historie: fehlende Heads vor der Transaktion anlegen (E35)
+            $historyCtx = HistoryContext::forUser($actor, 'record.delete');
+            ZoneHistoryRecorder::ensureHeads($pdo, $lockIds, $historyCtx);
+
             $pdo->beginTransaction();
 
             // Erste Abfragen der Transaktion: Schreibberechtigung für die vorab ermittelten Zonen sperrend
@@ -129,6 +143,10 @@ final class RecordService
             // berechtigten Zonen aufsteigend sperren
             $permitted = $this->zoneAccess->lockZoneWritePermissions($actor, $lockIds);
             $zones = dyndnsLockZones($pdo, $permitted);
+
+            // Historie: Heads aller gesperrten Zonen sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
+            $history = ZoneHistoryRecorder::open($pdo, $historyCtx);
+            $history->beginZones(array_keys($zones));
 
             $affected_zones = [];
 
@@ -246,6 +264,7 @@ final class RecordService
                 }
             }
 
+            $history->finish();
             $pdo->commit();
             $messages[] = new ServiceMessage('success', 'record.delete.success');
 
@@ -257,6 +276,8 @@ final class RecordService
             ]);
 
             return new ServiceResult(false, $messages, $lastZoneId);
+        } finally {
+            $history?->close();
         }
     }
 
@@ -317,7 +338,12 @@ final class RecordService
             return new ServiceResult(false, $messages, $zoneId);
         }
 
+        $history = null;
         try {
+            // Historie: fehlender Head ⇒ Lazy-Baseline vor der Transaktion (E35)
+            $historyCtx = HistoryContext::forUser($actor, 'record.update');
+            ZoneHistoryRecorder::ensureHeads($pdo, [$zoneId], $historyCtx);
+
             $pdo->beginTransaction();
 
             // Erste Abfragen der Transaktion: Schreibberechtigung sperrend prüfen (users S → user_zones S,
@@ -343,6 +369,10 @@ final class RecordService
 
                 return new ServiceResult(false, $messages, $zoneId);
             }
+
+            // Historie: Head sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
+            $history = ZoneHistoryRecorder::open($pdo, $historyCtx);
+            $history->beginZones([$zoneId]);
 
             // Aktueller Zonenname unter der Sperre (die Zone kann zwischenzeitlich umbenannt worden sein)
             $zoneNameRaw = (string)$zones[$zoneId]['name'];
@@ -513,6 +543,7 @@ final class RecordService
                 ]);
             }
 
+            $history->finish();
             $pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
@@ -525,6 +556,8 @@ final class RecordService
             ]);
 
             return new ServiceResult(false, $messages, $zoneId);
+        } finally {
+            $history?->close();
         }
 
         $messages[] = new ServiceMessage('success', 'record.update.success', [
@@ -601,7 +634,12 @@ final class RecordService
             return new ServiceResult(false, $messages, $zoneId);
         }
 
+        $history = null;
+        $historyCtx = HistoryContext::forUser($actor, 'record.create');
         try {
+            // Historie: fehlender Head ⇒ Lazy-Baseline vor der Transaktion (E35)
+            ZoneHistoryRecorder::ensureHeads($pdo, [$zoneId], $historyCtx);
+
             $pdo->beginTransaction();
 
             // Erste Abfragen der Transaktion: Schreibberechtigung sperrend prüfen (users S → user_zones S,
@@ -629,6 +667,10 @@ final class RecordService
 
                 return new ServiceResult(false, $messages, $zoneId);
             }
+
+            // Historie: Head sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
+            $history = ZoneHistoryRecorder::open($pdo, $historyCtx);
+            $history->beginZones([$zoneId]);
 
             // Aktueller Zonenname unter der Sperre (die Zone kann zwischenzeitlich umbenannt worden sein)
             $zoneNameRaw = (string)$zones[$zoneId]['name'];
@@ -693,6 +735,7 @@ final class RecordService
                 ]);
             }
 
+            $history->finish();
             $pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
@@ -704,7 +747,17 @@ final class RecordService
             ]);
 
             return new ServiceResult(false, $messages, $zoneId);
+        } finally {
+            $history?->close();
         }
+
+        // Bezug für eine AutoPTR-Abhängigkeit (R-H7): Änderungsmenge und Revision von T1
+        $t1 = [
+            'ctx'         => $historyCtx,
+            'changeSetId' => $history?->changeSetId(),
+            'revisionNo'  => $history?->revisionNo($zoneId),
+            'recordKey'   => [$name, $type, $content],
+        ];
 
         // Forward-Record ist committed
         $messages[] = new ServiceMessage('success', 'record.create.success', [
@@ -716,7 +769,7 @@ final class RecordService
 
         // Automatischen PTR erzeugen (optional, nach dem Commit; Fehler rollen den Forward-Record nicht zurück)
         if (($type === 'A' || $type === 'AAAA') && $autoPtr) {
-            $this->createAutoPtr($actor, $zoneId, $zoneName, $type, $content, $name, $ttl, $messages);
+            $this->createAutoPtr($actor, $zoneId, $zoneName, $type, $content, $name, $ttl, $messages, $t1);
         }
 
         return new ServiceResult(true, $messages, $zoneId);
@@ -746,7 +799,11 @@ final class RecordService
      *              ptr_zonefile_invalid, ptr_db_failed
      * Zusätzlich kann record.create.ptr_zonefile_warning (ohne ptrOutcome) auftreten.
      *
+     * Historie: eigene Änderungsmenge record.auto_ptr mit der Korrelation von T1; nur bei 'created' zusätzlich ein
+     * Eintrag in history_dependencies (PTR in der Reverse-Zone ↔ Forward-Record aus T1).
+     *
      * @param ServiceMessage[] $messages
+     * @param array{ctx: HistoryContext, changeSetId: ?int, revisionNo: ?int, recordKey: array} $t1 Bezug auf T1
      */
     private function createAutoPtr(
         Actor $actor,
@@ -756,9 +813,11 @@ final class RecordService
         string $ip,
         string $name,
         int $ttl,
-        array &$messages
+        array &$messages,
+        array $t1
     ): void {
         $pdo = $this->pdo;
+        $history = null;
 
         // Ziel-FQDN berechnen (Wildcards und Namen außerhalb der Zone werden übersprungen)
         $target = AutoPtr::targetFqdn($name, $zoneName);
@@ -838,6 +897,10 @@ final class RecordService
                 return;
             }
 
+            // Historie: eigene Änderungsmenge mit der Korrelation von T1; fehlender Head ⇒ Lazy-Baseline (E35)
+            $historyCtx = $t1['ctx']->withOperation('record.auto_ptr');
+            ZoneHistoryRecorder::ensureHeads($pdo, [$ptr_zone_id], $historyCtx);
+
             $pdo->beginTransaction();
 
             // Erste Abfragen von T2: Schreibberechtigung für die Reverse-Zone sperrend prüfen (users S →
@@ -860,6 +923,10 @@ final class RecordService
                 $zoneMissing();
                 return;
             }
+
+            // Historie: Head der Reverse-Zone sperren und Vorher-Stand lesen (vor jedem einfachen SELECT)
+            $history = ZoneHistoryRecorder::open($pdo, $historyCtx);
+            $history->beginZones([$ptr_zone_id]);
 
             // Vorhandene PTR-Records unter der Sperre prüfen
             $stmt = $pdo->prepare("SELECT content FROM records WHERE zone_id = ? AND name = ? AND type = 'PTR'");
@@ -922,6 +989,19 @@ final class RecordService
                 return;
             }
 
+            // Abhängigkeit PTR ↔ Forward-Record (R-H7), nur wenn T1 eine Revision erzeugt hat
+            if ($t1['changeSetId'] !== null && $t1['revisionNo'] !== null) {
+                $history->addDependency(
+                    $ptr_zone_id,
+                    [$ptr_name, 'PTR', $hostname],
+                    (int)$t1['changeSetId'],
+                    $zoneId,
+                    (int)$t1['revisionNo'],
+                    $t1['recordKey']
+                );
+            }
+
+            $history->finish();
             $pdo->commit();
         } catch (Throwable $e) {
             $this->rollbackIfActive();
@@ -932,6 +1012,8 @@ final class RecordService
                 'detail'     => $e->getMessage(),
             ]);
             return;
+        } finally {
+            $history?->close();
         }
 
         if ($rebuild['status'] === 'warning') {
