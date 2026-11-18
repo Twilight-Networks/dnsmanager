@@ -3,6 +3,10 @@
 Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6); **Core-Abschluss** mit `main` = `7cdd9a8`, produktiv auf ns1/ns2 (Abschnitt 0.1). Dieses Dokument ist die zentrale Übersicht für den Meilenstein
 „vollständige Trennung der Fachlogik von der Weboberfläche“. **Der Meilenstein ist abgeschlossen** (PR #64, Betriebsprüfung auf ns1 am 13.11.2026).
 
+**Einordnung ns1/ns2 (Klarstellung 18.11.2026):** ns1 (192.168.53.122) und ns2 (192.168.53.125) sind die dedizierten Entwicklungs- und Testmaschinen des Projekts, keine externen Produktivsysteme. „Produktiv“, „Produktivstand“, „Produktivübernahme“ und „Produktion“ bezeichnen in diesem Dokument den dort installierten und abgenommenen Softwarestand. Die historischen Beschreibungen der Abnahmen bleiben unverändert.
+
+**Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026, **noch nicht implementiert**). Die dort vorgesehenen Erweiterungen der Lock-Reihenfolge (Abschnitt 6, R-H9) und der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den jeweiligen Meilensteinen H2a–H5 und AS.
+
 ## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
 - **Die Core-/UI-Trennung ist abgeschlossen.** Mit Paket 6 sind die letzten Kopplungen K1–K3 (Statusauswertungen der Diagnosen in
@@ -526,3 +530,4 @@ Verbleibendes Restrisiko: Eine bereits laufende Anfrage endet nach einem Rechtee
 | 14.11.2026 | UI U3 | Bausteine (`inc/web/ui_components.php`, `components.css/.js`, `diff.js`), Editor-Rahmen und DIFF als allgemeine Bausteine; U0-B9 (Löschbestätigung ohne JS), U1-B1 (Toasts ohne JS), U0-B6 (403-Seite im Layout, Status unverändert); keine Core-/Action-Änderung; Bericht `docs/ui/U3_BAUSTEINE.md` |
 | 14.11.2026 | UI U3 | PR #83 gemergt (`4b4aafa`, Tree `ec10912`): U3 abgeschlossen |
 | 14.11.2026 | U4-Core | `RecordContentBuilder` als einzige serverseitige Zusammensetzung (Kontext create/update, verlustfreie Bearbeitung, DKIM in ≤ 255-Byte-Zeichenketten mit geprüften Parametern), Parser DKIM tag-basiert, Validator akzeptiert Base64-Padding, `RecordReadService::getZoneRecordView()` mit `isDyndns`; Typ-Matrix `tests/ui/records`; Abweichungen U4C-A1 bis A9; Bericht `docs/ui/U4_CORE.md` |
+| 18.11.2026 | AP1/H1 | Architektur für Änderungshistorie, Versionsstände, Discard und Restore freigegeben und in `docs/ARCHITECTURE_HISTORY.md` dokumentiert (nicht implementiert); Verweis im Kopf ergänzt; Klarstellung: ns1/ns2 sind dedizierte Entwicklungs- und Testmaschinen, „produktiv“ bezeichnet den dort installierten Softwarestand. Spätere Änderungen nach dem Eintrag U4-Core (u. a. PR #92–#96) sind in diesem Protokoll nicht nachgetragen |
