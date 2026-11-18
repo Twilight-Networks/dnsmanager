@@ -36,12 +36,14 @@ persönliche Freigaben) gehören in die nicht versionierte `CLAUDE.local.md` (Ab
 
 ## 3. Git und GitHub
 
-- Branches von aktuellem `origin/main` mit Präfix `refactor/`, `security/`, `fix/` oder `docs/`; PRs nach `main` als Draft.
+- Branches von aktuellem `origin/main` mit Präfix `feat/` (neue Funktionalität), `refactor/`, `security/`, `fix/` oder
+  `docs/`; PRs nach `main` als Draft.
 - Vor Änderungen `git status`, Branch, `HEAD` und `origin/main` prüfen. Ein Checkout kann von mehreren Sitzungen genutzt
   werden: kein Branchwechsel und kein Aufräumen fremder Arbeitsstände ohne Rücksprache; eigene Arbeit bevorzugt in einem
   separaten Worktree.
 - Vor jedem Commit: exakte Dateiliste, `git status --short`, `git diff --cached --name-only`,
-  `git -c core.whitespace=cr-at-eol diff --cached --check` und `git diff`. Nur beabsichtigte Dateien stagen, kein
+  `git -c core.whitespace=cr-at-eol diff --cached --check`, `git diff --cached` (vollständiger Staging-Inhalt) und
+  `git diff` (nicht gestagte Reste). Nur beabsichtigte Dateien stagen, kein
   `git add .`, keine ignorierten Dateien erzwingen.
 - Nach dem Commit `git log -1 --format="%H%n%T%n%s"` mit dem vorherigen `git write-tree` abgleichen und den gepushten
   SHA auf GitHub verifizieren.
