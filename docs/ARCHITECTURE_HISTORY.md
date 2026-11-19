@@ -693,6 +693,16 @@ Token 409 `stale_fence`, fremde Domäne 409): Zonendatei byte-gleich, kein BIND-
 `db.zone.example.test` mit regulär fortgeschriebener Serial (`2026111904`); alle Zonen DB = Datei = geladen auf ns1 und
 ns2.
 
+**Stufentests Review AS1 auf dem installierten ns2 (19.11.2026)** – Verteilung jeweils über den installierten Core auf
+ns1 (`zone.example.test`), Rückbau auf `7cdd9a8`. (1) E97, Code `8bfb52b`: `off` mit Fehlermarke ⇒ ns2 lehnt `zone_sync`
+und `conf_sync` mit 503 `fence_fault` ab, Datei unverändert, Zone bleibt ausstehend; nach `clear-fault` reguläre
+Verteilung. (2) E98-Wiederherstellungsweg, Code `214a0e3`, Befehle unmittelbar aus `AGENT_FENCING.md` Abschnitt 6:
+Fall 4b (verwaiste Zeile einer nicht existierenden Zone): ns2 lehnt ab (422 Preflight, 500), alle Zonen weiter mit
+unveränderter Serial ausgeliefert, Schritte 2/3 erkennen und klassifizieren die Zeile, Bereinigung nach 4b, danach
+reguläre Verteilung; Fall 4a (fehlende `.conf` der benötigten Zone): erste Veröffentlichung teilweise (`zone_sync` 422,
+`conf_sync` stellt die Datei wieder her), zweite vollständig; Vorlage erzeugt eine mit dem Generator byte-gleiche Datei.
+Die Zone wurde in keinem Schritt entladen. Endzustand: alle Zonen DB = geladen auf ns1 und ns2.
+
 **Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
 I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
 `noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, L Vollständigkeit der Auflistung, X nicht prüfbare Existenz, M Mutationsproben M01–M25; I und C für alle drei
