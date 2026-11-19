@@ -38,6 +38,9 @@ $as2 = fenceMode($config) !== 'off';
 if ($as2) {
     agentResponseAttach('effect', 'none');   // bis zur ersten nachgewiesenen Änderung
 }
+// E118: fehlender oder ungültiger fencing_mode ⇒ früher Abbruch (fence_misconfigured, 503) vor jeder Prüfung, jedem
+// externen Prozess und jeder Änderung; kein stiller Rückfall auf off
+agentRejectMisconfiguredMode($config);
 
 // === Eingabe prüfen ===
 $input = json_decode(file_get_contents('php://input'), true);

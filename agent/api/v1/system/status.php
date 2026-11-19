@@ -30,10 +30,10 @@ $uptimeSeconds = @file_get_contents('/proc/uptime');
 $uptime = $uptimeSeconds ? (int)explode(' ', $uptimeSeconds)[0] : null;
 $load = sys_getloadavg();
 
-// AS2a (E117): Nur der ausdrücklich konfigurierte Modus off (bzw. fehlendes fencing_mode) verwendet den bisherigen Ablauf
-// (E95, E101). In observe/enforce laufen alle externen Prozesse dieses Endpunkts über den Prozess-Runner mit absoluter
-// Frist. Fail-closed ohne externen Prozess (Review AS2a): fehlende PHP-Erweiterung posix (Prozessgruppen wären nicht
-// beendbar; E100) ⇒ 503 agent_requirement_missing; unbekannter fencing_mode ⇒ 503 fence_misconfigured.
+// AS2a (E117, E118): Nur der ausdrücklich konfigurierte Modus off verwendet den bisherigen Ablauf (E95, E101). In
+// observe/enforce laufen alle externen Prozesse dieses Endpunkts über den Prozess-Runner mit absoluter Frist. Fail-closed
+// ohne externen Prozess: fehlende PHP-Erweiterung posix (Prozessgruppen wären nicht beendbar; E100) ⇒ 503
+// agent_requirement_missing; fehlender oder unbekannter fencing_mode (E118) ⇒ 503 fence_misconfigured.
 $mode = fenceMode($config);
 if ($mode !== 'off') {
     if (!agentPosixAvailable()) {
@@ -47,7 +47,7 @@ if ($mode !== 'off') {
     if ($mode === 'invalid') {
         sendJsonResponse(503, [
             'status'  => 'error',
-            'message' => 'Fencing: unbekannter fencing_mode in der Agent-Konfiguration – Statusprüfung nicht ausgeführt',
+            'message' => 'Fencing: fencing_mode fehlt oder ist ungültig (erforderlich: ausdrücklich off, observe oder enforce) – Statusprüfung nicht ausgeführt',
             'code'    => 'fence_misconfigured',
             'fencing' => agentFenceStatus($config),
         ]);
