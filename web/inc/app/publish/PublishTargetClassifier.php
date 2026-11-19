@@ -23,6 +23,12 @@
  * - partial   nur Cleanup: Agent meldet Fehler nach einer Änderung – Dateien entfernt oder zones.conf neu geschrieben
  *             und neu geladen (erkennbar an entfernten Dateien bzw. am Schlüssel "rndc" der Fehlerantwort).
  * Es wird nichts erfunden: Weder Serial noch Datei-Hash noch Reload-Ergebnis werden aus der Antwort abgeleitet.
+ *
+ * AS2a (E113, docs/ARCHITECTURE_HISTORY.md Abschnitt 5f): Enthält die Agentenantwort das Feld "effect" (Agenten in
+ * observe/enforce), richtet sich die Einordnung ausschließlich nach HTTP-Status, Agent-Status und effect (Tabelle in
+ * classifyEffect). effect beschreibt nur die nachgewiesene lokale Datei- bzw. Konfigurationswirkung; auch "ok" ist
+ * weiterhin kein Nachweis des von BIND geladenen Stands. Ohne effect (Agenten im Modus off) gilt die Einordnung E63
+ * unverändert. Die operative Auswertung bleibt unverändert (J8).
  */
 
 final class PublishTargetClassifier
@@ -72,6 +78,10 @@ final class PublishTargetClassifier
         $agentJson = is_array($json) && isset($json['status']) && is_string($json['status']);
         $message = $agentJson ? self::messageOf($json) : '';
 
+        if ($agentJson && array_key_exists('effect', $json)) {
+            return self::classifyEffect($kind, $http, $httpStatus, $json, $message);
+        }
+
         if ($http === 200) {
             if ($agentJson && $json['status'] === 'success') {
                 if ($kind === self::KIND_CLEANUP) {
@@ -105,6 +115,63 @@ final class PublishTargetClassifier
         }
 
         return self::result('rejected', $httpStatus, 'agent_error', $message);
+    }
+
+    /** Zulässige Werte von effect (AS2a) */
+    private const EFFECTS = ['none', 'unchanged', 'applied', 'partial', 'unknown'];
+
+    /**
+     * E113: Einordnung nach HTTP-Status × Agent-Status × effect.
+     *
+     * | HTTP  | Agent-Status | effect             | zone_sync/conf_sync | Cleanup  |
+     * | 200   | success      | applied, unchanged | ok                  | ok       |
+     * | 200   | success      | partial            | unknown (Widerspr.) | partial  |
+     * | 200   | success      | none, unknown      | unknown (Widerspr.) | unknown  |
+     * | ≠ 200 | error        | none               | rejected            | rejected |
+     * | ≠ 200 | error        | unchanged          | unknown (Widerspr.) | unknown  |
+     * | ≠ 200 | error        | applied, partial   | unknown             | partial  |
+     * | ≠ 200 | error        | unknown            | unknown             | unknown  |
+     * | jeder | jeder        | unbekannter Wert   | unknown             | unknown  |
+     * | sonst (200 mit error, ≠ 200 mit success)    | unknown             | unknown  |
+     */
+    private static function classifyEffect(string $kind, int $http, ?int $httpStatus, array $json, string $message): array
+    {
+        $effect = $json['effect'];
+        $cleanup = $kind === self::KIND_CLEANUP;
+        $removedConf = $cleanup ? self::count($json['removed_conf'] ?? null) : null;
+        $removedZone = $cleanup ? self::count($json['removed_zone_files'] ?? null) : null;
+        $agentCode = is_string($json['code'] ?? null) && preg_match('/^[a-z_]{1,32}$/D', $json['code']) === 1 ? $json['code'] : null;
+
+        if (!is_string($effect) || !in_array($effect, self::EFFECTS, true)) {
+            return self::result('unknown', $httpStatus, 'invalid_effect', $message !== '' ? $message : 'unbekannte Wirkungsangabe');
+        }
+        $success = $http === 200 && $json['status'] === 'success';
+        $error = $http !== 200 && $json['status'] === 'error';
+        if (!$success && !$error) {
+            return self::result('unknown', $httpStatus, 'invalid_response', $message !== '' ? $message : "HTTP $http mit Agent-Status {$json['status']}");
+        }
+
+        if ($success) {
+            if ($effect === 'applied' || $effect === 'unchanged') {
+                if ($cleanup && ($removedConf === null || $removedZone === null)) {
+                    return self::result('unknown', 200, 'invalid_response', 'Cleanup-Antwort ohne Liste der entfernten Dateien');
+                }
+                return self::result('ok', 200, null, null, $removedConf, $removedZone);
+            }
+            if ($effect === 'partial' && $cleanup) {
+                return self::result('partial', 200, 'cleanup_incomplete', $message !== '' ? $message : 'Cleanup teilweise', $removedConf ?? 0, $removedZone ?? 0);
+            }
+            return self::result('unknown', 200, 'effect_contradiction', "Erfolg mit effect=$effect");
+        }
+
+        return match ($effect) {
+            'none'      => self::result('rejected', $httpStatus, $agentCode ?? 'agent_error', $message),
+            'unchanged' => self::result('unknown', $httpStatus, 'effect_contradiction', $message !== '' ? $message : 'Fehler mit effect=unchanged'),
+            'applied', 'partial' => $cleanup
+                ? self::result('partial', $httpStatus, $agentCode ?? 'cleanup_incomplete', $message, $removedConf ?? 0, $removedZone ?? 0)
+                : self::result('unknown', $httpStatus, $agentCode ?? 'effect_applied', $message),
+            default     => self::result('unknown', $httpStatus, $agentCode ?? 'effect_unknown', $message),
+        };
     }
 
     /** Ergebnis eines lokalen Fehlers vor dem Senden (Aufrufer: fehlende Datei, Hash-Abweichung, Ziel verändert …) */

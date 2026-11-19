@@ -50,18 +50,30 @@ return [
     'bind_named_checkzone' => '/usr/bin/named-checkzone',
     'bind_named_checkconf' => '/usr/bin/named-checkconf',
     'bind_rndc'            => '/usr/sbin/rndc',
+    // AS2a (nur observe/enforce): dig für die Abfrage des lokalen BIND an 127.0.0.1
+    'bind_dig'             => '/usr/bin/dig',
+
+    /** ---------------------------------------
+     *  Zustandsprüfung vor der Übernahme (AS2a, docs/ARCHITECTURE_HISTORY.md Abschnitt 5f; nur observe/enforce)
+     * --------------------------------------- */
+    // Kontrollzone (Betriebsvoraussetzung): autoritative Zone dieses BIND ohne eigene allow-query-Anweisung, nicht vom
+    // DNS-Manager verwaltet (Standard 'localhost', z. B. aus named.conf.default-zones). Ohne sie gilt eine REFUSED-Antwort
+    // für eine nicht konfigurierte Zone ohne Elternzone als nicht nachweisbar (served_state_unknown).
+    // 'l3_control_zone' => 'localhost',
 
     /** ---------------------------------------
      *  Fencing (Meilenstein AS, docs/ARCHITECTURE_HISTORY.md Abschnitt 5e)
      * --------------------------------------- */
-    // Modus (steuert nur die Fencing-Prüfung, nie die Integritätssicherung):
-    // - 'off' (Standard, wenn nicht gesetzt): keine Fencing-Prüfung, der Höchststand wird nicht verwendet;
+    // Modus (steuert nur die Fencing-Prüfung, nie die Integritätssicherung) – PFLICHTANGABE (E118):
+    // - 'off': keine Fencing-Prüfung, der Höchststand wird nicht verwendet (bisheriges Verhalten);
     // - 'observe': prüfen und Höchststand fortschreiben, Fencing-Gründe (Token, Domäne, Höchststand) nicht ablehnen,
     //   aber Integritätsfehler (Höchststand ungültig oder nicht dauerhaft speicherbar) ablehnen;
     // - 'enforce': fail-closed.
-    // In JEDEM Modus sperren eine Fehlermarke (.dnsmanager-fence.fault) und eine fehlende PHP-Erweiterung posix alle
-    // Schreibvorgänge (docs/AGENT_FENCING.md). Ein unbekannter Wert sperrt alle Schreibvorgänge.
-    // 'fencing_mode' => 'off',
+    // Fehlt der Schlüssel oder ist der Wert unbekannt, lehnen zone_sync, conf_sync, zone_cleanup und system/status jeden
+    // Aufruf mit fence_misconfigured (503) ab – es gibt keinen stillen Rückfall auf 'off'. In JEDEM Modus sperren eine
+    // Fehlermarke (.dnsmanager-fence.fault) und eine fehlende PHP-Erweiterung posix alle Schreibvorgänge
+    // (docs/AGENT_FENCING.md).
+    'fencing_mode' => 'off',
 
     // Fencing-Domäne der Installation (UUID in Kleinbuchstaben). Muss der Domäne der Datenbank dieser Installation
     // entsprechen; der Agent nimmt nur Anfragen und Höchststände dieser Domäne an. Für observe/enforce Pflicht.

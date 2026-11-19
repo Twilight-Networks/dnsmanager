@@ -9,6 +9,11 @@
  * - Entfernt KEINE anderen .conf-Dateien (Orphan-Cleanup erfolgt ausschließlich über zone_cleanup.php)
  * - Führt einen BIND-Reload via rndc durch
  *
+ * AS2a (Modi observe/enforce; docs/ARCHITECTURE_HISTORY.md Abschnitt 5f): Prozessfristen (E117), Exit-Code des
+ * Reloads (E93) und Wirkungsangabe effect. Der Rollback vor dem Reload bleibt unverändert (rollback = ok/failed nur bei
+ * tatsächlich versuchtem Rollback); nach dem Reload-Versuch gibt es keinen Rollback (Vorwärtsstrategie). Im Modus off ist
+ * das Verhalten unverändert (E95, E101).
+ *
  * Sicherheit:
  * - Zugriff nur mit gültigem Bearer-Token (Header: Authorization: Bearer <token>)
  * - Kein Datenbankzugriff erforderlich
@@ -21,12 +26,22 @@ require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
 require_once __DIR__ . '/../../../inc/fence.php';
+require_once __DIR__ . '/../../../inc/dns_state.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
 $config = require __DIR__ . '/../../../config/api_config.php';
 $validTokens = loadApiTokens($config['token_file']);
 requireValidToken($validTokens);
+
+// AS2a: neue Fristen und Angaben nur in observe/enforce
+$as2 = fenceMode($config) !== 'off';
+if ($as2) {
+    agentResponseAttach('effect', 'none');   // bis zur ersten nachgewiesenen Änderung
+}
+// E118: fehlender oder ungültiger fencing_mode ⇒ früher Abbruch (fence_misconfigured, 503) vor jeder Prüfung, jedem
+// externen Prozess und jeder Änderung; kein stiller Rückfall auf off
+agentRejectMisconfiguredMode($config);
 
 // === Eingabe verarbeiten ===
 $input = json_decode(file_get_contents('php://input'), true);
@@ -49,12 +64,24 @@ $zonesConfPath = $config['zones_conf_file'];
 // Serialisiert zone_sync und conf_sync gegenseitig: alle Änderungen an verwalteten BIND-Dateien
 // und der BIND-Reload erfolgen unter diesem Lock. Erst nach reloadBind() freigeben.
 $lockPath = agentLockPath($config);
-$lockHandle = @fopen($lockPath, 'c');
-if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
-    if (is_resource($lockHandle)) {
-        fclose($lockHandle);
+if ($as2) {
+    // AS2a (E117): nicht blockierend mit Frist; es müssen mindestens 8 s Arbeitszeit verbleiben
+    $lock = agentLockWithDeadline($lockPath, 8.0);
+    $lockHandle = $lock['handle'];
+    if ($lockHandle === null) {
+        if ($lock['reason'] === 'timeout') {
+            sendJsonResponse(503, ['status' => 'error', 'message' => 'Agent-Sperre innerhalb der Frist nicht erhalten – keine Änderung', 'code' => 'lock_timeout']);
+        }
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für die Konfigurationsübernahme']);
     }
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für die Konfigurationsübernahme']);
+} else {
+    $lockHandle = @fopen($lockPath, 'c');
+    if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
+        if (is_resource($lockHandle)) {
+            fclose($lockHandle);
+        }
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für die Konfigurationsübernahme']);
+    }
 }
 
 // Lock freigeben (vor jedem sendJsonResponse nach Lock-Erwerb; mehrfacher Aufruf unschädlich)
@@ -152,7 +179,8 @@ $rollback = function () use (
 };
 
 // Kontrollierter Fehler nach einer Live-Änderung: Rollback versuchen, kein Reload, Lock freigeben, antworten.
-$failWithRollback = function (int $httpCode, string $message, array $extra = []) use ($rollback, $releaseLock): never {
+// AS2a: Rollback gelungen ⇒ effect none (Bestand wiederhergestellt, kein Reload); gescheitert ⇒ effect unknown.
+$failWithRollback = function (int $httpCode, string $message, array $extra = []) use ($rollback, $releaseLock, $as2, $config): never {
     if (!$rollback()) {
         error_log("[conf_sync] ROLLBACK FEHLGESCHLAGEN nach: $message");
         $releaseLock();
@@ -160,12 +188,15 @@ $failWithRollback = function (int $httpCode, string $message, array $extra = [])
             'status' => 'error',
             'message' => "$message – Rollback fehlgeschlagen: manuelle Prüfung der BIND-Konfiguration erforderlich. Kein Reload durchgeführt.",
             'rollback' => 'failed'
-        ] + $extra);
+        ] + ($as2 ? ['effect' => 'unknown'] : []) + $extra);
     }
 
     // Diagnose: Ist der wiederhergestellte vorherige Zustand gültig? (löst keinen Reload aus)
-    $previous = checkBindConfig();
+    $previous = $as2 ? agentCheckconfTimed($config) : checkBindConfig();
     $extra['rollback'] = 'ok';
+    if ($as2) {
+        $extra['effect'] = 'none';
+    }
     $extra['previous_config_valid'] = $previous['ok'];
     if (!$previous['ok']) {
         $extra['previous_check_output'] = trim($previous['output']);
@@ -230,7 +261,10 @@ if (!writeTextFileAtomic($zonesConfPath, $zonesConfContent)) {
 }
 
 // === Verbindlicher named-checkconf-Preflight vor dem Reload ===
-$preflight = checkBindConfig();
+$preflight = $as2 ? agentCheckconfTimed($config) : checkBindConfig();
+if ($as2 && !$preflight['ok'] && $preflight['status'] !== 'ok') {
+    $failWithRollback(503, 'BIND-Konfigurationsprüfung nicht abgeschlossen (Frist) – Änderung zurückgerollt, kein Reload', ['code' => 'check_timeout']);
+}
 if (!$preflight['ok']) {
     $failWithRollback(422, 'BIND-Konfigurationsprüfung (named-checkconf) fehlgeschlagen – Änderung zurückgerollt, kein Reload', [
         'check_output' => trim($preflight['output']),
@@ -244,6 +278,32 @@ if (!syncDirectories($syncDirs)) {
 }
 
 // === BIND reload (nur nach erfolgreichem Preflight) ===
+if ($as2) {
+    // AS2a (E93, E117): Exit-Code und Frist; kein Nachweis der Übernahme; kein Rollback nach dem Reload-Versuch
+    $reload = agentReloadTimed($config);
+    $releaseLock();
+    $reloadReport = ['status' => $reload['status'], 'exit_code' => $reload['exit_code']];
+    if ($reload['status'] !== 'ok') {
+        $codeMap = ['timeout' => 'reload_timeout', 'not_started' => 'reload_not_started'];
+        sendJsonResponse(500, [
+            'status' => 'error',
+            'message' => 'Zonen-Konfiguration übernommen, BIND-Reload nicht erfolgreich – Ladezustand unbestimmt',
+            'code' => $codeMap[$reload['status']] ?? 'reload_failed',
+            'effect' => 'applied',
+            'rollback' => 'not_attempted',
+            'bind_state' => 'unknown',
+            'reload' => $reloadReport,
+            'rndc' => $reload['output']
+        ]);
+    }
+    sendJsonResponse(200, [
+        'status' => 'success',
+        'message' => 'Zonen-Konfiguration übernommen, zones.conf neu geschrieben.',
+        'rndc' => $reload['output'],
+        'effect' => 'applied',
+        'reload' => $reloadReport
+    ]);
+}
 $rndcOutput = reloadBind();
 
 // === Lock freigeben (nach dem Reload) ===

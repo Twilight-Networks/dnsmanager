@@ -19,10 +19,12 @@
  *   Domäne müssen ihr entsprechen. Schutzgrenze: Ein vollständiger Installationsklon (Datenbank, Web-Konfiguration,
  *   Agent-Konfiguration und H-Datei) ist davon nicht unterscheidbar (siehe Abschnitt 5e).
  *
- * Modi (api_config.php 'fencing_mode'): fehlt ⇒ off (keine Fencing-Prüfung; die schreibenden Endpunkte lesen und
+ * Modi (api_config.php 'fencing_mode'): ausdrücklich off (keine Fencing-Prüfung; die schreibenden Endpunkte lesen und
  * schreiben H nicht); observe (prüfen, H fortschreiben, Fencing-Gründe – Token, Domäne, Höchststand, fehlende
- * Initialisierung, Konfiguration – nicht ablehnen, Ergebnis in der Antwort); enforce (fail-closed). Ein unbekannter
- * Wert gilt als Fehlkonfiguration und wird wie enforce mit fence_misconfigured behandelt.
+ * Initialisierung, Konfiguration – nicht ablehnen, Ergebnis in der Antwort); enforce (fail-closed). Ein fehlender
+ * Schlüssel und ein unbekannter Wert gelten als Fehlkonfiguration (E118, ersetzt "fehlt ⇒ off" aus E82): Die Endpunkte
+ * zone_sync, conf_sync, zone_cleanup und system/status brechen vor jeder Prüfung, jedem externen Prozess und jeder
+ * Änderung mit fence_misconfigured (503) ab (agentRejectMisconfiguredMode()); es gibt keinen stillen Rückfall auf off.
  * E97 (Klarstellung zu E90/E95): Die Modi steuern nur die Fencing-PRÜFUNG, nie die Persistenz- und
  * Integritätssicherung. In JEDEM Modus – auch off – sperrt eine vorhandene oder nicht prüfbare Fehlermarke (E99) alle
  * drei schreibenden Endpunkte (fence_fault); in observe und enforce brechen außerdem ein unlesbarer, ungültiger oder
@@ -46,15 +48,31 @@ const AGENT_FENCE_MAX_BYTES = 256;
 const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_invalid', 'fence_persist_failed'];
 
 /**
- * Wirksamer Modus: off | observe | enforce | invalid (unbekannter Wert, fail-closed).
+ * Wirksamer Modus: off | observe | enforce | invalid (fehlender Schlüssel oder unbekannter Wert, fail-closed; E118).
+ * Nur ein ausdrücklich gesetztes 'off' erlaubt den bisherigen Ablauf.
  */
 function fenceMode(array $config): string {
     if (!array_key_exists('fencing_mode', $config)) {
-        return 'off';
+        return 'invalid';   // E118: fehlender Schlüssel ⇒ Fehlkonfiguration, nie stillschweigend off
     }
     $m = $config['fencing_mode'];
 
     return is_string($m) && in_array($m, AGENT_FENCE_MODES, true) ? $m : 'invalid';
+}
+
+/**
+ * E118: Früher Abbruch bei fehlendem oder ungültigem fencing_mode – vor jeder Prüfung, jedem externen Prozess und jeder
+ * Änderung. Die Antwort entspricht agentFenceCheck() (bestehende Codes und Vorrang: agent_requirement_missing,
+ * fence_fault, fence_misconfigured); ohne Fehlkonfiguration kehrt die Funktion ohne Wirkung zurück.
+ *
+ * @param mixed $input dekodierter JSON-Body der Anfrage (darf fehlen)
+ */
+function agentRejectMisconfiguredMode(array $config, mixed $input = null): void {
+    if (fenceMode($config) !== 'invalid') {
+        return;
+    }
+    $f = agentFenceCheck($config, $input);
+    sendJsonResponse($f['http'], (array)$f['body']);
 }
 
 /** Kanonische Domäne: UUID in Kleinbuchstaben. */
@@ -208,7 +226,7 @@ function fenceEvaluate(array $config, string $mode, mixed $input): array {
 
     $domain = fenceConfiguredDomain($config);
     if ($mode === 'invalid') {
-        return $fail('fence_misconfigured', 503, 'Fencing: unbekannter fencing_mode in der Agent-Konfiguration');
+        return $fail('fence_misconfigured', 503, 'Fencing: fencing_mode fehlt oder ist ungültig (erforderlich: ausdrücklich off, observe oder enforce)');
     }
     if ($domain === null) {
         return $fail('fence_misconfigured', 503, 'Fencing: fence_domain fehlt oder ist ungültig');

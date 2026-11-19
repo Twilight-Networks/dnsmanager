@@ -167,7 +167,7 @@ class Box:
         with open(os.path.join(self.agent, 'config', 'api_tokens.php'), 'w') as f:
             f.write(f"<?php\nreturn ['{TOKEN}'];\n")
         self.reset()
-        self.config()
+        self.config('off')   # E118: off nur ausdrücklich; config(None) = Schlüssel fehlt (Fehlkonfiguration)
 
     def reset(self):
         if os.path.exists(self.bind):
@@ -516,14 +516,16 @@ def group_f(box):
           and not os.path.exists(os.path.join(box.confdir, 'e.as1.test.conf')), f"status={r['status']} fence={fe}")
     os.unlink(os.path.join(box.zones, '.dnsmanager-fence.fault'))
     # F09 system/status je Modus und Zustand
-    box.config(None)
+    box.config('off')
     r = call(box, 'system/status.php', method='GET')
     check(G, 'F09 status off ohne Zusatzfelder', 'fencing' not in (r['json'] or {}) and 'capabilities' not in (r['json'] or {}), '')
     for mode in ['observe', 'enforce']:
         box.config(mode)
         r = call(box, 'system/status.php', method='GET')
         js = r['json'] or {}
-        check(G, f'F09 status {mode}', js.get('capabilities') == {'fencing': 1, 'durable_writes': 1}
+        # AS2a: capabilities wird um serial_rule/state_check ergänzt (additiv); die AS1-Angaben bleiben unverändert
+        caps = js.get('capabilities') or {}
+        check(G, f'F09 status {mode}', {k: caps.get(k) for k in ('fencing', 'durable_writes')} == {'fencing': 1, 'durable_writes': 1}
               and js.get('fencing') == {'mode': mode, 'domain': DOMAIN, 'state': 'ok', 'high': 15, 'fault': False}, f"{js.get('fencing')}")
     with open(os.path.join(box.zones, '.dnsmanager-fence.fault'), 'w') as f:
         f.write('x\n')
@@ -540,6 +542,16 @@ def group_f(box):
     box.config('foo')
     r = call(box, 'system/status.php', method='GET')
     check(G, 'F09e status misconfigured', (r['json'] or {}).get('fencing', {}).get('state') == 'misconfigured', '')
+    # F09f (E118): fehlender fencing_mode ⇒ fail-closed in system/status und allen schreibenden Endpunkten, ohne
+    # Änderung und ohne Reload (kein stiller Rückfall auf off)
+    box.config(None)
+    t0, n0 = box.tree(), box.rndc_calls()
+    for ep, body, method in [('system/status.php', None, 'GET'), ('zones/zone_sync.php', fz('a.as1.test', 99), 'POST'),
+                             ('zones/conf_sync.php', fc(box, 'z.as1.test'), 'POST'),
+                             ('zones/zone_cleanup.php', fcl([], allow_empty=True), 'POST')]:
+        r = call(box, ep, body, method)
+        check(G, f'F09f fehlender fencing_mode {ep}', r['status'] == 503 and code(r) == 'fence_misconfigured'
+              and box.tree() == t0 and box.rndc_calls() == n0, f"status={r['status']} code={code(r)}")
     # F10 Prüfung erst nach dem flock: ältere Anfrage wartet auf den Lock, während ein neuerer Stand H erhöht
     box.reset(); box.config('enforce'); box.put_zone('a.as1.test', 1); sh('sync'); box.init_high(4)
     lockf = open(os.path.join(box.zones, '.dnsmanager-agent.lock'), 'a+')
@@ -705,7 +717,8 @@ def group_s(box):
                 if re.search(pat, seq[i]):
                     return i
             return -1
-        steps = [r'flock\(\d+<<B>/zones/\.dnsmanager-agent\.lock>, LOCK_EX\)',
+        # AS2a (E117): Sperre in observe/enforce nicht blockierend mit Frist (LOCK_EX|LOCK_NB)
+        steps = [r'flock\(\d+<<B>/zones/\.dnsmanager-agent\.lock>, LOCK_EX(?:\|LOCK_NB)?\)',
                  r'openat\(.*\.dnsmanager-fence\.fault", O_WRONLY\|O_CREAT\|O_EXCL',
                  r'write\(\d+<<B>/zones/\.dnsmanager-fence\.fault>',
                  r'fsync\(\d+<<B>/zones/\.dnsmanager-fence\.fault>\)',
@@ -803,7 +816,10 @@ def verify_after(box, name, t_old, r, label, G, post_crash=False, mode='enforce'
             if open(box.zonesconf).read() != box.expected_zonesconf():
                 problems.append('zones.conf bindet nicht genau die vorhandenen .conf-Dateien ein')
         else:
-            flagged = js.get('rollback') == 'failed' or (name == 'zone_cleanup' and 'rndc' in js)
+            # AS2a (E104): in observe/enforce kennzeichnet effect (applied/partial/unknown) eine eingetretene bzw. nicht
+            # ausschließbare Änderung; rollback = failed nur noch bei tatsächlich versuchtem Rollback
+            flagged = (js.get('rollback') == 'failed' or (name == 'zone_cleanup' and 'rndc' in js)
+                       or js.get('effect') in ('applied', 'partial', 'unknown'))
             if kind != 'old' and not flagged:
                 problems.append(f'Fehler {status} mit Änderung ohne Kennzeichnung')
             if kind == 'old' and box.rndc_calls() > 0 and not flagged:
@@ -924,7 +940,7 @@ def group_l(box_main):
     box = box_main
 
     def base_many(orphan):
-        box.reset(); box.config(None)
+        box.reset(); box.config('off')
         for i in range(L_ZONES):
             with open(os.path.join(box.confdir, f'z{i:04d}.as1.test.conf'), 'w') as f:
                 f.write(box.conf_text(f'z{i:04d}.as1.test'))
@@ -934,7 +950,7 @@ def group_l(box_main):
         sh('sync')
 
     def base_few():
-        box.reset(); box.config(None); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
+        box.reset(); box.config('off'); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
 
     def passes(tr):
         """Verzeichnisdurchläufe und Aufrufe je Durchlauf aus einem getdents64-Mitschnitt (jeder Durchlauf endet mit = 0)."""
@@ -1001,7 +1017,7 @@ def group_l(box_main):
     # (alle bisherigen Includes bleiben erhalten); nur der Abgleich scandir/glob erkennt, dass die neue zones.conf nicht
     # alle vorhandenen .conf-Dateien einbinden würde ⇒ 500 ohne Änderung, kein Reload.
     def base_unincluded():
-        box.reset(); box.config(None)
+        box.reset(); box.config('off')
         for i in range(L_ZONES):
             with open(os.path.join(box.confdir, f'z{i:04d}.as1.test.conf'), 'w') as f:
                 f.write(box.conf_text(f'z{i:04d}.as1.test'))
@@ -1168,9 +1184,10 @@ def group_x(box):
 # ------------------------------------------------------------------------------------------------------------------
 # Gruppe G – off gegenüber dem bisherigen Agenten
 # ------------------------------------------------------------------------------------------------------------------
-def golden_run(box, explicit_off=False, with_fence_fields=False):
+def golden_run(box, explicit_off=True, with_fence_fields=False, missing_key=False):
     box.reset()
-    box.config('off' if explicit_off else None)
+    # Referenz (Basis-Commit): ohne Schlüssel = off (E82 alt); Prüfstand: off nur ausdrücklich (E118)
+    box.config(None if (missing_key or not explicit_off) else 'off')
     ff = (lambda b: {**b, 'fence_token': 7, 'fence_domain': DOMAIN}) if with_fence_fields else (lambda b: b)
     steps = [
         ('GET', 'system/status.php', None, TOKEN),
@@ -1212,8 +1229,25 @@ def golden_run(box, explicit_off=False, with_fence_fields=False):
 
 def group_g(src_box, ref_box):
     G = 'G'
-    ref = golden_run(ref_box)
-    for label, kw in [('ohne Fencing-Schlüssel', {}), ('fencing_mode=off', {'explicit_off': True}),
+    ref = golden_run(ref_box, explicit_off=False)   # Basis-Commit: bisheriges Verhalten (Schlüssel fehlt = off)
+    # E118: ohne Schlüssel ist der Prüfstand fail-closed – beabsichtigte, einzeln geprüfte Abweichung (G02)
+    miss = golden_run(src_box, missing_key=True)
+    with open(os.path.join(OUT, 'golden_ohne_Fencing-Schluessel_E118.json'), 'w') as f:
+        json.dump({'ref': ref, 'new': miss}, f, indent=1, ensure_ascii=False)
+    four = ('system/status.php', 'zones/zone_sync.php', 'zones/conf_sync.php', 'zones/zone_cleanup.php')
+    bad = []
+    for i, (a2, b2) in enumerate(zip(ref, miss)):
+        prev = miss[i - 1] if i else {'tree': miss[0]['tree'], 'rndc': 0}
+        if b2['ep'] in four and a2['status'] not in (401, 403):   # Authentifizierung vor der Modusprüfung
+            if not (b2['status'] == 503 and '"fence_misconfigured"' in b2['body'] and b2['rndc'] == prev['rndc']
+                    and b2['tree'] == prev['tree']):
+                bad.append((i, b2['ep'], b2['status'], b2['body'][:120]))
+        elif a2['status'] in (401, 403) and (b2['status'], b2['body']) != (a2['status'], a2['body']):
+            bad.append((i, b2['ep'], 'Authentifizierung abweichend'))
+        elif '"fence_misconfigured"' in b2['body']:
+            bad.append((i, b2['ep'], 'nicht betroffener Endpunkt abgelehnt'))
+    check(G, 'G02 ohne Fencing-Schlüssel fail-closed (E118)', not bad and len(ref) == len(miss), f'Abweichungen={bad[:3]}')
+    for label, kw in [('fencing_mode=off', {'explicit_off': True}),
                       ('off mit fence_token im Body', {'with_fence_fields': True})]:
         new = golden_run(src_box, **kw)
         diffs = []
@@ -1257,6 +1291,9 @@ MUTATIONS = [
     ('M26 ohne ausdrückliche posix-Prüfung (E100)', 'inc/fence.php', "    if (!agentPosixAvailable()) {\n        error_log(", "    if (false) {\n        error_log(", 'X'),
     ('M27 Rückfall auf file_exists() (E100)', 'inc/file_utils.php', "        return 'error';   // E100: kein Rückfall auf file_exists()", "        return file_exists($path) ? 'present' : 'absent';", 'X'),
     ('M28 H ohne Vollständigkeitsprüfung gelesen', 'inc/fence.php', "$raw = readFileComplete($path, AGENT_FENCE_MAX_BYTES);", "$raw = @file_get_contents($path, false, null, 0, AGENT_FENCE_MAX_BYTES + 1);", 'X'),
+    ('M29 fehlender fencing_mode als off (E118)', 'inc/fence.php',
+     "        return 'invalid';   // E118: fehlender Schlüssel ⇒ Fehlkonfiguration, nie stillschweigend off",
+     "        return 'off';", 'FG'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
 

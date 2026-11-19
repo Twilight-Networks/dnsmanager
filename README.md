@@ -294,11 +294,30 @@ Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
    include "/etc/bind/zones/zones.conf";
    ```
 
+   **Kontrollzone (ab AS2a, Modi `observe`/`enforce`):** BIND muss eine autoritative Zone ohne eigene
+   `allow-query`-Anweisung bereitstellen, die nicht vom DNS-Manager verwaltet wird (Standard `localhost`, z. B. über
+   `include "/etc/bind/named.conf.default-zones";` in `named.conf`). Außerdem muss 127.0.0.1 alle verwalteten Zonen
+   abfragen dürfen und `dig` installiert sein (`apt install bind9-dnsutils`). Prüfung: `system/status` des Agenten meldet
+   `verification.control_zone = ok`. Einzelheiten: `docs/AGENT_FENCING.md`, Abschnitt 8.
+
 10. **Bind neustarten**
 
    ```bash
    systemctl reload bind9
    ```
+
+### Upgrade bestehender Installationen: `fencing_mode` ist Pflichtangabe (AS2a, E118)
+
+Ab AS2a muss `/etc/dnsmanager/api_config.php` jedes Agenten `fencing_mode` **ausdrücklich** enthalten. Fehlt der Schlüssel,
+lehnt der Agent `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` mit `fence_misconfigured` (503) ab. Wer
+zunächst beim bisherigen Verhalten bleiben will, ergänzt **vor** dem Update des Agent-Codes:
+
+```php
+'fencing_mode' => 'off',
+```
+
+Danach `php -l /etc/dnsmanager/api_config.php` und die Rechte `0640 root:www-data` prüfen. Ablauf und Kontrolle:
+`docs/AGENT_FENCING.md`, Abschnitt 9. Neue Installationen übernehmen den Eintrag aus `api_config-sample.php`.
 
 ### Upgrade bestehender Installationen: `sudo`-Rechte (Least Privilege)
 
