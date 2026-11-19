@@ -932,18 +932,23 @@ def group_l(box_main):
     def base_few():
         box.reset(); box.config(None); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
 
+    def passes(tr):
+        """Verzeichnisdurchläufe und Aufrufe je Durchlauf aus einem getdents64-Mitschnitt (jeder Durchlauf endet mit = 0)."""
+        tl = trace_lines(tr, box.bind)
+        p = sum(1 for l in tl if re.search(r'\) +=\s*0$', l['line']))
+        return p, (len(tl) // p if p else 0), len(tl)
+
     def partial_listing(ep, body, label):
-        """getdents64 auf dem Konfigurationsverzeichnis: je Durchlauf (scandir, glob) den 2. Aufruf mit EIO beantworten."""
+        """getdents64 auf dem Konfigurationsverzeichnis: in JEDEM Durchlauf den 2. Aufruf mit EIO beantworten."""
         tr = os.path.join(OUT, 'l_base.txt')
         call(box, ep, body(), strace={'out': tr, 'trace': ['getdents64'], 'paths': [box.confdir]})
-        n = len(trace_lines(tr, box.bind))
-        k = n // 2
-        if n == 0 or n % 2 or k < 3:
-            check(G, f'{label} Grundlage', False, f'getdents64-Aufrufe auf dem Verzeichnis: {n} (erwartet 2 Durchläufe mit ≥ 3 Aufrufen)')
+        p, k, n = passes(tr)
+        if p not in (1, 2) or k < 3 or n != p * k:
+            check(G, f'{label} Grundlage', False, f'getdents64: {n} Aufrufe, {p} Durchläufe (erwartet je ≥ 3 Aufrufe)')
             return None
-        # Unter Injektion endet der 1. Durchlauf nach seinem 2. Aufruf; der 2. Durchlauf beginnt deshalb mit Aufruf 3 und
-        # wird mit seinem 2. Aufruf (= 4) verkürzt (k aus dem Ausgangslauf belegt nur, dass mehrere Aufrufe nötig sind).
-        return 'inject=getdents64:error=EIO:when=2..4+2', k
+        # Unter Injektion endet ein Durchlauf nach seinem 2. Aufruf; der nächste beginnt deshalb mit Aufruf 3 und wird mit
+        # seinem 2. Aufruf (= 4) verkürzt.
+        return ('inject=getdents64:error=EIO:when=2..4+2' if p == 2 else 'inject=getdents64:error=EIO:when=2'), k, p
 
     names = [f'z{i:04d}.as1.test' for i in range(L_ZONES)]
     # L1 conf_sync / L2 zone_cleanup: beide Durchläufe verkürzt ⇒ Abbruch, bisherige Konfiguration bleibt, kein Reload.
@@ -963,7 +968,7 @@ def group_l(box_main):
             r = call(box, ep, mk(), strace={'out': tr, 'trace': ['getdents64'], 'paths': [box.confdir], 'inject': inj[0]})
             hits = sum(1 for l in open(tr) if '(INJECTED)' in l)
             code_ok = code(r) == 'listing_incomplete' if variant == 'b' else True
-            check(G, f'{lid}{variant} {ep} Teilauflistung (getdents, beide Durchläufe)', hits == 2 and r['status'] == 500 and code_ok
+            check(G, f'{lid}{variant} {ep} Teilauflistung (getdents, alle Durchläufe)', hits == inj[2] and r['status'] == 500 and code_ok
                   and box.tree() == t0 and box.rndc_calls() == n0,
                   f"Injektionen={hits} je Durchlauf {inj[1]} Aufrufe status={r['status']} code={code(r)} {(r['json'] or {}).get('message', '')[:80]}")
     box = box_main
@@ -987,6 +992,40 @@ def group_l(box_main):
         r = call(box, ep, mk())
         check(G, f'L5 verwaiste Include-Zeile {ep}', r['status'] == 500 and code(r) == 'listing_incomplete' and box.tree() == t0
               and box.rndc_calls() == n0, f"status={r['status']} code={code(r)}")
+    # L7/L8 (S43-Schicht): .conf-Dateien, die zones.conf noch nicht einbindet (z. B. nach einem Abbruch zwischen dem
+    # Schreiben der .conf und der zones.conf), und nur der glob-Durchlauf verkürzt. Der Vollständigkeitsnachweis besteht
+    # (alle bisherigen Includes bleiben erhalten); nur der Abgleich scandir/glob erkennt, dass die neue zones.conf nicht
+    # alle vorhandenen .conf-Dateien einbinden würde ⇒ 500 ohne Änderung, kein Reload.
+    def base_unincluded():
+        box.reset(); box.config(None)
+        for i in range(L_ZONES):
+            with open(os.path.join(box.confdir, f'z{i:04d}.as1.test.conf'), 'w') as f:
+                f.write(box.conf_text(f'z{i:04d}.as1.test'))
+        # Erste Datei in Verzeichnisreihenfolge (liegt im ersten getdents-Block jedes Durchlaufs) als einzige eingebundene
+        # die zweite (ebenfalls im ersten Block) aktualisiert L7 per conf_sync – unabhängig von der Hash-Reihenfolge
+        order = [n[:-len('.conf')] for n in os.listdir(box.confdir) if not n.startswith('.')]
+        with open(box.zonesconf, 'w') as f:
+            f.write(f'include "{os.path.realpath(os.path.join(box.confdir, order[0] + ".conf"))}";\n')
+        sh('sync')
+        return order[0], order[1]
+
+    for lid, ep, mk_fn in [('L7', 'zones/conf_sync.php', lambda fs: fc(box, fs[1])),
+                           ('L8', 'zones/zone_cleanup.php', lambda fs: fcl([n for n in names if n != fs[0]]))]:
+        first = base_unincluded()
+        tr = os.path.join(OUT, 'l_base.txt')
+        call(box, ep, mk_fn(first), strace={'out': tr, 'trace': ['getdents64'], 'paths': [box.confdir]})
+        npass, k, n = passes(tr)
+        first = base_unincluded()
+        t0, n0 = box.tree(), box.rndc_calls()
+        tr = os.path.join(OUT, 'l_inj.txt')
+        # nur der letzte Durchlauf (glob) wird mit seinem 2. Aufruf verkürzt
+        r = call(box, ep, mk_fn(first), strace={'out': tr, 'trace': ['getdents64'], 'paths': [box.confdir],
+                                              'inject': f'inject=getdents64:error=EIO:when={(npass - 1) * k + 2}'})
+        hits = sum(1 for l in open(tr) if '(INJECTED)' in l)
+        check(G, f'{lid} {ep} nur glob verkürzt, nicht eingebundene .conf vorhanden', npass >= 1 and n == npass * k and k >= 3 and hits == 1
+              and r['status'] == 500 and box.tree() == t0 and box.rndc_calls() == n0,
+              f"{npass} Durchläufe je {k} Aufrufe Injektionen={hits} status={r['status']} code={code(r)} {(r['json'] or {}).get('message', '')[:70]}")
+
     # L6 Gegenproben ohne Injektion: kein Fehlalarm, zones.conf vollständig
     base_many(False)
     r = call(box, 'zones/conf_sync.php', fc(box, 'neu.as1.test'))
@@ -1078,9 +1117,9 @@ MUTATIONS = [
     ('M12 conf_sync ohne Verzeichnis-fsync', 'api/v1/zones/conf_sync.php', "if (!syncDirectories($syncDirs)) {\n    $failWithRollback", "if (false) {\n    $failWithRollback", 'C', 'conf_sync'),
     ('M13 Cleanup ohne Verzeichnis-fsync', 'api/v1/zones/zone_cleanup.php', "if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {", "if (false) {", 'C', 'zone_cleanup'),
     ('M14 observe lehnt ab', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $integrity);", "$reject = $e['code'] !== null;", 'F'),
-    ('M16 conf_sync ohne Lesefehlererkennung (S43)', 'api/v1/zones/conf_sync.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'conf_sync'),
-    ('M17 Cleanup ohne Lesefehlererkennung (S43)', 'api/v1/zones/zone_cleanup.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'zone_cleanup'),
-    ('M18 Abgleich scandir/glob entfernt (S43)', 'inc/file_utils.php', '    return $expected === $got ? $glob : false;', '    return $glob;', 'I', 'conf_sync'),
+    ('M16 conf_sync ohne Lesefehlererkennung (S43)', 'api/v1/zones/conf_sync.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'L'),
+    ('M17 Cleanup ohne Lesefehlererkennung (S43)', 'api/v1/zones/zone_cleanup.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'L'),
+    ('M18 Abgleich scandir/glob entfernt (S43)', 'inc/file_utils.php', '    return $expected === $got ? $glob : false;', '    return $glob;', 'L'),
     ('M19 conf_sync ohne Vollständigkeitsnachweis (E98)', 'api/v1/zones/conf_sync.php', "if ($missingIncludes !== [] || $ownConf === false || !in_array($ownConf, $includedPaths, true)) {", "if (false) {", 'L'),
     ('M20 Cleanup ohne Vollständigkeitsnachweis (E98)', 'api/v1/zones/zone_cleanup.php', "if ($missingIncludes === null || $missingIncludes !== []) {", "if (false) {", 'L'),
     ('M21 Lesen ohne Längenprüfung (E98)', 'inc/file_utils.php', "    if (!is_string($data) || $st === false || strlen($data) !== (int)$st['size']) {", "    if (!is_string($data) || $st === false) {", 'L'),

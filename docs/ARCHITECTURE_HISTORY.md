@@ -646,8 +646,10 @@ Folge für Inkonsistenzen: Eine `include`-Zeile auf eine nicht (mehr) vorhandene
 nicht von einer unvollständigen Auflistung unterscheidbar und sperrt `conf_sync` und `zone_cleanup` dieses Agenten
 fail-closed, bis ein Administrator die Zeile entfernt oder die Datei wiederherstellt (`AGENT_FENCING.md`, Abschnitt 6).
 Bisher wurde eine solche Zeile beim nächsten `conf_sync` stillschweigend verworfen. Der Agent erzeugt solche Zeilen
-nicht selbst (`zone_cleanup` schreibt `zones.conf` vor dem Entfernen der Dateien). Nachweise: Gruppe L (L1–L6,
-L1b/L2b mit neutralisiertem Abgleich: der Nachweis greift allein), Mutationsproben M19–M21.
+nicht selbst (`zone_cleanup` schreibt `zones.conf` vor dem Entfernen der Dateien). Nachweise: Gruppe L (L1–L8;
+L1b/L2b mit neutralisiertem Abgleich: der Nachweis greift allein; L7/L8: nicht eingebundene `.conf`-Dateien und nur ein
+Durchlauf verkürzt – hier greift allein der Abgleich von S43), Mutationsproben M16–M21. Beide Schichten sind damit
+jeweils einzeln nachgewiesen.
 
 **`system/status` (I-A5, Teil AS1)** – in `observe`/`enforce` zusätzlich `capabilities` (`fencing`, `durable_writes`)
 und `fencing` (`mode`, `domain`, `state` ok/uninitialized/invalid/fault/domain_mismatch/misconfigured, `high`,
