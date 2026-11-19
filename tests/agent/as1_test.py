@@ -42,6 +42,9 @@ RESULTS = []          # (gruppe, id, ok, detail)
 OUT = None
 STOP_ON_FAIL = False  # Mutationsläufe: beim ersten Fehlschlag beenden (Mutation getötet)
 SCENARIOS = None      # Einschränkung der Szenarien (Mutationsläufe)
+# Strengster ext4-Fall und deterministische Absturztests: keine Datenzuteilung beim rename (noauto_da_alloc) und
+# kein periodischer Journal-Commit innerhalb eines Falls (commit=300) – dauerhaft ist nur, was fsync festschreibt.
+MOUNT_OPTS = 'noauto_da_alloc,commit=300'
 
 
 def log(msg):
@@ -106,7 +109,7 @@ class Flakey:
         if os.path.exists(f'/dev/mapper/{self.NAME}'):
             raise RuntimeError('dm-Gerät as1flakey existiert bereits')
         sh(['dmsetup', 'create', self.NAME, '--table', self.table('ok')])
-        sh(['mount', '-o', 'noauto_da_alloc', f'/dev/mapper/{self.NAME}', self.mnt])
+        sh(['mount', '-o', MOUNT_OPTS, f'/dev/mapper/{self.NAME}', self.mnt])
 
     def table(self, kind):
         return {'ok': f"0 {self.sec} flakey {self.loop} 0 1 0",
@@ -122,7 +125,7 @@ class Flakey:
         self.settable('drop')
         sh(['umount', self.mnt])
         self.settable('ok')
-        sh(['mount', '-o', 'noauto_da_alloc', f'/dev/mapper/{self.NAME}', self.mnt])
+        sh(['mount', '-o', MOUNT_OPTS, f'/dev/mapper/{self.NAME}', self.mnt])
 
     def close(self):
         sh(['umount', self.mnt], check_rc=False)
@@ -806,6 +809,8 @@ def group_c(box, flakey):
             if p is None:
                 if not (r['status'] == 200 and kind == 'new' and h == (DOMAIN, 11) and not latch):
                     problems.append(f"bestätigte Änderung nicht dauerhaft (status={r['status']} zustand={kind} H={h} marke={latch})")
+                if open(box.zonesconf).read() != box.expected_zonesconf():
+                    problems.append('bestätigte zones.conf nicht dauerhaft')
             elif r.get('status') is not None:
                 problems.append('Prozess wurde nicht beendet')
             if p is not None:
@@ -898,8 +903,9 @@ MUTATIONS = [
     ('M12 conf_sync ohne Verzeichnis-fsync', 'api/v1/zones/conf_sync.php', "if (!syncDirectories($syncDirs)) {\n    $failWithRollback", "if (false) {\n    $failWithRollback", 'C', 'conf_sync'),
     ('M13 Cleanup ohne Verzeichnis-fsync', 'api/v1/zones/zone_cleanup.php', "if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {", "if (false) {", 'C', 'zone_cleanup'),
     ('M14 observe lehnt ab', 'inc/fence.php', "if ($e['code'] !== null && $mode !== 'observe') {", "if ($e['code'] !== null) {", 'F'),
-    ('M16 conf_sync glob ohne GLOB_ERR (S43)', 'api/v1/zones/conf_sync.php', '$confFiles = glob("$confDir/*.conf", GLOB_ERR);', '$confFiles = glob("$confDir/*.conf");', 'I', 'conf_sync'),
-    ('M17 Cleanup glob ohne GLOB_ERR (S43)', 'api/v1/zones/zone_cleanup.php', '$confFiles = glob("$confDir/*.conf", GLOB_ERR);', '$confFiles = glob("$confDir/*.conf");', 'I', 'zone_cleanup'),
+    ('M16 conf_sync ohne Lesefehlererkennung (S43)', 'api/v1/zones/conf_sync.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'conf_sync'),
+    ('M17 Cleanup ohne Lesefehlererkennung (S43)', 'api/v1/zones/zone_cleanup.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'zone_cleanup'),
+    ('M18 Abgleich scandir/glob entfernt (S43)', 'inc/file_utils.php', '    return $expected === $got ? $glob : false;', '    return $glob;', 'I', 'conf_sync'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
 

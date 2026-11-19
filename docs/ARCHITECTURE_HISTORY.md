@@ -613,9 +613,12 @@ abweichend nur, wenn `fsync` scheitert – dort meldete der bisherige Agent eine
 
 **Befund S43 (behoben mit AS1)** – Die Fehlerinjektion zeigte, dass `glob()` bei einem Lesefehler des
 Konfigurationsverzeichnisses eine leere Liste liefert: `conf_sync` hätte `zones.conf` ohne Includes geschrieben und
-geladen (Antwort 200), `zone_cleanup` „keine verwaisten Zonen“ gemeldet. Behebung: `GLOB_ERR`; Einzelheiten
-`ARCHITECTURE_CORE.md`, Abschnitt 6. Die Suite prüft nach jedem Erfolg, dass `zones.conf` genau die vorhandenen
-`.conf`-Dateien einbindet (Mutationsproben M16/M17).
+geladen (Antwort 200), `zone_cleanup` „keine verwaisten Zonen“ gemeldet. `GLOB_ERR` hilft unter PHP 8.5 nicht (auch
+damit leere Liste, nachgewiesen); Behebung: `listConfFiles()` – Liste weiter per `glob()` (Reihenfolge und Inhalt wie
+bisher), Lesefehler über `scandir()` und Abgleich beider Ergebnisse. Einzelheiten `ARCHITECTURE_CORE.md`, Abschnitt 6.
+Die Suite prüft nach jedem Erfolg, dass `zones.conf` genau die vorhandenen `.conf`-Dateien einbindet (Mutationsproben
+M16–M18). Restgrenze: Ein Lesefehler erst während des Verzeichnisdurchlaufs (`getdents`) kann von PHP als Ende des
+Verzeichnisses gemeldet werden und bleibt unerkannt, wenn er beide Lesevorgänge gleich trifft.
 
 **`system/status` (I-A5, Teil AS1)** – in `observe`/`enforce` zusätzlich `capabilities` (`fencing`, `durable_writes`)
 und `fencing` (`mode`, `domain`, `state` ok/uninitialized/invalid/fault/domain_mismatch/misconfigured, `high`,
@@ -637,7 +640,7 @@ Serial-Regel und keine L3-Prüfung (AS2), keine Schemaänderung (AS3).
 
 **Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
 I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
-`noauto_da_alloc`), G `off` gegen den bisherigen Agenten, M Mutationsproben M01–M17. M04 (Verzeichnis-`fsync` nach
+`noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, M Mutationsproben M01–M18. M04 (Verzeichnis-`fsync` nach
 dem `rename` von H entfernt) ist auf ext4 äquivalent: Der Verzeichnis-`fsync` nach dem Entfernen der Marke schreibt das
 Journal in Reihenfolge fest und macht das `rename` mit dauerhaft; der Schritt bleibt als dateisystemunabhängige
 Absicherung.
@@ -1038,7 +1041,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
 | E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | entschieden (AS0), Umsetzung AS2 |
 | E95 | `fsync` in allen Modi; `off` im Normalbetrieb und in allen bisherigen Fehlerpfaden identisch, abweichend nur bei gescheitertem `fsync` | umgesetzt (AS1) – zur Bestätigung im Review |
-| E96 | Befund S43: `glob(…, GLOB_ERR)` in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall) | umgesetzt (AS1) – zur Bestätigung im Review |
+| E96 | Befund S43: `listConfFiles()` (glob-Liste, Lesefehlererkennung über `scandir()` und Abgleich) in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall) | umgesetzt (AS1) – zur Bestätigung im Review |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des

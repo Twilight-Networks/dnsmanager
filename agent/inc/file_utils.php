@@ -163,6 +163,35 @@ function syncDirectory(string $dir): bool {
 }
 
 /**
+ * Listet <dir>/*.conf wie glob() (gleiche Einträge und Reihenfolge wie bisher), erkennt aber Lesefehler (Befund S43).
+ *
+ * PHP 8.5 glob() liefert bei einem nicht lesbaren Verzeichnis auch mit GLOB_ERR eine leere Liste statt false (auf ns2
+ * nachgewiesen). Deshalb wird das Verzeichnis zusätzlich mit scandir() gelesen (false bei Fehler) und die Menge der
+ * *.conf-Namen (ohne Punktdateien, wie das glob-Muster) mit dem glob-Ergebnis abgeglichen. Jede Abweichung gilt als
+ * Lesefehler. Aufruf unter dem Agent-flock (keine gleichzeitigen Änderungen durch andere Endpunkte).
+ *
+ * @param string $dir Verzeichnis
+ *
+ * @return string[]|false Pfade wie glob("$dir/*.conf") oder false bei Lesefehler
+ */
+function listConfFiles(string $dir): array|false {
+    $names = @scandir($dir);
+    if ($names === false) {
+        return false;
+    }
+    $glob = glob(rtrim($dir, '/') . '/*.conf');
+    if ($glob === false) {
+        return false;
+    }
+    $expected = array_values(array_filter($names, static fn (string $n): bool => $n !== '' && $n[0] !== '.' && str_ends_with($n, '.conf')));
+    $got = array_map('basename', $glob);
+    sort($expected, SORT_STRING);
+    sort($got, SORT_STRING);
+
+    return $expected === $got ? $glob : false;
+}
+
+/**
  * Synchronisiert mehrere Verzeichnisse (Duplikate einmal), bricht beim ersten Fehler ab.
  *
  * @param string[] $dirs
