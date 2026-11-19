@@ -848,8 +848,17 @@ läuft ohne Shell in einer eigenen Prozessgruppe (`setsid`) mit min(Obergrenze, 
 `named-checkconf` 3 s, `rndc status` 3 s, `rndc reload` 5 s, `dig` 1,5 s; reicht die Restzeit nicht, wird er nicht
 gestartet. Bei Ablauf SIGTERM an die Gruppe (sudo mit `use_pty` leitet ihn an `rndc` weiter), nach 0,5 s SIGKILL; danach
 keine verwaisten Prozesse (gemessen: blockierter Steuerkanal, Abbruch nach etwa 5 s, kein `rndc` und kein `sudo` mehr). Die
-Agent-Sperre wird nicht blockierend mit Wiederholung bis TW − 8 s angefordert (`lock_timeout`, 503, `effect = none`).
-Nach einer möglicherweise wirksamen Änderung erzeugt eine Frist nie `effect = none` und nie einen angeblichen Rollback.
+Agent-Sperre wird nicht blockierend mit Wiederholung angefordert; **vor jedem Sperrversuch** wird geprüft, ob noch mehr
+als die Reserve (8 s) bis TW verbleibt – sonst `lock_timeout` (503, `effect = none`), auch wenn die Sperre frei wäre
+(Review AS2a). Nach einer möglicherweise wirksamen Änderung erzeugt eine Frist nie `effect = none` und nie einen
+angeblichen Rollback. **`system/status`** führt in `observe`/`enforce` auch `pgrep` (2 s), `rndc status` (3 s) und `dig`
+(`+time=1 +tries=1`, 1,5 s) über den Prozess-Runner aus (Review AS2a); ein nicht abgeschlossener Prozess (auch im
+Konfigurationsnachweis) ergibt 503 mit `code = status_timeout` und `bind.timeouts`. Die DNS-Testabfrage gilt nur bei
+Exit-Code 0 und einer Antwortzeile ohne `;` als erfolgreich (gemessen: `dig +short` schreibt die Timeout-Meldung auf
+stdout). In `off` ist `system/status` unverändert (Golden G11). **Außerhalb des AS2a-Umfangs** bestehen weiterhin
+unbeschränkte Prozessaufrufe in `system/control` (`reload-bind`), `zones/conf_check` und `zones/zone_check` sowie im
+Modus `off` aller Endpunkte; die DNS-Testabfrage von `system/status` in `off` wertet eine `dig`-Fehlermeldung als
+Erfolg. Behebung nur nach gesonderter Entscheidung.
 
 **Klassifizierung (E113)** – `PublishTargetClassifier` ordnet Antworten mit `effect` nach HTTP-Status × Agent-Status ×
 `effect` ein: 200/success mit `applied`/`unchanged` ⇒ `ok`; 200/success mit `partial` ⇒ Cleanup `partial`, sonst
@@ -1285,7 +1294,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E114 | Fehlerinjektion mit dem Agent-Code des Commits (`php -S`, `strace`) gegen das echte `/etc/bind` und den installierten `named` | umgesetzt (AS2a-Tests) |
 | E115 | Konfigurationsnachweis K über `named-checkconf -l` und `-px` (nie `-p` ohne `-x`); nicht unterstützte Kontexte (Views, `allow-new-zones`, NZD/NZF in `directory` und `new-zones-directory`, Catalog-Zonen, DLZ, `in-view`) und abweichende Zonenzahl ⇒ unbestimmbar; Zonenzahl nur Widerspruchsindikator; verwalteter Dateipfad eindeutig | umgesetzt (AS2a) |
 | E116 | Kontrollzone (`l3_control_zone`, Standard `localhost`) als Betriebsvoraussetzung, Anzeige in `system/status` | umgesetzt (AS2a) |
-| E117 | Absolute Frist je Agent-Aufruf (TW = Beginn + 24 s), Obergrenzen je Prozess, eigene Prozessgruppe, SIGTERM/SIGKILL ohne verwaiste Prozesse, Sperre mit Frist | umgesetzt (AS2a) |
+| E117 | Absolute Frist je Agent-Aufruf (TW = Beginn + 24 s), Obergrenzen je Prozess, eigene Prozessgruppe, SIGTERM/SIGKILL ohne verwaiste Prozesse, Sperre mit Frist (Reserve vor jedem Sperrversuch geprüft); gilt in `observe`/`enforce` für `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` (`status_timeout`) | umgesetzt (AS2a, Review-Korrektur) |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Aufteilung des
@@ -1295,6 +1304,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 19.11.2026 | Review AS2a: `system/status` mit Prozessfristen in `observe`/`enforce` (`status_timeout`, DNS-Testabfrage über Exit-Code und Antwortzeile), Reserveprüfung vor jedem Sperrversuch; Befund außerhalb des Umfangs (unbeschränkte Aufrufe in `system/control`, `conf_check`, `zone_check` und im Modus `off`) dokumentiert |
 | 19.11.2026 | AS2a umgesetzt: Abschnitt 5f (Verantwortung Core/Agent, RFC 1982 mit Vektordatei, Konfigurationsnachweis K, ausgelieferter Zustand D, Kontrollzone, Vorher-Prüfung E103, `effect`/`rollback`, Vorwärtsstrategie, Restore-Abgrenzung, Fristen, Klassifizierung); E92 neu gefasst; E101–E117; Messungen auf ns1/ns2 (BIND 9.20.24) |
 | 18.11.2026 | Erstfassung nach Abschluss AP1/H1 (Bestandsaufnahme, Review-Nachträge, lesende Inspektion ns1/ns2, Entscheidungen E8, E10, E17; zu E15/E16 nur die 32-Bit-Anforderung, Strategie und Spaltenmigration offen für AS) |
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |

@@ -187,6 +187,7 @@ Das ist beabsichtigt (fail-closed), keine Störung des Agenten.
 | `zone_state_unreadable` | 503 | vorhandene Datei nicht lesbar, nicht prüfbar, Symlink oder keine reguläre Datei | lokal prüfen |
 | `served_state_unknown` | 503 | Konfiguration oder ausgelieferter Zustand nicht eindeutig (Grund in `serial_check`) | siehe unten |
 | `check_timeout`, `lock_timeout` | 503 | Frist abgelaufen vor jeder Änderung | Ursache (Last, hängender Prozess) prüfen |
+| `status_timeout` (nur `system/status`) | 503 | `pgrep`, `rndc status`, `dig` oder der Konfigurationsnachweis nicht innerhalb der Frist (`bind.timeouts`) | Steuerkanal (`rndc`), DNS auf 127.0.0.1 und `named-checkconf` prüfen |
 
 In `observe` werden nur `stale_serial`, `serial_conflict` und `serial_undefined` nicht abgelehnt (`would_reject`).
 

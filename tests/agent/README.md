@@ -49,6 +49,7 @@ php tests/agent/as2a_pure_test.php <Checkout>
 | P | strenger `dig`-Parser mit Ausgaben von BIND 9.20 (NOERROR/NXDOMAIN/REFUSED/Referral, Timeout, Verbindungsfehler, abgeschnittene und widersprüchliche Ausgaben) |
 | K | Parser für `named-checkconf -px` und eindeutige Pfadauflösung (`..`, `.`, `//`, relativ ohne `directory`) |
 | A | Vorrangregel der aggregierten Cleanup-Wirkung (Beispiel 3 entfernt / 1 bleibt / 1 unbekannt ⇒ `partial`) |
+| L | Sperrfrist: Anfragebeginn 20 s zurück, Sperre frei ⇒ `timeout` ohne Sperrversuch, keine Sperre gehalten |
 | KL | Klassifizierer im Core (E113) einschließlich aller widersprüchlichen Kombinationen und der unveränderten Einordnung ohne `effect` |
 
 **Live-Suite** gegen die **installierte** BIND-Instanz einer Test-VM (root; kein zusätzlicher `named`, kein eigener
@@ -71,9 +72,9 @@ eigenständig).
 | D | ausgelieferter Zustand: Elternzone NXDOMAIN, Delegation, Eltern-ACL (REFUSED ⇒ unknown), Kontrollzone fehlt bzw. mit eigener ACL, `system/status`, DNS-Timeout |
 | O | `observe`: Serial-Gründe `would_reject` mit Übernahme, Zustandsfehler weiter abgelehnt |
 | C | named vor der Prüfung gestoppt (keine Änderung), `reload_failed` und `reload_timeout` nach der Übernahme (Fenster per verzögertem `rename`; Datei bleibt, nächster Reload lädt vorwärts, keine verwaisten Prozesse), Steuerkanal vor der Prüfung blockiert, `persist_unconfirmed` mit `rollback = not_attempted`, `conf_sync`-Rollback ⇒ `effect = none`, `conf_sync` mit `reload_timeout`, Cleanup mit fünf Zonen (unveränderlich bzw. `stat` EIO) ⇒ `partial` je Zone und im Klassifizierer |
-| T | Fristen: langsames `named-checkconf` (Nachweis und Preflight mit Rollback), langsames `named-checkzone` (8 s), belegte Agent-Sperre (`lock_timeout` nach etwa 16 s), keine verwaisten Prozesse, jeder Aufruf in `observe`/`enforce` < 25 s |
+| T | Fristen: langsames `named-checkconf` (Nachweis und Preflight mit Rollback), langsames `named-checkzone` (8 s), belegte Agent-Sperre (`lock_timeout` nach etwa 16 s), T05 Reserve unterschritten bei **freier** Sperre (erster `fsync` per `strace` um 17 s verzögert ⇒ `lock_timeout`), T06–T10 `system/status` regulär, mit blockiertem `rndc`-Steuerkanal, blockiertem DNS, beidem und verzögertem `named-checkconf` (⇒ 503 bzw. `status_timeout` innerhalb der Frist), keine verwaisten Prozesse, jeder Aufruf in `observe`/`enforce` < 25 s |
 | G | Modus `off` gegenüber dem Agenten des Basis-Commits: Neuinstallation, `conf_sync`, ungültige Zone, ältere Serial, Preflight-Fehler mit Rollback, Cleanup, Steuerkanal blockiert (ohne Frist), named gestoppt, langsames `named-checkconf`, `persist_unconfirmed` (`rollback = failed` wie bisher), `system/status` – HTTP-Status, Body und Dateien identisch |
-| M | Mutationsproben M01–M12 (Halbkreis als `newer`, Vorher-Prüfung entfernt, Pfadprüfung entfernt, NZD-Prüfung entfernt, Zonenzahl ignoriert, SERVFAIL als nicht geladen, REFUSED der Elternzone akzeptiert, Rollback nach Reload-Fehler, Teilzustand als `none`, `rndc` ohne Frist, Kontrollzone mit eigener ACL akzeptiert, Reparatur ohne Hashprüfung); jede muss mindestens einen Fehlschlag erzeugen |
+| M | Mutationsproben M01–M14 (M13 `system/status` mit unbeschränktem `rndc status`, M14 Reserve erst nach dem Sperrversuch geprüft; Halbkreis als `newer`, Vorher-Prüfung entfernt, Pfadprüfung entfernt, NZD-Prüfung entfernt, Zonenzahl ignoriert, SERVFAIL als nicht geladen, REFUSED der Elternzone akzeptiert, Rollback nach Reload-Fehler, Teilzustand als `none`, `rndc` ohne Frist, Kontrollzone mit eigener ACL akzeptiert, Reparatur ohne Hashprüfung); jede muss mindestens einen Fehlschlag erzeugen |
 | Z | Rückbau: `/etc/bind` sha256- und rechtegleich, `/var/cache/bind` ohne Reste, Serials, `iptables`, `named-checkconf`, keine verwaisten Prozesse, keine Fencing-Dateien |
 
 Hinweise aus den Messungen: `strace -P` erfasst `rename` nicht über den Zielpfad (deshalb `-e trace=rename,…`); schon
