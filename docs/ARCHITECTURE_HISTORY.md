@@ -582,14 +582,17 @@ Web-Konfiguration (AS4) ist eine zusätzliche, keine ersetzende Prüfung.
 | Datenbank-Restore derselben Installation (Lauf-IDs fallen) | Agent: `stale_fence`; Abgleich nach E81 (AS4) |
 | **vollständiger Installationsklon** (Datenbank, Web-Konfiguration, Agent-Konfiguration und H) | **nicht** durch das Fencing; nur organisatorisch sowie durch `api_allowed_ips` (Quell-IP) und eigene Agent-Token je Installation |
 
-**Modi (E82, Klarstellung E97 nach Review AS1)** – Die Modi steuern ausschließlich die **Fencing-Prüfung**, nie die
-Persistenz- und Integritätssicherung. `fencing_mode` fehlt ⇒ `off`: keine Fencing-Prüfung, Fencing-Felder werden
+**Modi (E82, Klarstellung E97 nach Review AS1, geändert durch E118)** – Die Modi steuern ausschließlich die
+**Fencing-Prüfung**, nie die Persistenz- und Integritätssicherung. `fencing_mode` ist eine Pflichtangabe (E118, ersetzt
+„`fencing_mode` fehlt ⇒ `off`“): Fehlt der Schlüssel oder ist der Wert unbekannt, brechen `zone_sync`, `conf_sync`,
+`zone_cleanup` und `system/status` vor jeder Prüfung, jedem externen Prozess und jeder Änderung mit
+`fence_misconfigured` (503) ab. Ausdrücklich `off`: keine Fencing-Prüfung, Fencing-Felder werden
 ignoriert, die schreibenden Endpunkte lesen und schreiben H nicht; Antworten sind unverändert, solange `posix` vorhanden
 ist und keine Fehlermarke vorliegt. `observe`: Prüfung und
 Fortschreiben von H wie `enforce`, Fencing-Gründe (Token, Domäne, Höchststand) werden nicht abgelehnt; jede Antwort nach
 der Prüfung enthält zusätzlich `fence` (`mode`, `decision` accept/would_reject/reject, `code`, `token`, `high_before`,
-`high_after`), Gründe zusätzlich im PHP-Log `[fence]`. `enforce`: fail-closed. Unbekannter Wert ⇒
-`fence_misconfigured` (fail-closed). **In jedem Modus** gilt (E97): eine vorhandene Fehlermarke sperrt
+`high_after`), Gründe zusätzlich im PHP-Log `[fence]`. `enforce`: fail-closed. Fehlender Schlüssel oder unbekannter
+Wert ⇒ `fence_misconfigured` (fail-closed, E118). **In jedem Modus** gilt (E97): eine vorhandene Fehlermarke sperrt
 (`fence_fault`); in den Modi, die H verwenden (`observe`, `enforce`), brechen außerdem ein nicht lesbarer oder ungültiger
 Höchststand (`fence_invalid`) und ein gescheitertes dauerhaftes Fortschreiben von H (`fence_persist_failed`) die Anfrage
 ohne Änderung ab – das sind Integritätsfehler des gespeicherten Zustands, keine Fencing-Gründe; `fsync`-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade
@@ -620,8 +623,9 @@ wegen `rollback = failed` als `unknown` ein; eigene Codes im Journal folgen mit 
 **Dauerhaftigkeit des Bestands (E84, E95)** – In allen Modi, auch `off`: Zonen-Temp-Datei und alle atomar ersetzten
 Dateien (`<zone>.conf`, `zones.conf`) werden vor dem `rename` mit `fsync` geschrieben; die betroffenen Verzeichnisse
 werden vor dem Reload synchronisiert (`conf_sync` mit Rollback bei Fehler, `zone_cleanup` als unvollständiger Cleanup mit
-`rndc`). E95: `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen
-Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend:
+`rndc`). E95: Ausdrücklich `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum
+bisherigen Agenten (Golden G01, E118: der bisherige Agent ohne Schlüssel bzw. mit `off`; ein fehlender Schlüssel ist
+seit E118 eine Fehlkonfiguration, Golden G02); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend:
 gescheitertes `fsync` (E95; der bisherige Agent meldete dort einen nicht dauerhaften Erfolg), Lesefehler des
 Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung,
 verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder
@@ -744,7 +748,8 @@ Datei, Dateizustand mit Serial und sha256, Konfigurationszustand mit Grund, ausg
 Antwortcode, Vergleichsergebnisse); der Core rechnet die Annahmeregel nie nach.
 
 **Modi (E101)** – Die AS2a-Prüfungen und -Angaben gelten nur in `observe` und `enforce`. In `off` sind Antwortformat,
-HTTP-Status, Reload-Verhalten, Fehler- und Timeoutpfade unverändert (E95, Golden G01–G11): keine Prozessfristen, keine
+HTTP-Status, Reload-Verhalten, Fehler- und Timeoutpfade bei **ausdrücklich** gesetztem `off` unverändert (E95, E118,
+Golden G01–G13): keine Prozessfristen, keine
 Zustandsprüfung, keine neuen Felder, `persist_unconfirmed` weiterhin mit `rollback = failed`. In `observe` werden
 Serial-Gründe (`stale_serial`, `serial_conflict`, `serial_undefined`) nur gemeldet (`serial_check.decision =
 would_reject`, Übernahme erfolgt); Zustandsfehler (`zone_state_unreadable`, `zone_state_invalid` ohne passendes
@@ -855,9 +860,9 @@ angeblichen Rollback. **`system/status`** führt in `observe`/`enforce` auch `pg
 (`+time=1 +tries=1`, 1,5 s) über den Prozess-Runner aus (Review AS2a); ein nicht abgeschlossener Prozess (auch im
 Konfigurationsnachweis) ergibt 503 mit `code = status_timeout` und `bind.timeouts`. Die DNS-Testabfrage gilt nur bei
 Exit-Code 0 und einer Antwortzeile ohne `;` als erfolgreich (gemessen: `dig +short` schreibt die Timeout-Meldung auf
-stdout). Nur der ausdrücklich konfigurierte Modus `off` (bzw. fehlendes `fencing_mode`) verwendet den bisherigen
-Ablauf; `observe`/`enforce` ohne PHP-Erweiterung `posix` antworten mit 503 `agent_requirement_missing`, ein unbekannter
-`fencing_mode` mit 503 `fence_misconfigured` – jeweils früh und ohne externen Prozess, mit dem `fencing`-Zustand. In
+stdout). Nur der ausdrücklich konfigurierte Modus `off` verwendet den bisherigen Ablauf; `observe`/`enforce` ohne
+PHP-Erweiterung `posix` antworten mit 503 `agent_requirement_missing`, ein fehlender oder unbekannter `fencing_mode`
+(E118) mit 503 `fence_misconfigured` – jeweils früh und ohne externen Prozess, mit dem `fencing`-Zustand. In
 `off` ist `system/status` unverändert (Golden G11, ohne `posix` G12). **Außerhalb des AS2a-Umfangs** bestehen weiterhin
 unbeschränkte Prozessaufrufe in `system/control` (`reload-bind`), `zones/conf_check` und `zones/zone_check` sowie im
 Modus `off` aller Endpunkte; die DNS-Testabfrage von `system/status` in `off` wertet eine `dig`-Fehlermeldung als
@@ -1262,7 +1267,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E79 | `zones.soa_serial` → `INT UNSIGNED` | entschieden (= E16), Umsetzung AS3 |
 | E80 | Agent: fehlende Zonendatei ⇒ Installation unter gültigem Fencing; lesbar, aber ungültig ⇒ kontrollierter Reparaturpfad (nur mit ausdrücklichem Kennzeichen aus einer Admin-Core-Operation); nicht lesbar ⇒ fail-closed; kein Überschreiben unbekannter Zustände | umgesetzt (AS2a, präzisiert durch E103: fehlende Datei nur bei nachweislich nicht konfigurierter und nicht ausgelieferter Zone bzw. gegenüber der ausgelieferten Serial) |
 | E81 | Agent senkt H nie; kein API-Reset; lokale CLI nur `init` (ohne H) und `raise`; nach DB-Restore kontrollierter Abgleich durch den Core (AS4) | entschieden; CLI umgesetzt (AS1) |
-| E82 | Modi `off` (Standard) → `observe` → `enforce`, unbekannter Wert fail-closed; Einführung zuerst auf ns2 | entschieden; umgesetzt (AS1) |
+| E82 | Modi `off` → `observe` → `enforce`, unbekannter Wert fail-closed; Einführung zuerst auf ns2. **Geändert durch E118:** `off` nur noch ausdrücklich, kein Standardwert | entschieden; umgesetzt (AS1); geändert (AS2a, E118) |
 | E83 | Core prüft vor jedem Agentaufruf Publish-Lock und Laufsperre, sonst Abbruch | entschieden, Umsetzung AS4 |
 | E84 | `fsync` auch für Zonen- und Konfigurationsdateien | entschieden; umgesetzt (AS1) |
 | E85 | Discard unveröffentlichter Änderungen (Admin; zoneadmin nur berechtigte Zonen; ohne L3, sofern seit P kein möglicherweise verteilter Versuch existiert) und Restore veröffentlichter oder möglicherweise verteilter Revisionen (Admin alle, zoneadmin berechtigte Zonen; `partial`/`unknown` nur Admin) sind getrennte Core-Vorgänge; Restore veröffentlicht nie selbst und löst nie Publish All aus (ersetzt die Empfehlung zu E4) | entschieden, Umsetzung H4/H5 |
@@ -1275,7 +1280,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E92 | Nachweis der Entfernung (AS2b): `still_served` ⇔ autoritative SOA der Zone; `absent` ⇔ Reload im selben Aufruf mit Exit-Code 0, K = nein (E115) und D = not_auth (E105: Antwort aus der konfigurierten Elternzone bzw. REFUSED mit erfolgreicher Kontrollabfrage, E116); sonst `unknown`. REFUSED allein ist kein Nachweis (gemessen: `allow-query` einer geladenen Zone liefert REFUSED wie eine entfernte) | entschieden (Fassung AS2), Umsetzung AS2b |
 | E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
 | E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | umgesetzt (AS2a, `observe`/`enforce`; `off` unverändert) |
-| E95 | `fsync` in allen Modi. `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend: gescheitertes `fsync` (E95), Lesefehler des Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung, verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder Bestandsdatei (E99), fehlende PHP-Erweiterung `posix` (E100) | umgesetzt (AS1) – akzeptiert |
+| E95 | `fsync` in allen Modi. Ausdrücklich `off` (seit E118; vorher auch ein fehlender Schlüssel) ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend: gescheitertes `fsync` (E95), Lesefehler des Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung, verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder Bestandsdatei (E99), fehlende PHP-Erweiterung `posix` (E100) | umgesetzt (AS1) – akzeptiert |
 | E96 | Befund S43: `listConfFiles()` (glob-Liste, Lesefehlererkennung über `scandir()` und Abgleich) in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall); ergänzt durch E98 (gleichartige Verkürzung beider Durchläufe), einzeln nachgewiesen durch L7/L8 | umgesetzt (AS1) – akzeptiert |
 | E97 | Klarstellung E90/E95 (Review AS1): Modi steuern nur die Fencing-Prüfung; Fehlermarke sperrt alle drei schreibenden Endpunkte in jedem Modus (auch `off`); Integritätsfehler von H (unlesbar/ungültig/nicht prüfbar, Persistenzfehler) brechen auch in `observe` ab; in `off` lesen und schreiben die schreibenden Endpunkte H nicht, geprüft wird nur die Fehlermarke (`system/status` liest H in `off` nur zur Anzeige bei gemeldeter Fehlermarke); `fsync`-Fehler modusunabhängig; `system/status` meldet die Marke auch in `off` | umgesetzt (AS1, Nachtrag) |
 | E98 | Vollständigkeit der Auflistung (Review AS1, S43-Ergänzung): bisherige `zones.conf` nur vollständig gelesen (Länge = `fstat`), jedes bisherige Include muss erhalten bleiben (Cleanup: außer selbst erkannten Verwaisten), sonst `listing_incomplete` ohne Änderung und Reload. Verwaiste Include-Zeilen sperren `conf_sync` und `zone_cleanup` fail-closed (`zone_sync` scheitert dann bereits am bestehenden `named-checkconf`-Preflight), bis sie nach `AGENT_FENCING.md` Abschnitt 6 bereinigt sind: benötigte Zone durch erneute Veröffentlichung (Selbstheilung über `conf_sync` dieser Zone) bzw. Vorlage, nicht benötigte Zone durch Entfernen der Zeile unter der Agent-Sperre; BIND bedient währenddessen den zuletzt geladenen Stand | umgesetzt (AS1, Nachtrag) – akzeptiert |
@@ -1298,6 +1303,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E115 | Konfigurationsnachweis K über `named-checkconf -l` und `-px` (nie `-p` ohne `-x`); nicht unterstützte Kontexte (Views, `allow-new-zones`, NZD/NZF in `directory` und `new-zones-directory`, Catalog-Zonen, DLZ, `in-view`) und abweichende Zonenzahl ⇒ unbestimmbar; Zonenzahl nur Widerspruchsindikator; verwalteter Dateipfad eindeutig | umgesetzt (AS2a) |
 | E116 | Kontrollzone (`l3_control_zone`, Standard `localhost`) als Betriebsvoraussetzung, Anzeige in `system/status` | umgesetzt (AS2a) |
 | E117 | Absolute Frist je Agent-Aufruf (TW = Beginn + 24 s), Obergrenzen je Prozess, eigene Prozessgruppe, SIGTERM/SIGKILL ohne verwaiste Prozesse, Sperre mit Frist (Reserve vor jedem Sperrversuch geprüft); gilt in `observe`/`enforce` für `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` (`status_timeout`) | umgesetzt (AS2a, Review-Korrektur) |
+| E118 | `fencing_mode` ist Pflichtangabe: nur ein ausdrücklich gesetztes `off` erlaubt den bisherigen Ablauf; ein fehlender Schlüssel oder ein unbekannter Wert ⇒ `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` brechen früh mit 503 `fence_misconfigured` ab (Vorrang wie bisher: `agent_requirement_missing`, `fence_fault`), ohne externen Prozess und ohne Änderung; kein stiller Rückfall. Ändert E82 und E95. Upgrade: bestehende Installationen setzen **vor** dem Update `'fencing_mode' => 'off'` (README, `AGENT_FENCING.md` Abschnitt 9) | entschieden (Maintainer, Option B), umgesetzt (AS2a) |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Aufteilung des
@@ -1307,6 +1313,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 19.11.2026 | E118 (Option B): `fencing_mode` ist Pflichtangabe; fehlender Schlüssel ⇒ `fence_misconfigured` in `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status`; E82 und E95 entsprechend geändert; Upgrade-Hinweis |
 | 19.11.2026 | Review AS2a (letzte Korrektur): `system/status` fail-closed ohne externen Prozess bei fehlendem `posix` in `observe`/`enforce` (`agent_requirement_missing`) und bei unbekanntem `fencing_mode` (`fence_misconfigured`); nur `off` verwendet den bisherigen Ablauf |
 | 19.11.2026 | Review AS2a: `system/status` mit Prozessfristen in `observe`/`enforce` (`status_timeout`, DNS-Testabfrage über Exit-Code und Antwortzeile), Reserveprüfung vor jedem Sperrversuch; Befund außerhalb des Umfangs (unbeschränkte Aufrufe in `system/control`, `conf_check`, `zone_check` und im Modus `off`) dokumentiert |
 | 19.11.2026 | AS2a umgesetzt: Abschnitt 5f (Verantwortung Core/Agent, RFC 1982 mit Vektordatei, Konfigurationsnachweis K, ausgelieferter Zustand D, Kontrollzone, Vorher-Prüfung E103, `effect`/`rollback`, Vorwärtsstrategie, Restore-Abgrenzung, Fristen, Klassifizierung); E92 neu gefasst; E101–E117; Messungen auf ns1/ns2 (BIND 9.20.24) |

@@ -306,6 +306,19 @@ Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
    systemctl reload bind9
    ```
 
+### Upgrade bestehender Installationen: `fencing_mode` ist Pflichtangabe (AS2a, E118)
+
+Ab AS2a muss `/etc/dnsmanager/api_config.php` jedes Agenten `fencing_mode` **ausdrücklich** enthalten. Fehlt der Schlüssel,
+lehnt der Agent `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` mit `fence_misconfigured` (503) ab. Wer
+zunächst beim bisherigen Verhalten bleiben will, ergänzt **vor** dem Update des Agent-Codes:
+
+```php
+'fencing_mode' => 'off',
+```
+
+Danach `php -l /etc/dnsmanager/api_config.php` und die Rechte `0640 root:www-data` prüfen. Ablauf und Kontrolle:
+`docs/AGENT_FENCING.md`, Abschnitt 9. Neue Installationen übernehmen den Eintrag aus `api_config-sample.php`.
+
 ### Upgrade bestehender Installationen: `sudo`-Rechte (Least Privilege)
 
 Ein Update des Repositorys bzw. von `/usr/share/dnsmanager` ändert **nichts** an bereits installierten Dateien unter

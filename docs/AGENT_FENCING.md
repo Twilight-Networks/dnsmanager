@@ -8,7 +8,7 @@ Modi `off` und `observe` zulässig.
 
 | Ort | Inhalt |
 |---|---|
-| `api_config.php` `fencing_mode` | `off` (Standard, wenn nicht gesetzt), `observe`, `enforce`; ein unbekannter Wert sperrt alle Schreibvorgänge |
+| `api_config.php` `fencing_mode` | **Pflichtangabe** (E118): `off`, `observe` oder `enforce`. Fehlt der Schlüssel oder ist der Wert unbekannt, lehnen `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` jeden Aufruf mit `fence_misconfigured` (503) ab – kein stiller Rückfall auf `off` |
 | `api_config.php` `fence_domain` | UUID der Installation (Kleinbuchstaben); Pflicht für `observe`/`enforce` |
 | `<zone_data_dir>/.dnsmanager-fence` | Höchststand H: `dnsmanager-fence v1 domain=<uuid> high=<n>` |
 | `<zone_data_dir>/.dnsmanager-fence.fault` | Fehlermarke (Write-ahead); solange sie vorhanden oder ihre Existenz nicht prüfbar ist, lehnen alle drei schreibenden Endpunkte (`zone_sync`, `conf_sync`, `zone_cleanup`) in jedem Modus (`off`, `observe`, `enforce`) jeden Aufruf ab (`fence_fault`, E97/E99) |
@@ -47,7 +47,8 @@ gesenkt; `init` nur ohne vorhandenen H und ohne Marke.
 4. `system/status` bzw. `status` der CLI prüfen (`state = ok`).
 5. `enforce` erst nach AS4 und nur stufenweise (zuerst ns2).
 
-Rückweg: `fencing_mode` entfernen (= `off`). Die H-Datei bleibt liegen. In `off` lesen und schreiben die drei
+Rückweg: `fencing_mode` ausdrücklich auf `'off'` setzen (nicht entfernen – ein fehlender Schlüssel sperrt den Agenten,
+E118). Die H-Datei bleibt liegen. In `off` lesen und schreiben die drei
 schreibenden Endpunkte (`zone_sync`, `conf_sync`, `zone_cleanup`) H nicht; `system/status` liest H auch in `off`, aber
 nur zur diagnostischen Anzeige, wenn eine Fehlermarke gemeldet wird (ARCHITECTURE_HISTORY §5e, E97). Unabhängig vom
 Modus bleibt die Fehlermarke wirksam: Eine vorhandene oder nicht prüfbare Marke sperrt auch in `off` alle drei
@@ -209,3 +210,19 @@ In `observe` werden nur `stale_serial`, `serial_conflict` und `serial_undefined`
 bzw. Konfiguration übernommen, Ladezustand unbekannt“ (`bind_state = unknown`); der nächste erfolgreiche Reload lädt den
 neueren Stand. `rollback` erscheint nur, wenn ein Rollback tatsächlich versucht wurde (`ok`/`failed`), sonst
 `not_attempted`.
+
+## 9. Upgrade: `fencing_mode` als Pflichtangabe (E118)
+
+Ab AS2a ist `fencing_mode` eine Pflichtangabe. Bestehende Installationen, deren `api_config.php` den Schlüssel nicht
+enthält und die zunächst im bisherigen Verhalten bleiben sollen, setzen ihn **vor** dem Update des Agent-Codes:
+
+1. Sicherung: `cp -a /etc/dnsmanager/api_config.php /root/api_config.php.vor-e118` (Rechte notieren).
+2. In `/etc/dnsmanager/api_config.php` im `return [...]`-Array ergänzen: `'fencing_mode' => 'off',`
+3. Prüfen: `php -l /etc/dnsmanager/api_config.php`; Rechte `0640 root:www-data`; `sudo -u www-data php -r
+   'var_dump((require "/etc/dnsmanager/api_config.php")["fencing_mode"]);'` liefert `string(3) "off"`.
+4. Erst danach den Agent-Code aktualisieren. Kontrolle: `system/status` antwortet wie bisher (ohne `fencing`-Angaben), eine
+   Veröffentlichung läuft wie bisher.
+
+Wird der Code ohne diesen Schritt aktualisiert, lehnen alle vier Endpunkte jeden Aufruf mit `fence_misconfigured` (503) ab:
+Veröffentlichung und Cleanup stehen, das Monitoring meldet den Server als fehlerhaft. Behebung: Schritt 2 nachholen; ein
+Neustart ist nicht nötig (die Konfiguration wird je Anfrage gelesen).
