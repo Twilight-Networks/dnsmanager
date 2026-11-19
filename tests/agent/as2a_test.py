@@ -93,11 +93,28 @@ def sha(path):
         return None
 
 
+def _under_apache(pid):
+    """Stammt der Prozess vom installierten Agenten (Apache) ab? Dessen Aufrufe (z. B. Monitoring-Cron von ns1 im Modus off
+    ohne Frist) gehören nicht zum Prüfling und werden bei der Suche nach verwaisten Prozessen nicht gezählt."""
+    seen = 0
+    while pid > 1 and seen < 64:
+        try:
+            stat = open(f'/proc/{pid}/stat').read()
+        except OSError:
+            return False
+        if stat[stat.index('(') + 1:stat.rindex(')')] in ('apache2', 'httpd'):
+            return True
+        pid = int(stat[stat.rindex(')') + 2:].split()[1])
+        seen += 1
+    return False
+
+
 def orphan_count():
-    """Laufende Prozesse externer Programme bzw. der Verzögerungs-Wrapper (ohne den eigenen Prozess)."""
+    """Laufende Prozesse externer Programme bzw. der Verzögerungs-Wrapper (ohne den eigenen Prozess und ohne Prozesse des
+    installierten Agenten unter Apache)."""
     n = 0
     for pid in os.listdir('/proc'):
-        if not pid.isdigit() or int(pid) == os.getpid():
+        if not pid.isdigit() or int(pid) == os.getpid() or _under_apache(int(pid)):
             continue
         try:
             argv = open(f'/proc/{pid}/cmdline', 'rb').read().split(b'\0')
@@ -250,15 +267,17 @@ class Agent:
             f.write("<?php\nreturn " + php_lit(cfg) + ";\n")
         os.chmod(self.cfg, 0o644)
 
-    def start(self, strace=None):
+    def start(self, strace=None, php_args=None):
         s = socket.socket()
         s.bind(('127.0.0.1', 0))
         self.port = s.getsockname()[1]
         s.close()
         cmd = ['setpriv', '--reuid=www-data', '--regid=www-data', '--init-groups', 'php', '-d', 'display_errors=0',
-               '-d', 'log_errors=1', '-d', f'error_log={self.phplog}', '-S', f'127.0.0.1:{self.port}', '-t', self.root]
+               '-d', 'log_errors=1', '-d', f'error_log={self.phplog}'] + (php_args or []) \
+            + ['-S', f'127.0.0.1:{self.port}', '-t', self.root]
         if strace:
-            cmd = ['strace', '-qq', '-o', strace['out']] + [a for i in strace['inject'] for a in ('-e', i)] \
+            cmd = ['strace', '-qq'] + (['-f'] if strace.get('follow') else []) + ['-o', strace['out']] \
+                + [a for i in strace['inject'] for a in ('-e', i)] \
                 + [a for p in strace.get('paths', []) for a in ('-P', p)] + cmd
         self.p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         end = time.time() + 10
@@ -327,8 +346,8 @@ class Agent:
     def cl(self, valid, **kw):
         return self.req('zones/zone_cleanup.php', self.fence({'valid_zones': valid}), **kw)
 
-    def status(self, timeout=40):
-        self.start()
+    def status(self, timeout=40, php_args=None, strace=None):
+        self.start(strace, php_args)
         t0 = time.time()
         try:
             c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=timeout)
@@ -967,6 +986,7 @@ def group_t(a, state):
           and 15 < r['dt'] < 18 and snapshot([n1]) == b, f"dt={r['dt']:.1f}")
     t_lock_reserve(G, a, n1, cur + 1, b)
     t_status(G, a)
+    t_status_failclosed(G, a)
 
 
 def t_lock_reserve(G, a, n1, serial, b):
@@ -1015,13 +1035,56 @@ def t_status(G, a):
         sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP; iptables -D INPUT -i lo -p udp --dport 53 -j DROP; iptables -D INPUT -i lo -p tcp --dport 53 -j DROP')
     to = (r['json'].get('bind') or {}).get('timeouts') or []
     check(G, 'T09 status: rndc und DNS blockiert ⇒ status_timeout < 25 s', r['status'] == 503 and r['json'].get('code') == 'status_timeout'
-          and r['dt'] < 25 and orphan_count() == 0, f"timeouts={to} dt={r['dt']:.1f}")
+          and r['dt'] < 25 and orphan_count() == 0, f"http={r['status']} code={r['json'].get('code')} timeouts={to} dt={r['dt']:.1f} verwaist={orphan_count()}")
     # künstlich verzögertes named-checkconf (Konfigurationsnachweis)
     a.config('enforce', bind_named_checkconf=slow_wrapper('/usr/bin/named-checkconf', 30))
     r = a.status()
     to = (r['json'].get('bind') or {}).get('timeouts') or []
     check(G, 'T10 status: named-checkconf verzögert ⇒ status_timeout', r['status'] == 503 and 'config_proof' in to
           and r['dt'] < 25 and orphan_count() == 0, f"timeouts={to} dt={r['dt']:.1f}")
+    a.config('enforce')
+
+
+NOPOSIX = ['-d', 'disable_functions=posix_access,posix_get_last_error,posix_geteuid']   # wie AS1 X7, nur für php -S
+
+
+def status_execs(a, php_args=None):
+    """system/status unter strace -f (execve): Antwort und Liste der danach gestarteten externen Programme."""
+    tr = os.path.join(WORK, 'status-exec.strace')
+    if os.path.exists(tr):
+        os.unlink(tr)
+    r = a.status(php_args=php_args, strace={'out': tr, 'inject': ['trace=execve,execveat'], 'follow': True})
+    execs = []
+    for line in open(tr, errors='replace'):
+        m = re.search(r'execve(?:at)?\([^"]*"([^"]+)"', line)
+        if m and not re.search(r'/(setpriv|php[0-9.]*)$', m.group(1)):
+            execs.append(m.group(1))
+    return r, execs
+
+
+def t_status_failclosed(G, a):
+    """Review AS2a (letzte Korrektur): Nur off verwendet den bisherigen Ablauf. observe/enforce ohne posix und ein
+    unbekannter fencing_mode antworten fail-closed, ohne einen externen Prozess zu starten."""
+    a.config('enforce')
+    r, execs = status_execs(a)
+    check(G, 'T11 Gegenprobe: status enforce startet externe Programme (Nachweis greift)', r['status'] == 200 and len(execs) >= 3,
+          f"execs={sorted(set(os.path.basename(e) for e in execs))}")
+    for i, mode in enumerate(('observe', 'enforce')):
+        a.config(mode)
+        r, execs = status_execs(a, NOPOSIX)
+        fs = r['json'].get('fencing') or {}
+        check(G, f'T1{2 + i} status {mode} ohne posix ⇒ agent_requirement_missing ohne Prozess', r['status'] == 503
+              and r['json'].get('code') == 'agent_requirement_missing' and fs.get('state') == 'requirement_missing'
+              and fs.get('mode') == mode and execs == [], f"http={r['status']} code={r['json'].get('code')} execs={execs}")
+    a.config('foo')
+    r, execs = status_execs(a)
+    fs = r['json'].get('fencing') or {}
+    check(G, 'T14 status unbekannter fencing_mode ⇒ fence_misconfigured ohne Prozess', r['status'] == 503
+          and r['json'].get('code') == 'fence_misconfigured' and fs.get('state') == 'misconfigured' and execs == [],
+          f"http={r['status']} code={r['json'].get('code')} execs={execs}")
+    r, execs = status_execs(a, NOPOSIX)
+    check(G, 'T15 unbekannter fencing_mode ohne posix ⇒ agent_requirement_missing ohne Prozess', r['status'] == 503
+          and r['json'].get('code') == 'agent_requirement_missing' and execs == [], f"code={r['json'].get('code')} execs={execs}")
     a.config('enforce')
 
 
@@ -1107,6 +1170,12 @@ def group_g(src_agent, ref_agent, state):
     st_src, st_ref = src_agent.status(), ref_agent.status()
     norm = lambda s: {k: v for k, v in s['json'].items() if k not in ('uptime_seconds', 'load_average')}
     check(G, 'G11 system/status off unverändert', st_src['status'] == st_ref['status'] and norm(st_src) == norm(st_ref))
+    st_src, st_ref = src_agent.status(php_args=NOPOSIX), ref_agent.status(php_args=NOPOSIX)
+    check(G, 'G12 system/status off ohne posix unverändert (bisheriger Ablauf)', st_src['status'] == st_ref['status']
+          and norm(st_src) == norm(st_ref) and (st_src['json'].get('fencing') or {}).get('state') == 'requirement_missing',
+          f"src={st_src['status']} ref={st_ref['status']}")
+    _, execs = status_execs(src_agent, NOPOSIX)
+    check(G, 'G13 off ohne posix: bisheriger Ablauf mit externen Programmen', len(execs) >= 3, f"execs={sorted(set(os.path.basename(e) for e in execs))}")
 
 
 # ------------------------------------------------------------------------------------------------------------------
@@ -1141,6 +1210,11 @@ MUTATIONS = [
     ('M13 status: rndc ohne Frist', 'agent/api/v1/system/status.php',
      "    $p = $run('rndc_status', [AGENT_SUDO, '-n', $rndcBinary, 'status'], AGENT_CAP_RNDC_STATUS);",
      "    $p = ['status' => 'ok', 'output' => (string)shell_exec('sudo -n ' . escapeshellcmd($rndcBinary) . ' status 2>&1')];", 'mut_s07'),
+    # Review AS2a (letzte Korrektur): unbekannter Modus bzw. fehlendes posix fallen auf den bisherigen Ablauf zurück
+    ('M15 status: unbekannter Modus ohne fail-closed', 'agent/api/v1/system/status.php',
+     "    if ($mode === 'invalid') {", "    if (false) {", 'mut_t14'),
+    ('M16 status: fehlendes posix ohne fail-closed', 'agent/api/v1/system/status.php',
+     "    if (!agentPosixAvailable()) {", "    if (false) {", 'mut_t12'),
     # Review AS2a: Reserve erst nach dem Sperrversuch geprüft (wie vor der Korrektur)
     ('M14 Sperrfrist nach flock geprüft', 'agent/inc/proc.php', [
         ("        if (agentRemaining() <= $reserve) {\n            fclose($h);\n            return ['handle' => null, 'reason' => 'timeout'];\n        }\n        $wouldBlock = 0;",
@@ -1210,6 +1284,8 @@ def mut_scenarios(a, state, name):
         finally:
             sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP')
         check(G, 's07', r['status'] == 503 and r['dt'] < 25, f"http={r['status']} dt={r['dt']:.1f}")
+    elif name in ('mut_t12', 'mut_t14'):
+        t_status_failclosed(G, a)
     elif name == 'mut_t05':
         a.zs(n, 10); a.cs(n); wait_serial(n, 10)
         b = snapshot([n])
