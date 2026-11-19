@@ -76,6 +76,15 @@ Kurzfassung zur Orientierung:
   Ausgangszustand wiederherstellen. Vor schwer umkehrbaren Änderungen Sicherung und Rückweg festlegen.
 - Abschlussbericht je PR: Basis- und Head-Commit, Tree, Dateiliste, Testumgebung und Versionen, Ergebnisse, bewusste
   Verhaltensänderungen, Restrisiken, Cleanup, Link zum Draft-PR; ein vollständig prüfbarer Diff für das externe Review.
+- Testsysteme ns1/ns2 sind die dedizierten Entwicklungs- und Testmaschinen des Projekts. Im Rahmen von Projektaufträgen
+  ohne Einzelfreigabe zulässig: Zonen und Records anlegen, ändern und löschen, Dateien ändern und ersetzen, Publish und
+  Rollback, BIND-Konfiguration ändern, BIND neu laden und neu starten, Agenten und ihre Konfiguration ändern,
+  Fehlerzustände, Abstürze und destruktive Tests. BIND- und Agent-Tests laufen gegen die installierten BIND-Instanzen
+  (`named`) und Agenten. Verboten ist eine zusätzliche BIND-Testumgebung: kein weiterer `named`-Prozess, keine eigene
+  Loopback-Adresse oder eigener DNS-Port, keine BIND-Konfiguration unter `/tmp`. Zulässig bleiben Test-Fixtures ohne
+  eigenen DNS-Server, etwa ein temporärer PHP-HTTP-Server (`php -S`) mit dem Agent-Code des Prüfstands gegen das echte
+  `/etc/bind` und den installierten `named` (Fehlerinjektion) oder das Loop-Dateisystem der AS1-Regression. Vor
+  destruktiven Tests Sicherung, Rückbau und Verifikation festlegen. Keine Änderungen an Proxmox oder anderen Systemen.
 
 ## 6. Lokale Dateien, Worktrees und temporäre Ergebnisse
 
