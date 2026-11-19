@@ -33,6 +33,7 @@ const AGENT_CAP_CHECKCONF = 3.0;
 const AGENT_CAP_RNDC_STATUS = 3.0;
 const AGENT_CAP_RNDC_RELOAD = 5.0;
 const AGENT_CAP_DIG = 1.5;
+const AGENT_CAP_PGREP = 2.0;
 
 /**
  * Absolutes Arbeitsende dieser Anfrage (Unix-Zeit, Sekunden).
@@ -169,6 +170,12 @@ function agentLockWithDeadline(string $lockPath, float $reserve): array {
         return ['handle' => null, 'reason' => 'open'];
     }
     while (true) {
+        // Review AS2a: Reserve VOR jedem Sperrversuch prüfen – auch eine freie Sperre wird nicht mehr genommen, wenn die
+        // verbleibende Arbeitszeit die Reserve nicht mehr deckt
+        if (agentRemaining() <= $reserve) {
+            fclose($h);
+            return ['handle' => null, 'reason' => 'timeout'];
+        }
         $wouldBlock = 0;
         if (@flock($h, LOCK_EX | LOCK_NB, $wouldBlock)) {
             return ['handle' => $h, 'reason' => null];
@@ -176,10 +183,6 @@ function agentLockWithDeadline(string $lockPath, float $reserve): array {
         if (!$wouldBlock) {
             fclose($h);
             return ['handle' => null, 'reason' => 'flock'];
-        }
-        if (agentRemaining() <= $reserve) {
-            fclose($h);
-            return ['handle' => null, 'reason' => 'timeout'];
         }
         usleep(50000);
     }
