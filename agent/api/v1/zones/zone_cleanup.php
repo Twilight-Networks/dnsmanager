@@ -90,7 +90,9 @@ if (!$fence['allow']) {
 }
 
 // === Verwaltete .conf-Dateien scannen ===
-$confFiles = glob("$confDir/*.conf");
+// S43 (AS1): GLOB_ERR – ein Lesefehler des Verzeichnisses liefert false statt einer leeren Liste (sonst
+// "keine verwaisten Zonen" als Erfolg)
+$confFiles = glob("$confDir/*.conf", GLOB_ERR);
 if ($confFiles === false) {
     $releaseLock();
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Lesen des Konfigurationsverzeichnisses']);

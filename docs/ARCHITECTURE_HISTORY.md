@@ -611,6 +611,12 @@ werden vor dem Reload synchronisiert (`conf_sync` mit Rollback bei Fehler, `zone
 `rndc`). E95: `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch (Golden G01);
 abweichend nur, wenn `fsync` scheitert – dort meldete der bisherige Agent einen nicht dauerhaften Erfolg.
 
+**Befund S43 (behoben mit AS1)** – Die Fehlerinjektion zeigte, dass `glob()` bei einem Lesefehler des
+Konfigurationsverzeichnisses eine leere Liste liefert: `conf_sync` hätte `zones.conf` ohne Includes geschrieben und
+geladen (Antwort 200), `zone_cleanup` „keine verwaisten Zonen“ gemeldet. Behebung: `GLOB_ERR`; Einzelheiten
+`ARCHITECTURE_CORE.md`, Abschnitt 6. Die Suite prüft nach jedem Erfolg, dass `zones.conf` genau die vorhandenen
+`.conf`-Dateien einbindet (Mutationsproben M16/M17).
+
 **`system/status` (I-A5, Teil AS1)** – in `observe`/`enforce` zusätzlich `capabilities` (`fencing`, `durable_writes`)
 und `fencing` (`mode`, `domain`, `state` ok/uninitialized/invalid/fault/domain_mismatch/misconfigured, `high`,
 `fault`); in `off` unverändert. HTTP-Status und BIND-Auswertung unverändert.
@@ -631,7 +637,10 @@ Serial-Regel und keine L3-Prüfung (AS2), keine Schemaänderung (AS3).
 
 **Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
 I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
-`noauto_da_alloc`), G `off` gegen den bisherigen Agenten, M Mutationsproben.
+`noauto_da_alloc`), G `off` gegen den bisherigen Agenten, M Mutationsproben M01–M17. M04 (Verzeichnis-`fsync` nach
+dem `rename` von H entfernt) ist auf ext4 äquivalent: Der Verzeichnis-`fsync` nach dem Entfernen der Marke schreibt das
+Journal in Reihenfolge fest und macht das `rename` mit dauerhaft; der Schritt bleibt als dateisystemunabhängige
+Absicherung.
 
 ## 6. Atomare History-Erfassung
 
@@ -1029,6 +1038,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
 | E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | entschieden (AS0), Umsetzung AS2 |
 | E95 | `fsync` in allen Modi; `off` im Normalbetrieb und in allen bisherigen Fehlerpfaden identisch, abweichend nur bei gescheitertem `fsync` | umgesetzt (AS1) – zur Bestätigung im Review |
+| E96 | Befund S43: `glob(…, GLOB_ERR)` in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall) | umgesetzt (AS1) – zur Bestätigung im Review |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des
@@ -1042,7 +1052,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
-| 19.11.2026 | AS0 (technische Vorprüfung) und AS1 umgesetzt: Abschnitt 5e (Agent-Fencing, Write-ahead-Fehlermarke, Domäne und Schutzgrenze, Modi, CLI, dauerhafte Dateioperationen), Entscheidungen E74–E95 einschließlich E4 und E15/E16, Retention als Meilenstein R (Abschnitt 18), Betrieb in `AGENT_FENCING.md` |
+| 19.11.2026 | AS0 (technische Vorprüfung) und AS1 umgesetzt: Abschnitt 5e (Agent-Fencing, Write-ahead-Fehlermarke, Domäne und Schutzgrenze, Modi, CLI, dauerhafte Dateioperationen), Entscheidungen E74–E96 einschließlich E4 und E15/E16, Befund S43, Retention als Meilenstein R (Abschnitt 18), Betrieb in `AGENT_FENCING.md` |
 | 18.11.2026 | H2d umgesetzt: Abschnitt 5d (Publish-Journal, Migration 005), Präzisierung von Abschnitt 9 (Reaktivierung abgeleitet, E70), Entscheidungen E55–E73 mit den Präzisierungen der Freigabe (isolierte Testumgebung, Akteurskontext, J5/Neustart über laufeigene Sperre, operatives Ergebnis ≠ Bestätigung) |
 | 18.11.2026 | H2c umgesetzt: Abschnitt 5c (Audit-Ereignisse, Migration 004), Regeln R-A1–R-A8 (Abschnitt 6), Leserechte für H3 (Abschnitt 16), Entscheidungen E43–E54 mit den Präzisierungen aus dem Plan-Review (NULL-sichere CHECKs und `seq`, Serverstand unter Sperre, gemeinsame Änderungsmenge, strikte Policy); Korrektur in 5b (Publish gehört zu H2d) |
 | 18.11.2026 | H2b umgesetzt: Abschnitt 5b, Präzisierung von R-H2/R-H9 (Abschnitt 6), Entscheidungen E29–E42 mit den Präzisierungen aus dem Plan-Review (E33 Duplicate-Key-Pfad, E35 fehlende Heads ohne Gap-Sperre, E39 Bindung des Wächters an Verbindung und Transaktion, E42 Schutz von ns1), Migration 003 |

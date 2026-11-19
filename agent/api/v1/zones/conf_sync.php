@@ -181,7 +181,9 @@ if (!writeTextFileAtomic($confPath, $confData)) {
 // === Ab hier wurde eine Live-Datei verändert: jeder kontrollierte Fehler führt zum Rollback ===
 
 // === Neue zones.conf generieren ===
-$confFiles = glob("$confDir/*.conf");
+// S43 (AS1): GLOB_ERR – ein Lesefehler des Verzeichnisses liefert false statt einer leeren Liste (sonst würde
+// zones.conf ohne Includes neu geschrieben und geladen)
+$confFiles = glob("$confDir/*.conf", GLOB_ERR);
 if ($confFiles === false) {
     $failWithRollback(500, 'Fehler beim Lesen des Konfigurationsverzeichnisses');
 }
