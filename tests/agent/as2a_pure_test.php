@@ -254,5 +254,19 @@ t('KL41 Cleanup-Zähler', $r['removedConf'] === 1 && $r['removedZoneFiles'] === 
 $r = PublishTargetClassifier::classify($Z, ['body' => '', 'httpCode' => 0, 'curlError' => 'Operation timed out', 'curlErrno' => 28]);
 t('KL42 Transport-Timeout unverändert', $r['status'] === 'unknown' && $r['errorCode'] === 'timeout');
 
+// ---------------------------------------------------------------- L: Sperrfrist (Review AS2a, Befund 2)
+// Anfragebeginn 20 s zurück ⇒ Restzeit etwa 4 s < Reserve 8 s; die Sperre ist frei. Erwartet: timeout ohne Sperrversuch.
+$_SERVER['REQUEST_TIME_FLOAT'] = microtime(true) - 20.0;
+$lockFile = tempnam(sys_get_temp_dir(), 'as2a-lock');
+$probe = fopen($lockFile, 'c');
+t('L00 Sperre vorher frei', flock($probe, LOCK_EX | LOCK_NB) && flock($probe, LOCK_UN));
+$l = agentLockWithDeadline($lockFile, 8.0);
+t('L01 Reserve unterschritten, Sperre frei ⇒ timeout', $l['handle'] === null && $l['reason'] === 'timeout', json_encode(['reason' => $l['reason'], 'handle' => $l['handle'] !== null]));
+t('L02 keine Sperre gehalten', flock($probe, LOCK_EX | LOCK_NB));
+flock($probe, LOCK_UN);
+fclose($probe);
+@unlink($lockFile);
+t('L03 Restzeit', agentRemaining() < 8.0 && agentRemaining() > 0.0, sprintf('%.1f', agentRemaining()));
+
 echo "\nErgebnis: $pass bestanden, $fail fehlgeschlagen\n";
 exit($fail === 0 ? 0 : 1);

@@ -327,15 +327,22 @@ class Agent:
     def cl(self, valid, **kw):
         return self.req('zones/zone_cleanup.php', self.fence({'valid_zones': valid}), **kw)
 
-    def status(self):
+    def status(self, timeout=40):
         self.start()
+        t0 = time.time()
         try:
-            c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=20)
+            c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=timeout)
             c.request('GET', '/api/v1/system/status.php', headers={'Authorization': f'Bearer {TOKEN}'})
             r = c.getresponse()
-            return {'status': r.status, 'json': json.loads(r.read() or b'{}')}
+            res = {'status': r.status, 'json': json.loads(r.read() or b'{}')}
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            res = {'status': None, 'json': {}, 'error': str(e)}
         finally:
+            dt = time.time() - t0
+            DURATIONS.append((CURRENT[0], 'system/status.php', dt))
             self.stop()
+        res['dt'] = dt
+        return res
 
 
 def after_change(path, digest, action, timeout=15):
@@ -958,6 +965,64 @@ def group_t(a, state):
         fh.close()
     check(G, 'T04 Sperre belegt ⇒ lock_timeout', r['status'] == 503 and j(r, 'code') == 'lock_timeout' and j(r, 'effect') == 'none'
           and 15 < r['dt'] < 18 and snapshot([n1]) == b, f"dt={r['dt']:.1f}")
+    t_lock_reserve(G, a, n1, cur + 1, b)
+    t_status(G, a)
+
+
+def t_lock_reserve(G, a, n1, serial, b):
+    """Review AS2a, Befund 2: Anfragefrist so weit fortgeschritten, dass die Reserve (8 s) unterschritten ist, während die
+    Sperre frei ist. Der erste fsync (Temp-Datei, vor named-checkzone und Sperre) wird per strace um 17 s verzögert;
+    danach Restzeit ≈ 7 s < 8 s. Erwartet: lock_timeout ohne Änderung – auch bei freier Sperre."""
+    r = a.zs(n1, serial, strace={'out': os.path.join(WORK, 't05.strace'),
+                                 'inject': ['trace=fsync', 'inject=fsync:delay_exit=17000000:when=1']})
+    check(G, 'T05 Reserve unterschritten bei freier Sperre ⇒ lock_timeout', r['status'] == 503 and j(r, 'code') == 'lock_timeout'
+          and j(r, 'effect') == 'none' and snapshot([n1]) == b and 16.5 < r['dt'] < 20, f"http={r['status']} code={j(r, 'code')} dt={r['dt']:.1f}")
+
+
+def t_status(G, a):
+    """Review AS2a, Befund 1: system/status in observe/enforce mit Prozessfristen."""
+    for mode in ('enforce', 'observe'):
+        a.config(mode)
+        r = a.status()
+        bind = r['json'].get('bind') or {}
+        check(G, f'T06 status {mode} regulär', r['status'] == 200 and 'timeouts' not in bind and bind.get('named_running') is True
+              and r['dt'] < 5, f"http={r['status']} dt={r['dt']:.1f}")
+    a.config('enforce')
+    # rndc-Steuerkanal blockiert
+    sh('iptables -I INPUT -i lo -p tcp --dport 953 -j DROP')
+    try:
+        r = a.status()
+    finally:
+        sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP')
+    to = (r['json'].get('bind') or {}).get('timeouts') or []
+    check(G, 'T07 status: rndc blockiert ⇒ status_timeout innerhalb der Frist', r['status'] == 503 and r['json'].get('code') == 'status_timeout'
+          and 'rndc_status' in to and r['dt'] < 25 and orphan_count() == 0, f"http={r['status']} timeouts={to} dt={r['dt']:.1f}")
+    # DNS (UDP/TCP 53) blockiert
+    sh('iptables -I INPUT -i lo -p udp --dport 53 -j DROP; iptables -I INPUT -i lo -p tcp --dport 53 -j DROP')
+    try:
+        r = a.status()
+    finally:
+        sh('iptables -D INPUT -i lo -p udp --dport 53 -j DROP; iptables -D INPUT -i lo -p tcp --dport 53 -j DROP')
+    to = (r['json'].get('bind') or {}).get('timeouts') or []
+    check(G, 'T08 status: DNS blockiert ⇒ Fehlerzustand innerhalb der Frist', r['status'] == 503 and r['dt'] < 25 and orphan_count() == 0
+          and (r['json'].get('bind') or {}).get('dns_query_localhost_ok') is False
+          and (r['json'].get('verification') or {}).get('control_zone') == 'not_served', f"http={r['status']} timeouts={to} dt={r['dt']:.1f}")
+    # beide blockiert
+    sh('iptables -I INPUT -i lo -p tcp --dport 953 -j DROP; iptables -I INPUT -i lo -p udp --dport 53 -j DROP; iptables -I INPUT -i lo -p tcp --dport 53 -j DROP')
+    try:
+        r = a.status()
+    finally:
+        sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP; iptables -D INPUT -i lo -p udp --dport 53 -j DROP; iptables -D INPUT -i lo -p tcp --dport 53 -j DROP')
+    to = (r['json'].get('bind') or {}).get('timeouts') or []
+    check(G, 'T09 status: rndc und DNS blockiert ⇒ status_timeout < 25 s', r['status'] == 503 and r['json'].get('code') == 'status_timeout'
+          and r['dt'] < 25 and orphan_count() == 0, f"timeouts={to} dt={r['dt']:.1f}")
+    # künstlich verzögertes named-checkconf (Konfigurationsnachweis)
+    a.config('enforce', bind_named_checkconf=slow_wrapper('/usr/bin/named-checkconf', 30))
+    r = a.status()
+    to = (r['json'].get('bind') or {}).get('timeouts') or []
+    check(G, 'T10 status: named-checkconf verzögert ⇒ status_timeout', r['status'] == 503 and 'config_proof' in to
+          and r['dt'] < 25 and orphan_count() == 0, f"timeouts={to} dt={r['dt']:.1f}")
+    a.config('enforce')
 
 
 # ------------------------------------------------------------------------------------------------------------------
@@ -1072,6 +1137,17 @@ MUTATIONS = [
     ('M11 Kontrollzone mit eigener ACL akzeptiert', 'agent/inc/dns_state.php', "        return ['state' => 'own_acl', 'zone' => $zone];", "        ;", 'mut_d05'),
     ('M12 Reparatur ohne Hashprüfung', 'agent/inc/dns_state.php', "&& is_string($repair['expect_file']) && hash_equals((string)$f['sha256'], $repair['expect_file'])",
      "&& is_string($repair['expect_file'])", 'mut_e08'),
+    # Review AS2a: system/status mit unbeschränktem rndc-Aufruf (wie vor der Korrektur)
+    ('M13 status: rndc ohne Frist', 'agent/api/v1/system/status.php',
+     "    $p = $run('rndc_status', [AGENT_SUDO, '-n', $rndcBinary, 'status'], AGENT_CAP_RNDC_STATUS);",
+     "    $p = ['status' => 'ok', 'output' => (string)shell_exec('sudo -n ' . escapeshellcmd($rndcBinary) . ' status 2>&1')];", 'mut_s07'),
+    # Review AS2a: Reserve erst nach dem Sperrversuch geprüft (wie vor der Korrektur)
+    ('M14 Sperrfrist nach flock geprüft', 'agent/inc/proc.php', [
+        ("        if (agentRemaining() <= $reserve) {\n            fclose($h);\n            return ['handle' => null, 'reason' => 'timeout'];\n        }\n        $wouldBlock = 0;",
+         "        $wouldBlock = 0;"),
+        ("            return ['handle' => null, 'reason' => 'flock'];\n        }\n        usleep(50000);",
+         "            return ['handle' => null, 'reason' => 'flock'];\n        }\n        if (agentRemaining() <= $reserve) {\n            fclose($h);\n            return ['handle' => null, 'reason' => 'timeout'];\n        }\n        usleep(50000);")],
+     None, 'mut_t05'),
 ]
 
 
@@ -1127,6 +1203,17 @@ def mut_scenarios(a, state, name):
         a.config('enforce', l3_control_zone='mctl.as2a-solo.test')
         r = a.zs('msolo.as2a-solo.test', 1)
         check(G, 'd05', r['status'] == 503 and sc(r, 'served_reason') == 'control_zone_own_acl', str(sc(r, 'served_reason')))
+    elif name == 'mut_s07':
+        sh('iptables -I INPUT -i lo -p tcp --dport 953 -j DROP')
+        try:
+            r = a.status(timeout=30)
+        finally:
+            sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP')
+        check(G, 's07', r['status'] == 503 and r['dt'] < 25, f"http={r['status']} dt={r['dt']:.1f}")
+    elif name == 'mut_t05':
+        a.zs(n, 10); a.cs(n); wait_serial(n, 10)
+        b = snapshot([n])
+        t_lock_reserve(G, a, n, 11, b)
     elif name == 'mut_e08':
         m = 'mr.as2a-solo.test'; put_managed_raw(m, 'kaputt\n'); b = snapshot([m])
         unchanged(G, 'e08', b, [m], a.zs(m, 5, repair={'expect_file': '0' * 64, 'expect_served': 'not_auth'}), 'repair_mismatch', 409)
