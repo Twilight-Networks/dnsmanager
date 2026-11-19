@@ -638,6 +638,18 @@ Verifikation vorliegt.
 einsetzbar (jede Verteilung würde mit `fence_token_missing` abgelehnt), zulässig sind `off` und `observe`. Keine
 Serial-Regel und keine L3-Prüfung (AS2), keine Schemaänderung (AS3).
 
+**Stufentest auf dem installierten ns2 (19.11.2026, Code `d7f3e95` bzw. zuvor `48ffd6b`)** – Sicherung unter
+`/root/as1-stage-20261119`; Verteilung über den installierten Core auf ns1 (`PublishService::publishZone()`,
+`zone.example.test`): (1) `off`: Ziele `ok/ok`, Datei auf ns2 byte-gleich mit `file_hash`, geladene Serial auf ns1 und
+ns2 gleich, `system/status` unverändert; (2) `observe` mit eigener Domäne und H = höchste Lauf-ID (CLI `init`):
+Verteilung unverändert erfolgreich, Bericht `would_reject`/`fence_token_missing` im Apache-Log (der Core sendet noch
+kein Token), Monitoring-Cron `ok`; (3) kurzes `enforce`-Fenster nur mit Ablehnungsproben (ohne Token 400, veraltetes
+Token 409 `stale_fence`, fremde Domäne 409): Zonendatei byte-gleich, kein BIND-Reload, H unverändert; (4) `observe` und
+`off` auf dem Endstand erneut erfolgreich, H in `off` nachweislich weder gelesen noch geschrieben. Rückbau: Code
+`7cdd9a8`, Konfiguration byte-gleich (`0640 root:www-data`), H-Datei entfernt; einzige Abweichung unter `/etc/bind` ist
+`db.zone.example.test` mit regulär fortgeschriebener Serial (`2026111904`); alle Zonen DB = Datei = geladen auf ns1 und
+ns2.
+
 **Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
 I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
 `noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, M Mutationsproben M01–M18. M04 (Verzeichnis-`fsync` nach

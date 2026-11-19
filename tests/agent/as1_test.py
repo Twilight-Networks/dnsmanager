@@ -766,16 +766,22 @@ def group_i(box):
         pts = persist_points(box, name, base, ep, mk)
         log(f'I {name}: {len(pts)} Schritte')
         for p in pts:
-            base()
-            t_old = box.tree()
-            tr = os.path.join(OUT, 'inj.txt')
             err = INJECT_ERR[p['name']]
-            r = call(box, ep, mk(), strace={'out': tr, 'inject': f"inject={p['name']}:error={err}:when={p['when']}"})
-            inj = [l.replace(box.bind, '<B>') for l in open(tr) if '(INJECTED)' in l]
-            # Treffer am erwarteten Schritt: gleicher Syscall und Pfad UND gleiche Ordnungszahl unter allen Aufrufen
-            same_name = [l for l in trace_lines(tr, box.bind) if l['name'] == p['name']]
-            ordinal = next((i + 1 for i, l in enumerate(same_name) if '(INJECTED)' in l['line']), None)
-            same_path = len(inj) == 1 and step_key(inj[0]) == step_key(p['line']) and ordinal == p['when']
+            # Socket-Reads des HTTP-Servers (TCP-Segmentierung) können die Ordnungszahl von read verschieben: bei einem
+            # Fehltreffer bis zu zweimal wiederholen; gewertet wird nur ein nachgewiesener Treffer am erwarteten Schritt.
+            for attempt in range(3):
+                base()
+                t_old = box.tree()
+                tr = os.path.join(OUT, 'inj.txt')
+                r = call(box, ep, mk(), strace={'out': tr, 'inject': f"inject={p['name']}:error={err}:when={p['when']}"})
+                inj = [l.replace(box.bind, '<B>') for l in open(tr) if '(INJECTED)' in l]
+                # Treffer am erwarteten Schritt: gleicher Syscall und Pfad UND gleiche Ordnungszahl unter allen Aufrufen
+                same_name = [l for l in trace_lines(tr, box.bind) if l['name'] == p['name']]
+                ordinal = next((i + 1 for i, l in enumerate(same_name) if '(INJECTED)' in l['line']), None)
+                same_path = len(inj) == 1 and step_key(inj[0]) == step_key(p['line']) and ordinal == p['when']
+                if same_path:
+                    break
+                log(f"I {name} {p['name']}#{p['when']}: Fehltreffer (Versuch {attempt + 1}), wiederhole")
             problems, kind, h, latch = verify_after(box, name, t_old, r, p['line'], G)
             # Nach einem Fehler mit Fehlermarke muss die nächste Anfrage fail-closed sein
             if latch:
