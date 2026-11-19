@@ -88,9 +88,11 @@ final class J
                 'bind_named_checkzone' => '/usr/bin/named-checkzone',
                 'bind_named_checkconf' => '/usr/bin/named-checkconf',
                 'bind_rndc'            => "$d/rndc",
+                // E118 (AS2a): fencing_mode ist Pflichtangabe; das Journal prüft den bisherigen Ablauf (ausdrücklich off)
+                'fencing_mode'         => 'off',
             ];
             foreach ($cfg as $k => $v) {
-                if (is_string($v) && $k !== 'bind_named_checkzone' && $k !== 'bind_named_checkconf' && !str_starts_with($v, "$s/")) {
+                if (is_string($v) && !in_array($k, ['bind_named_checkzone', 'bind_named_checkconf', 'fencing_mode'], true) && !str_starts_with($v, "$s/")) {
                     throw new RuntimeException("Sandbox-Konfiguration $k zeigt außerhalb der Sandbox");
                 }
             }

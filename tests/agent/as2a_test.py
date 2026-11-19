@@ -987,6 +987,7 @@ def group_t(a, state):
     t_lock_reserve(G, a, n1, cur + 1, b)
     t_status(G, a)
     t_status_failclosed(G, a)
+    t_missing_mode(G, a, state)
 
 
 def t_lock_reserve(G, a, n1, serial, b):
@@ -1088,13 +1089,40 @@ def t_status_failclosed(G, a):
     a.config('enforce')
 
 
+def t_missing_mode(G, a, state):
+    """E118: fehlender fencing_mode ⇒ alle vier Endpunkte 503 fence_misconfigured, ohne externen Prozess, ohne Änderung
+    und ohne Reload; danach regulär mit ausdrücklichem Modus."""
+    n1 = 'n1.as2a-solo.test'
+    keep = [z[:-5] for z in os.listdir(CONFDIR) if z.endswith('.conf')]
+    a.config(None)
+    for tid, ep, act in [('T16', 'system/status', lambda tr: a.status(strace=tr)),
+                         ('T17', 'zone_sync', lambda tr: a.zs(n1, dig(n1)['serial'] + 5, strace=tr)),
+                         ('T18', 'conf_sync', lambda tr: a.cs(n1, strace=tr)),
+                         ('T19', 'zone_cleanup', lambda tr: a.cl(keep[:1], strace=tr))]:
+        trf = os.path.join(WORK, f'{tid}.strace')
+        b = snapshot([n1])
+        since = time.time()
+        r = act({'out': trf, 'inject': ['trace=execve,execveat'], 'follow': True})
+        execs = [m.group(1) for m in (re.search(r'execve(?:at)?\([^"]*"([^"]+)"', l) for l in open(trf, errors='replace'))
+                 if m and not re.search(r'/(setpriv|php[0-9.]*)$', m.group(1))]
+        check(G, f'{tid} {ep}: fencing_mode fehlt ⇒ fence_misconfigured ohne Prozess und Änderung', r['status'] == 503
+              and r['json'].get('code') == 'fence_misconfigured' and execs == [] and snapshot([n1]) == b
+              and reload_count(since) == 0 and (ep == 'system/status' or r['json'].get('effect') == 'none'),
+              f"http={r['status']} code={r['json'].get('code')} effect={r['json'].get('effect')} execs={execs}")
+    a.config('enforce')
+    nxt = dig(n1)['serial'] + 1
+    r = a.zs(n1, nxt)
+    check(G, 'T20 danach mit ausdrücklichem Modus regulär', r['status'] == 200 and wait_serial(n1, nxt), f"http={r['status']}")
+
+
 # ------------------------------------------------------------------------------------------------------------------
 # Gruppe G – off gegen den Basis-Commit
 # ------------------------------------------------------------------------------------------------------------------
 def group_g(src_agent, ref_agent, state):
     G = 'G'
-    src_agent.config(None)
-    ref_agent.config(None)
+    # E118: off ausdrücklich (der Basis-Commit kennt fencing_mode = off ebenfalls)
+    src_agent.config('off')
+    ref_agent.config('off')
     g1 = 'g1.as2a-solo.test'
 
     def setup_none():
@@ -1156,11 +1184,11 @@ def group_g(src_agent, ref_agent, state):
     run('G08 named gestoppt (off unverändert)', rebuild, stopped)
     # Fehlerpfad: langsames named-checkconf (off: keine Frist)
     def slow(ag):
-        ag.config(None, bind_named_checkconf=slow_wrapper('/usr/bin/named-checkconf', 4))
+        ag.config('off', bind_named_checkconf=slow_wrapper('/usr/bin/named-checkconf', 4))
         try:
             return ag.zs(g1, 5)
         finally:
-            ag.config(None)
+            ag.config('off')
     run('G09 langsames named-checkconf (off ohne Frist)', rebuild, slow)
     # Fehlerpfad: Verzeichnis-fsync scheitert
     def fs(ag):
@@ -1210,6 +1238,10 @@ MUTATIONS = [
     ('M13 status: rndc ohne Frist', 'agent/api/v1/system/status.php',
      "    $p = $run('rndc_status', [AGENT_SUDO, '-n', $rndcBinary, 'status'], AGENT_CAP_RNDC_STATUS);",
      "    $p = ['status' => 'ok', 'output' => (string)shell_exec('sudo -n ' . escapeshellcmd($rndcBinary) . ' status 2>&1')];", 'mut_s07'),
+    # E118: fehlender fencing_mode wieder als off gewertet
+    ('M17 fehlender fencing_mode als off', 'agent/inc/fence.php',
+     "        return 'invalid';   // E118: fehlender Schlüssel ⇒ Fehlkonfiguration, nie stillschweigend off",
+     "        return 'off';", 'mut_t16'),
     # Review AS2a (letzte Korrektur): unbekannter Modus bzw. fehlendes posix fallen auf den bisherigen Ablauf zurück
     ('M15 status: unbekannter Modus ohne fail-closed', 'agent/api/v1/system/status.php',
      "    if ($mode === 'invalid') {", "    if (false) {", 'mut_t14'),
@@ -1284,6 +1316,15 @@ def mut_scenarios(a, state, name):
         finally:
             sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP')
         check(G, 's07', r['status'] == 503 and r['dt'] < 25, f"http={r['status']} dt={r['dt']:.1f}")
+    elif name == 'mut_t16':
+        a.zs(n, 10); a.cs(n); wait_serial(n, 10)
+        a.config(None)
+        b = snapshot([n])
+        r = a.zs(n, 11)
+        check(G, 't16', r['status'] == 503 and r['json'].get('code') == 'fence_misconfigured' and snapshot([n]) == b,
+              f"http={r['status']} code={r['json'].get('code')}")
+        r = a.status()
+        check(G, 't16s', r['status'] == 503 and r['json'].get('code') == 'fence_misconfigured', f"http={r['status']}")
     elif name in ('mut_t12', 'mut_t14'):
         t_status_failclosed(G, a)
     elif name == 'mut_t05':
