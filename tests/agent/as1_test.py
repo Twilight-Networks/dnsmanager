@@ -1185,7 +1185,7 @@ MUTATIONS = [
     ('M05 ohne Datei-fsync', 'inc/file_utils.php', "$ok = @fflush($fh) && @fsync($fh);", "$ok = @fflush($fh);", 'C', 'zone_sync'),
     ('M06 Prüfung vor dem flock', 'api/v1/zones/zone_sync.php', None, None, 'F'),
     ('M07 fehlendes H angenommen', 'inc/fence.php', "    if ($h['state'] === 'missing') {\n", "    if ($h['state'] === 'missing') { $h = ['state' => 'ok', 'domain' => $domain, 'high' => 1, 'detail' => null]; }\n    if (false) {\n", 'F'),
-    ('M08 Fehlermarke ignoriert', 'inc/fence.php', "    return file_exists($latch) || is_link($latch);", "    return false;", 'F'),
+    ('M08 Fehlermarke ignoriert', 'inc/fence.php', "    return pathState(fencePaths($config)['latch']) !== 'absent';", "    return false;", 'F'),
     ('M09 Anfrage-Domäne nicht geprüft', 'inc/fence.php', "if (!hash_equals($domain, $in['fence_domain'])) {", "if (false) {", 'F'),
     ('M10 Marke vor Persistenz entfernt', 'inc/fence.php', "    // 2. Neuen Wert dauerhaft schreiben\n", "    @unlink($p['latch']);\n    // 2. Neuen Wert dauerhaft schreiben\n", 'I', 'zone_sync'),
     ('M11 zone_sync ohne Verzeichnis-fsync', 'api/v1/zones/zone_sync.php', "if (!syncDirectory($zoneDir)) {", "if (false) {", 'C', 'zone_sync'),
