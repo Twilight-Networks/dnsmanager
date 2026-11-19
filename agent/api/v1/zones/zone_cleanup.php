@@ -116,7 +116,13 @@ foreach ($confFiles as $file) {
 // Ein getdents()-Fehler mitten im Durchlauf kann scandir() und glob() gleichermaßen verkürzen, ohne dass PHP einen Fehler
 // meldet. Jedes bisherige Include muss deshalb entweder in der Behalten-Liste oder unter den als verwaist erkannten
 // Dateien stehen; sonst ohne jede Änderung und ohne Reload abbrechen (auch statt eines No-op-Erfolgs).
-$zonesConfExisted = file_exists($zonesConfPath);
+// E99: Existenz fail-closed prüfen
+$zonesConfState = pathState($zonesConfPath);
+if ($zonesConfState === 'error') {
+    $releaseLock();
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Zustand der bestehenden zones.conf nicht prüfbar – keine Änderung vorgenommen']);
+}
+$zonesConfExisted = $zonesConfState === 'present';
 $oldZonesConf = null;
 $oldZonesConfPerms = null;
 if ($zonesConfExisted) {
@@ -188,7 +194,7 @@ if (!$preflight['ok']) {
     // Es wurden noch keine Orphan-Dateien gelöscht; kein Reload.
     $restored = $zonesConfExisted
         ? writeTextFileAtomic($zonesConfPath, $oldZonesConf, $oldZonesConfPerms)
-        : (!file_exists($zonesConfPath) || @unlink($zonesConfPath));
+        : (pathState($zonesConfPath) === 'absent' || @unlink($zonesConfPath));   // E99
     // AS1: wiederhergestellten Zustand dauerhaft machen
     $restored = $restored && syncDirectory(dirname($zonesConfPath));
 
@@ -235,8 +241,14 @@ $removedZoneFiles = [];
 $errors = [];
 foreach ($orphanConfFiles as $base => $confFile) {
     $zoneFile = "$zoneDir/db.$base";
-    if (file_exists($zoneFile)) {
-        if (!@unlink($zoneFile) && file_exists($zoneFile)) {
+    // E99: Prüffehler ⇒ .conf als Orphan-Marker behalten (Retry beim nächsten Cleanup), nie als "entfernt" werten
+    $zoneFileState = pathState($zoneFile);
+    if ($zoneFileState === 'error') {
+        $errors[] = "Verwaiste Zonendatei nicht prüfbar: " . basename($zoneFile);
+        continue;
+    }
+    if ($zoneFileState === 'present') {
+        if (!@unlink($zoneFile) && pathState($zoneFile) !== 'absent') {
             // .conf als Orphan-Marker behalten → Retry beim nächsten Cleanup
             $errors[] = "Verwaiste Zonendatei konnte nicht entfernt werden: " . basename($zoneFile);
             continue;
@@ -244,7 +256,7 @@ foreach ($orphanConfFiles as $base => $confFile) {
         $removedZoneFiles[] = basename($zoneFile);
     }
 
-    if (!@unlink($confFile) && file_exists($confFile)) {
+    if (!@unlink($confFile) && pathState($confFile) !== 'absent') {
         // Bereits entfernte db-Datei wird nicht wiederhergestellt
         $errors[] = "Verwaiste Konfigurationsdatei konnte nicht entfernt werden: " . basename($confFile);
         continue;

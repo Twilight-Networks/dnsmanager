@@ -23,7 +23,8 @@ python3 tests/agent/as1_test.py --src <Checkout des Prüfstands> --ref <Checkout
 | C | für alle drei Modi: Absturz vor jedem dieser Schritte (`inject=…:signal=SIGKILL`) mit anschließendem Stromausfall (dm-flakey `drop_writes`, Neu-Einhängen) sowie Stromausfall nach bestätigtem Abschluss; Invarianten: H ∈ {alt, neu}, sichtbare Änderung ⇒ H dauerhaft ≥ Token, keine Mischzustände, `named.conf`/`zones.conf` gültig, bestätigte Änderung dauerhaft |
 | G | `off` (ohne Schlüssel, ausdrücklich `off`, mit Fencing-Feldern im Body) gegenüber dem Agenten des Basis-Commits: HTTP-Status, Content-Type, Body, Dateibaum und Reload-Aufrufe je Schritt identisch |
 | L | Vollständigkeit der Verzeichnisauflistung (E98): 2000 Zonen, `getdents64`-Fehler im jeweils 2. Aufruf **beider** Durchläufe (`strace -P` auf das Verzeichnis) für `conf_sync` und `zone_cleanup` – a mit vollständigem Agenten, b mit neutralisiertem `scandir`/`glob`-Abgleich (der Vollständigkeitsnachweis muss allein greifen); verkürztes Lesen der bisherigen `zones.conf` (`read` EIO); verwaiste Include-Zeile; L7/L8: nicht eingebundene `.conf`-Dateien und nur der `glob`-Durchlauf verkürzt (hier greift allein der Abgleich `scandir`/`glob`, S43); Gegenproben ohne Fehlalarm |
-| M | Mutationsproben M01–M24; jede wird in einem eigenen Lauf mit den zugeordneten Gruppen ausgeführt und muss mindestens einen Fehlschlag erzeugen |
+| X | nicht prüfbare Existenz (E99): `stat`/`access` mit EIO (`strace -P`) auf Fehlermarke (vorhanden und fehlend, alle Modi × alle Endpunkte), H (`observe`/`enforce`), bestehende `<zone>.conf`/`zones.conf` und verwaiste Zonendatei im Cleanup; Gegenprobe |
+| M | Mutationsproben M01–M25; jede wird in einem eigenen Lauf mit den zugeordneten Gruppen ausgeführt und muss mindestens einen Fehlschlag erzeugen |
 
 Ergebnisse: `as1_test.log` (eine Zeile je Fall), Mitschnitte und Golden-Daten im Ausgabeverzeichnis. Laufzeit auf ns2
 etwa 30–60 Minuten für alle Gruppen.

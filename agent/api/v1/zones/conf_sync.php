@@ -78,7 +78,15 @@ $syncDirs = [$confDir, dirname($confDir), dirname($zonesConfPath)];
 
 // === Zustand vor der ersten Änderung sichern (für Rollback) ===
 // Schlägt ein Backup-Lesevorgang fehl, wird ohne jede Änderung abgebrochen.
-$confExisted = file_exists($confPath);
+// E99: Existenz fail-closed prüfen – ein Prüffehler darf nicht als "nicht vorhanden" gelten (sonst fehlende Sicherung und
+// Löschen statt Wiederherstellen im Rollback)
+$confState = pathState($confPath);
+$zonesConfState = pathState($zonesConfPath);
+if ($confState === 'error' || $zonesConfState === 'error') {
+    $releaseLock();
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Zustand der bestehenden Konfiguration nicht prüfbar – keine Änderung vorgenommen']);
+}
+$confExisted = $confState === 'present';
 $oldConf = null;
 $oldConfPerms = null;
 if ($confExisted) {
@@ -92,7 +100,7 @@ if ($confExisted) {
     $oldConfPerms = $perms !== false ? ($perms & 0777) : null;
 }
 
-$zonesConfExisted = file_exists($zonesConfPath);
+$zonesConfExisted = $zonesConfState === 'present';
 $oldZonesConf = null;
 $oldZonesConfPerms = null;
 if ($zonesConfExisted) {
@@ -118,7 +126,7 @@ $rollback = function () use (
         if (!writeTextFileAtomic($zonesConfPath, $oldZonesConf, $oldZonesConfPerms)) {
             $ok = false;
         }
-    } elseif (file_exists($zonesConfPath) && !@unlink($zonesConfPath)) {
+    } elseif (pathState($zonesConfPath) !== 'absent' && !@unlink($zonesConfPath)) {   // E99
         $ok = false;
     }
 
@@ -127,7 +135,7 @@ $rollback = function () use (
         if (!writeTextFileAtomic($confPath, $oldConf, $oldConfPerms)) {
             $ok = false;
         }
-    } elseif (file_exists($confPath)) {
+    } elseif (pathState($confPath) !== 'absent') {   // E99
         // Neue .conf nur entfernen, wenn zones.conf erfolgreich wiederhergestellt wurde;
         // sonst würde die (Kandidaten-)zones.conf auf eine fehlende Datei zeigen.
         if (!$ok || !@unlink($confPath)) {

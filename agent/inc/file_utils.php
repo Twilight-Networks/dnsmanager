@@ -192,6 +192,36 @@ function listConfFiles(string $dir): array|false {
 }
 
 /**
+ * Existenz eines Pfads mit Unterscheidung von Prüffehlern (E99).
+ *
+ * file_exists()/is_file() liefern bei JEDEM stat-Fehler false, also "nicht vorhanden" (auf ns2 nachgewiesen: vorhandene
+ * Datei, stat/access mit EIO ⇒ file_exists() = false). Für sicherheitsrelevante Entscheidungen (Fehlermarke, H,
+ * Sicherung vor Änderungen, Entfernen verwaister Dateien) gilt deshalb nur ENOENT als "nicht vorhanden"; jeder andere
+ * Fehler ist "nicht prüfbar" und wird vom Aufrufer fail-closed behandelt. Symlinks (auch defekte) gelten als vorhanden.
+ *
+ * Ohne die PHP-Erweiterung posix (auf ns1/ns2 vorhanden, Ubuntu php-common) fällt die Funktion auf file_exists() zurück;
+ * Prüffehler sind dann nicht unterscheidbar (dokumentierte Grenze).
+ *
+ * @param string $path Pfad
+ *
+ * @return string 'present' | 'absent' | 'error'
+ */
+function pathState(string $path): string {
+    clearstatcache(true, $path);
+    if (is_link($path)) {
+        return 'present';
+    }
+    if (!function_exists('posix_access')) {
+        return file_exists($path) ? 'present' : 'absent';
+    }
+    if (@posix_access($path, POSIX_F_OK)) {
+        return 'present';
+    }
+
+    return posix_get_last_error() === 2 ? 'absent' : 'error';   // 2 = ENOENT
+}
+
+/**
  * Liest eine Datei nur dann, wenn sie nachweislich vollständig gelesen wurde (S43-Ergänzung, E98).
  *
  * file_get_contents() liefert bei einem read()-Fehler eine leere bzw. verkürzte Zeichenkette statt false (unter

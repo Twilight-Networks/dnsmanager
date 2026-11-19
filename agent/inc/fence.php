@@ -93,12 +93,12 @@ function fenceFormat(string $domain, int $high): string {
     return "dnsmanager-fence v1 domain=$domain high=$high\n";
 }
 
-/** Existiert die Fehlermarke (auch als defekter Eintrag oder Symlink)? */
+/**
+ * Existiert die Fehlermarke (auch als defekter Eintrag oder Symlink)? Ist ihre Existenz nicht prüfbar (stat/access-Fehler
+ * außer ENOENT), gilt sie als vorhanden (E99, fail-closed).
+ */
 function fenceLatchPresent(array $config): bool {
-    $latch = fencePaths($config)['latch'];
-    clearstatcache(true, $latch);
-
-    return file_exists($latch) || is_link($latch);
+    return pathState(fencePaths($config)['latch']) !== 'absent';
 }
 
 /**
@@ -109,9 +109,12 @@ function fenceLatchPresent(array $config): bool {
  */
 function fenceReadHigh(array $config): array {
     $path = fencePaths($config)['high'];
-    clearstatcache(true, $path);
-    if (!file_exists($path) && !is_link($path)) {
+    $exists = pathState($path);   // E99: nur ENOENT bedeutet "fehlt"; ein Prüffehler ist ein Integritätsfehler
+    if ($exists === 'absent') {
         return ['state' => 'missing', 'domain' => null, 'high' => null, 'detail' => null];
+    }
+    if ($exists === 'error') {
+        return ['state' => 'invalid', 'domain' => null, 'high' => null, 'detail' => 'Existenz nicht prüfbar'];
     }
     if (is_link($path) || !is_file($path)) {
         return ['state' => 'invalid', 'domain' => null, 'high' => null, 'detail' => 'keine reguläre Datei'];
@@ -258,7 +261,7 @@ function agentFenceCheck(array $config, mixed $input): array {
         agentResponseAttach('fence', $report);
         return ['allow' => false, 'http' => 503, 'body' => [
             'status'  => 'error',
-            'message' => 'Fencing: Fehlermarke vorhanden – Schreibvorgänge gesperrt bis zur lokalen Prüfung (CLI clear-fault)',
+            'message' => 'Fencing: Fehlermarke vorhanden oder nicht prüfbar – Schreibvorgänge gesperrt bis zur lokalen Prüfung (CLI clear-fault)',
             'code'    => 'fence_fault',
         ]];
     }

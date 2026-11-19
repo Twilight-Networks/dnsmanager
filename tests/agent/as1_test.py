@@ -14,6 +14,7 @@
 #   G  off gegenüber dem bisherigen Agenten (Referenz-Checkout) beobachtbar identisch
 #   L  Vollständigkeit der Verzeichnisauflistung (getdents-Teilauflistung in beiden Durchläufen, verkürztes Lesen von
 #      zones.conf, verwaiste Include-Zeilen, Gegenproben ohne Fehlalarm) – E98
+#   X  nicht prüfbare Existenz (stat/access-Fehler) von Fehlermarke, H und Sicherungsdateien – E99
 #   M  Mutationsproben (jede Mutation muss mindestens einen Test scheitern lassen)
 #   I und C laufen für alle Modi (off, observe, enforce; Einschränkung mit --modes).
 #
@@ -292,7 +293,8 @@ class Server:
                '-S', f'127.0.0.1:{self.port}', '-t', box.agent]
         if strace:
             cmd = ['strace'] + (['-f'] if strace.get('follow') else []) + ['-y', '-qq', '-o', strace['out'], '-e', 'trace=' + ','.join(strace.get('trace', PERSIST_SYSCALLS))] \
-                + (['-e', strace['inject']] if strace.get('inject') else []) \
+                + [a for inj in ([strace['inject']] if isinstance(strace.get('inject'), str) else strace.get('inject', []))
+                   for a in ('-e', inj)] \
                 + [a for path in strace.get('paths', []) for a in ('-P', path)] + cmd
         # eigene Prozessgruppe: strace und PHP werden gemeinsam beendet (kein verwaister Server)
         self.p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -1039,6 +1041,79 @@ def group_l(box_main):
 
 
 # ------------------------------------------------------------------------------------------------------------------
+# Gruppe X – nicht prüfbare Existenz (E99)
+# ------------------------------------------------------------------------------------------------------------------
+STAT_TRACE = ['access', 'faccessat', 'faccessat2', 'newfstatat', 'statx']
+STAT_EIO = ['inject=access,faccessat,faccessat2:error=EIO', 'inject=newfstatat,statx:error=EIO']
+
+
+def group_x(box):
+    G = 'X'
+    latchp = os.path.join(box.zones, '.dnsmanager-fence.fault')
+    highp = os.path.join(box.zones, '.dnsmanager-fence')
+
+    def base(mode, latch=False):
+        box.reset(); box.config('enforce'); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
+        box.init_high(10)
+        box.config(mode)
+        if latch:
+            with open(latchp, 'w') as f:
+                f.write('test\n')
+        sh('sync')
+
+    def stat_eio(path, ep, body):
+        tr = os.path.join(OUT, 'x.txt')
+        r = call(box, ep, body, strace={'out': tr, 'trace': STAT_TRACE, 'paths': [path], 'inject': STAT_EIO})
+        hits = sum(1 for l in open(tr) if '(INJECTED)' in l)
+        return r, hits
+
+    eps = [('zones/zone_sync.php', lambda: fz('a.as1.test', 2, 'x', 11)), ('zones/conf_sync.php', lambda: fc(box, 'c.as1.test', 11)),
+           ('zones/zone_cleanup.php', lambda: fcl(['a.as1.test'], 11))]
+    # X1: Fehlermarke vorhanden, Existenz nicht prüfbar ⇒ in jedem Modus gesperrt
+    # X2: Fehlermarke nicht vorhanden, Existenz nicht prüfbar ⇒ ebenfalls gesperrt (nur ENOENT gilt als "fehlt")
+    for xid, latch in [('X1', True), ('X2', False)]:
+        for mode in ['off', 'observe', 'enforce']:
+            for ep, mk in eps:
+                base(mode, latch)
+                t0, n0 = box.tree(), box.rndc_calls()
+                r, hits = stat_eio(latchp, ep, mk())
+                check(G, f'{xid} Fehlermarke {"vorhanden" if latch else "fehlt"}, nicht prüfbar, {mode} {ep}', hits >= 1 and r['status'] == 503
+                      and code(r) == 'fence_fault' and box.tree() == t0 and box.rndc_calls() == n0 and box.high() == (DOMAIN, 10),
+                      f"Injektionen={hits} status={r['status']} code={code(r)}")
+    # X3: H nicht prüfbar ⇒ Integritätsfehler auch in observe (enforce ohnehin)
+    for mode in ['observe', 'enforce']:
+        for ep, mk in eps:
+            base(mode)
+            t0, n0 = box.tree(), box.rndc_calls()
+            r, hits = stat_eio(highp, ep, mk())
+            check(G, f'X3 H nicht prüfbar {mode} {ep}', hits >= 1 and r['status'] == 503 and code(r) == 'fence_invalid'
+                  and box.tree() == t0 and box.rndc_calls() == n0, f"Injektionen={hits} status={r['status']} code={code(r)}")
+    # X4: conf_sync – bestehende <zone>.conf bzw. zones.conf nicht prüfbar ⇒ keine Änderung (alle Modi gleich, hier off)
+    for label, path in [('<zone>.conf', os.path.join(box.confdir, 'a.as1.test.conf')), ('zones.conf', box.zonesconf)]:
+        base('off')
+        t0, n0 = box.tree(), box.rndc_calls()
+        r, hits = stat_eio(path, 'zones/conf_sync.php', fc(box, 'a.as1.test'))
+        check(G, f'X4 conf_sync {label} nicht prüfbar', hits >= 1 and r['status'] == 500 and box.tree() == t0 and box.rndc_calls() == n0,
+              f"Injektionen={hits} status={r['status']} {(r['json'] or {}).get('message', '')[:70]}")
+    # X5: zone_cleanup – zones.conf nicht prüfbar ⇒ keine Änderung; verwaiste db.<zone> nicht prüfbar ⇒ .conf bleibt Marker
+    base('off')
+    t0, n0 = box.tree(), box.rndc_calls()
+    r, hits = stat_eio(box.zonesconf, 'zones/zone_cleanup.php', fcl(['a.as1.test']))
+    check(G, 'X5 zone_cleanup zones.conf nicht prüfbar', hits >= 1 and r['status'] == 500 and box.tree() == t0 and box.rndc_calls() == n0,
+          f"Injektionen={hits} status={r['status']}")
+    base('off')
+    r, hits = stat_eio(os.path.join(box.zones, 'db.b.as1.test'), 'zones/zone_cleanup.php', fcl(['a.as1.test']))
+    js = r['json'] or {}
+    check(G, 'X5b verwaiste Zonendatei nicht prüfbar: .conf bleibt Marker', hits >= 1 and r['status'] == 500 and 'rndc' in js
+          and os.path.exists(os.path.join(box.confdir, 'b.as1.test.conf')) and os.path.exists(os.path.join(box.zones, 'db.b.as1.test'))
+          and js.get('removed_conf') == [], f"Injektionen={hits} status={r['status']} removed={js.get('removed_conf')} {js.get('errors')}")
+    # X6 Gegenprobe: ohne Injektion unverändertes Verhalten in off
+    base('off')
+    r = call(box, 'zones/zone_cleanup.php', fcl(['a.as1.test']))
+    check(G, 'X6 Gegenprobe Cleanup off', r['status'] == 200 and not os.path.exists(os.path.join(box.confdir, 'b.as1.test.conf')), f"status={r['status']}")
+
+
+# ------------------------------------------------------------------------------------------------------------------
 # Gruppe G – off gegenüber dem bisherigen Agenten
 # ------------------------------------------------------------------------------------------------------------------
 def golden_run(box, explicit_off=False, with_fence_fields=False):
@@ -1126,6 +1201,7 @@ MUTATIONS = [
     ('M22 Fehlermarke nur in enforce (E97)', 'inc/fence.php', "    if (fenceLatchPresent($config)) {\n        $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault',", "    if (false) {\n        $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault',", 'F'),
     ('M23 observe übergeht Integritätsfehler (E97)', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $integrity);", "$reject = $e['code'] !== null && $mode !== 'observe';", 'F'),
     ('M24 observe übergeht ungültiges H (E97)', 'inc/fence.php', "const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_invalid', 'fence_persist_failed'];", "const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_persist_failed'];", 'F'),
+    ('M25 Prüffehler als "nicht vorhanden" (E99)', 'inc/file_utils.php', "    return posix_get_last_error() === 2 ? 'absent' : 'error';   // 2 = ENOENT", "    return 'absent';", 'X'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
 
@@ -1157,7 +1233,7 @@ def main():
     ap.add_argument('--src', required=True)
     ap.add_argument('--ref')
     ap.add_argument('--out', required=True)
-    ap.add_argument('--groups', default='FSICLGM')
+    ap.add_argument('--groups', default='FSICLXGM')
     ap.add_argument('--modes')
     ap.add_argument('--mutant')
     ap.add_argument('--stop-on-fail', action='store_true')
@@ -1194,6 +1270,8 @@ def main():
             group_c(box, flakey)
         if 'L' in a.groups:
             group_l(box)
+        if 'X' in a.groups:
+            group_x(box)
         if 'G' in a.groups:
             ref_box = Box(root, a.ref, 'ref', bindbase)
             group_g(box, ref_box)

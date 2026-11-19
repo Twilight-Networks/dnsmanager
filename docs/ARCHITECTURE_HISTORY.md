@@ -627,6 +627,15 @@ bisher), Lesefehler über `scandir()` und Abgleich beider Ergebnisse. Einzelheit
 Die Suite prüft nach jedem Erfolg, dass `zones.conf` genau die vorhandenen `.conf`-Dateien einbindet (Mutationsproben
 M16–M18).
 
+**Nicht prüfbare Existenz (E99, Nachtrag Review AS1)** – `file_exists()`/`is_file()` liefern bei jedem `stat`-Fehler
+„nicht vorhanden“; auf ns2 nachgewiesen: vorhandene Fehlermarke, `stat`/`access` mit EIO ⇒ `file_exists() = false`, die
+Marke wäre in jedem Modus übergangen worden. `pathState()` (`posix_access()` mit `errno`) wertet nur ENOENT als „nicht
+vorhanden“; jeder andere Fehler ist „nicht prüfbar“ und fail-closed: Fehlermarke gilt als vorhanden (`fence_fault`, alle
+Modi), H als ungültig (`fence_invalid`, `observe`/`enforce`), die Sicherung von `<zone>.conf` bzw. `zones.conf` bricht ohne
+Änderung ab, und im Rollback sowie beim Entfernen verwaister Dateien gilt eine Datei nie als entfernt, solange das nicht
+nachgewiesen ist. Nachweise: Gruppe X (X1–X6), Mutationsprobe M25. Grenze: Ohne PHP-Erweiterung `posix` (auf ns1/ns2
+vorhanden, Bestandteil von Ubuntu `php-common`) fällt `pathState()` auf `file_exists()` zurück.
+
 **Vollständigkeit der Auflistung (E98, Nachtrag Review AS1)** – Nachgewiesen auf ns2: Ein `getdents64`-Fehler mitten im
 Durchlauf verkürzt `scandir()` und `glob()` stillschweigend (z. B. 820 statt 2003 bzw. 818 statt 2001 Einträge); trifft
 er beide Durchläufe gleich, besteht der Abgleich von S43 (Gruppe L1a/L2a: beide Listen gleich verkürzt). Ebenso liefert
@@ -644,7 +653,10 @@ fail-closed-Absicherung:
 
 Folge für Inkonsistenzen: Eine `include`-Zeile auf eine nicht (mehr) vorhandene Datei („verwaiste Include-Zeile“) ist
 nicht von einer unvollständigen Auflistung unterscheidbar und sperrt `conf_sync` und `zone_cleanup` dieses Agenten
-fail-closed, bis ein Administrator die Zeile entfernt oder die Datei wiederherstellt (`AGENT_FENCING.md`, Abschnitt 6).
+fail-closed (`zone_sync` scheitert dann ohnehin am bestehenden `named-checkconf`-Preflight); BIND bedient währenddessen
+den zuletzt geladenen Stand. Wiederherstellung nach `AGENT_FENCING.md`, Abschnitt 6: benötigte Zone durch erneute
+Veröffentlichung (`conf_sync` dieser Zone schreibt die fehlende Datei, die Auflistung ist danach vollständig) bzw. über die
+Vorlage, nicht benötigte Zone durch Entfernen der Zeile unter der Agent-Sperre.
 Bisher wurde eine solche Zeile beim nächsten `conf_sync` stillschweigend verworfen. Der Agent erzeugt solche Zeilen
 nicht selbst (`zone_cleanup` schreibt `zones.conf` vor dem Entfernen der Dateien). Nachweise: Gruppe L (L1–L8;
 L1b/L2b mit neutralisiertem Abgleich: der Nachweis greift allein; L7/L8: nicht eingebundene `.conf`-Dateien und nur ein
@@ -683,7 +695,7 @@ ns2.
 
 **Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
 I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
-`noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, L Vollständigkeit der Auflistung, M Mutationsproben M01–M24; I und C für alle drei
+`noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, L Vollständigkeit der Auflistung, X nicht prüfbare Existenz, M Mutationsproben M01–M25; I und C für alle drei
 Modi (E97), F13–F15 Fehlermarke, Persistenzfehler und ungültiges H je Modus und Endpunkt. M04 (Verzeichnis-`fsync` nach
 dem `rename` von H entfernt) ist auf ext4 äquivalent: Der Verzeichnis-`fsync` nach dem Entfernen der Marke schreibt das
 Journal in Reihenfolge fest und macht das `rename` mit dauerhaft; der Schritt bleibt als dateisystemunabhängige
@@ -1084,10 +1096,11 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E92 | Cleanup-Verifikation: entfernte Zonen müssen `REFUSED` liefern (Verhalten nach Entfernen aus der Konfiguration in AS2 zu prüfen) | vorgeschlagen, AS2 |
 | E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
 | E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | entschieden (AS0), Umsetzung AS2 |
-| E95 | `fsync` in allen Modi; `off` im Normalbetrieb und in allen bisherigen Fehlerpfaden identisch, abweichend nur bei gescheitertem `fsync` | umgesetzt (AS1) – zur Bestätigung im Review |
-| E97 | Klarstellung E90/E95 (Review AS1): Modi steuern nur die Fencing-Prüfung; Fehlermarke sperrt alle drei schreibenden Endpunkte in jedem Modus (auch `off`); Integritätsfehler von H (unlesbar/ungültig, Persistenzfehler) brechen auch in `observe` ab; `fsync`-Fehler modusunabhängig; `system/status` meldet die Marke auch in `off` | umgesetzt (AS1, Nachtrag) |
-| E98 | Vollständigkeit der Auflistung (Review AS1, S43-Ergänzung): bisherige `zones.conf` nur vollständig gelesen (Länge = `fstat`), jedes bisherige Include muss erhalten bleiben (Cleanup: außer selbst erkannten Verwaisten), sonst `listing_incomplete` ohne Änderung und Reload; verwaiste Include-Zeilen sperren fail-closed bis zur Bereinigung durch den Admin | umgesetzt (AS1, Nachtrag) – zur Bestätigung im Review |
-| E96 | Befund S43: `listConfFiles()` (glob-Liste, Lesefehlererkennung über `scandir()` und Abgleich) in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall) | umgesetzt (AS1) – zur Bestätigung im Review |
+| E95 | `fsync` in allen Modi. `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend: gescheitertes `fsync` (E95), Lesefehler des Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung, verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder Bestandsdatei (E99) | umgesetzt (AS1) – zur Bestätigung im Review |
+| E96 | Befund S43: `listConfFiles()` (glob-Liste, Lesefehlererkennung über `scandir()` und Abgleich) in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall); ergänzt durch E98 (gleichartige Verkürzung beider Durchläufe), einzeln nachgewiesen durch L7/L8 | umgesetzt (AS1) – zur Bestätigung im Review |
+| E97 | Klarstellung E90/E95 (Review AS1): Modi steuern nur die Fencing-Prüfung; Fehlermarke sperrt alle drei schreibenden Endpunkte in jedem Modus (auch `off`); Integritätsfehler von H (unlesbar/ungültig/nicht prüfbar, Persistenzfehler) brechen auch in `observe` ab; in `off` wird H weder gelesen noch geschrieben, geprüft wird nur die Fehlermarke; `fsync`-Fehler modusunabhängig; `system/status` meldet die Marke auch in `off` | umgesetzt (AS1, Nachtrag) |
+| E98 | Vollständigkeit der Auflistung (Review AS1, S43-Ergänzung): bisherige `zones.conf` nur vollständig gelesen (Länge = `fstat`), jedes bisherige Include muss erhalten bleiben (Cleanup: außer selbst erkannten Verwaisten), sonst `listing_incomplete` ohne Änderung und Reload. Verwaiste Include-Zeilen sperren `conf_sync` und `zone_cleanup` fail-closed (`zone_sync` scheitert dann bereits am bestehenden `named-checkconf`-Preflight), bis sie nach `AGENT_FENCING.md` Abschnitt 6 bereinigt sind: benötigte Zone durch erneute Veröffentlichung (Selbstheilung über `conf_sync` dieser Zone) bzw. Vorlage, nicht benötigte Zone durch Entfernen der Zeile unter der Agent-Sperre; BIND bedient währenddessen den zuletzt geladenen Stand | umgesetzt (AS1, Nachtrag) – zur Bestätigung im Review |
+| E99 | Nicht prüfbare Existenz (Review AS1, Nachtrag): `file_exists()` liefert bei jedem `stat`-Fehler „nicht vorhanden“ (nachgewiesen). `pathState()` unterscheidet über `posix_access()` und `errno` vorhanden / nicht vorhanden (nur ENOENT) / nicht prüfbar; „nicht prüfbar“ gilt fail-closed: Fehlermarke ⇒ vorhanden (alle Modi), H ⇒ `fence_invalid`, Sicherung von `<zone>.conf`/`zones.conf` ⇒ Abbruch ohne Änderung, Rollback und Entfernen verwaister Dateien ⇒ nie als entfernt gewertet. Ohne PHP-Erweiterung `posix` Rückfall auf `file_exists()` (dokumentierte Grenze) | umgesetzt (AS1, Nachtrag) – zur Bestätigung im Review |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des
@@ -1101,6 +1114,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
+| 19.11.2026 | Abnahmevorbereitung AS1: E99 (nicht prüfbare Existenz fail-closed, Gruppe X, M25), E95 abschließend präzisiert, E98 um Wiederherstellungsweg ergänzt (`AGENT_FENCING.md` Abschnitt 6, auf ns2 nachgewiesen), Register numerisch geordnet |
 | 19.11.2026 | Review AS1: E97 (Fehlermarke und Persistenzfehler in jedem Modus, `off` deaktiviert nur die Fencing-Prüfung) und E98 (Vollständigkeitsnachweis der Verzeichnisauflistung, vollständiges Lesen von `zones.conf`); Restgrenze von S43 geschlossen; Gruppe L, Mutationen M19–M24 |
 | 19.11.2026 | AS0 (technische Vorprüfung) und AS1 umgesetzt: Abschnitt 5e (Agent-Fencing, Write-ahead-Fehlermarke, Domäne und Schutzgrenze, Modi, CLI, dauerhafte Dateioperationen), Entscheidungen E74–E96 einschließlich E4 und E15/E16, Befund S43, Retention als Meilenstein R (Abschnitt 18), Betrieb in `AGENT_FENCING.md` |
 | 18.11.2026 | H2d umgesetzt: Abschnitt 5d (Publish-Journal, Migration 005), Präzisierung von Abschnitt 9 (Reaktivierung abgeleitet, E70), Entscheidungen E55–E73 mit den Präzisierungen der Freigabe (isolierte Testumgebung, Akteurskontext, J5/Neustart über laufeigene Sperre, operatives Ergebnis ≠ Bestätigung) |
