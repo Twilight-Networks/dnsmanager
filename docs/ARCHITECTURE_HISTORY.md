@@ -1,6 +1,6 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`)
+Stand: 19.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt
 
 ## 0. Status und Geltung
 
@@ -10,8 +10,11 @@ Stand: 18.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meile
   `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden, Drift, Lazy-Baseline, Zonenlöschung,
   `history_dependencies` mit Migration 003) und **H2c** (Abschnitt 5c: `audit_events` mit Migration 004,
   `AuditPolicy`/`AuditRecorder` in allen Verwaltungspfaden) und **H2d** (Abschnitt 5d: Publish-Journal mit Migration 005,
-  `PublishLedger`, Hash-Verträge, strukturierte Zielergebnisse). Alle übrigen hier beschriebenen Tabellen, Klassen,
-  Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere gibt es kein Agent-Fencing (AS).
+  `PublishLedger`, Hash-Verträge, strukturierte Zielergebnisse) sowie aus Meilenstein AS das Arbeitspaket **AS1**
+  (Abschnitt 5e: Agent-Fencing mit Höchststand, Write-ahead-Fehlermarke, Fencing-Domäne, Modi off/observe/enforce,
+  lokale CLI, dauerhafte Dateioperationen). Alle übrigen hier beschriebenen Tabellen, Klassen, Agent-Erweiterungen und
+  Abläufe existieren im Code noch nicht; insbesondere sendet der Core noch kein Fencing-Token (AS4), und es gibt weder
+  Serial-Regel noch L3-Prüfung im Agenten (AS2).
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -527,6 +530,109 @@ Web-Golden-Abweichung (`page/admin/system_health`) besteht ausschließlich aus d
 Dateien unter `web/inc/app/publish/` (Rechteprüfung der Testkopie) und dem entsprechend erhöhten Fehlerzähler; ohne sie
 ist der normalisierte Seiteninhalt byte-identisch zur Basis (Review S2).
 
+## 5e. Festlegungen AS0/AS1 (AS1 umgesetzt)
+
+**AS0 – technische Vorprüfung (19.11.2026, Sandbox auf ns2, installierter Bestand unverändert):**
+- PHP 8.5 synchronisiert Verzeichnisse mit `fopen($dir, 'r')` + `fsync()` (strace: `openat(…, O_RDONLY)`, `fsync`).
+  `opendir()`-Handles sind ungeeignet. uutils-`sync <pfad>` ruft nur das globale `sync()` auf und ist **kein** Ersatz (E89).
+- Absturzsimulation mit dm-flakey (`drop_writes`): Nur die vollständige Folge (Datei-`fsync`, `rename`,
+  Verzeichnis-`fsync`) erhält den neuen Wert. Ohne Verzeichnis-`fsync` bzw. ohne `fsync` bleibt der alte Wert.
+- Nach einem `fsync`-Fehler (dm-flakey `error_writes`) zeigt der Seitencache den neuen Wert, die Platte nicht; PHP
+  meldet den Fehler nur über den Rückgabewert (E90).
+- `rndc reload` kehrt vor dem Laden der Zonen zurück (≈ 25 ms; Zone mit 300 000 RR nach 1,65 s geladen), rc 0 auch bei
+  ungültiger oder fehlender Zonendatei. BIND lädt rückwärts gehende und gleiche Serials (I-A1 nur im Agenten
+  durchsetzbar). `dig` liefert rc 0 auch bei `REFUSED`; belastbar ist nur Status + `aa` + Owner (E91).
+  `named-checkzone`: rc 0/1, fehlende, unlesbare und ungültige Dateien nur am Text unterscheidbar (E94). Diese
+  Punkte setzt AS2 um.
+
+**Höchststand H (F1–F4)** – `<zone_data_dir>/.dnsmanager-fence`, eine Zeile
+`dnsmanager-fence v1 domain=<uuid> high=<n>` (Ganzzahl 1 … 2⁶³−1, ohne führende Null, LF). Jede andere Form, ein
+Symlink oder ein Nicht-Dateieintrag ist ungültig. H gilt für `zone_sync`, `conf_sync` und `zone_cleanup` gemeinsam;
+Annahme ⇔ t ≥ H, danach H := t (Gleichheit ohne Schreibvorgang). Kein API-Weg setzt H oder senkt ihn.
+`system/control reload` bleibt ohne Fencing unter demselben `flock` (E75).
+
+**Write-ahead-Fehlermarke (E90, Präzisierung 1 der AS1-Freigabe)** – `<zone_data_dir>/.dnsmanager-fence.fault`.
+Fortschreiben von H unter dem `flock`:
+1. Marke exklusiv anlegen, schreiben, `fsync`; Verzeichnis-`fsync`;
+2. neuer Wert in Temp-Datei, `fsync`, `rename` auf H, Verzeichnis-`fsync`;
+3. erst danach Marke entfernen, Verzeichnis-`fsync`.
+
+Jeder Fehler bricht ab; eine angelegte Marke bleibt bestehen. Jede vorhandene Marke sperrt im Modus `enforce` alle
+schreibenden Endpunkte (`fence_fault`), bis ein Administrator sie lokal per CLI nach Prüfung von H aufhebt.
+Gleichwertigkeitsargument: Jeder Zeitraum, in dem Seitencache und Platte bei H auseinanderfallen können (ab dem ersten
+Schreibvorgang an H bis zu dessen bestätigtem Verzeichnis-`fsync`), liegt innerhalb eines Zeitraums, in dem die Marke
+dauerhaft existiert; sie wird schon vor diesem Zeitraum dauerhaft geschrieben, nicht erst nach einem erkannten Fehler.
+Nach einem Absturz oder `fsync`-Fehler bleibt der Agent daher gesperrt, statt einem nur im Cache erhöhten H zu
+vertrauen. Scheitert erst der Verzeichnis-`fsync` nach dem Entfernen der Marke, ist H bereits dauerhaft; die Marke kann
+nach einem Absturz wieder erscheinen (sicherer Richtung). Die Anfrage wird in diesem Fall dennoch ohne Änderung
+abgelehnt (`fence_persist_failed`).
+
+**Fencing-Domäne (E74, Präzisierung 3)** – Der Agent prüft selbst gegen seine lokal konfigurierte Domäne
+(`fence_domain`, UUID): Anfrage-Domäne und gespeicherte Domäne von H müssen ihr entsprechen; fehlt sie oder ist sie
+ungültig, ist der Agent fehlkonfiguriert (`fence_misconfigured`). Die Core-Prüfung zwischen Datenbank und
+Web-Konfiguration (AS4) ist eine zusätzliche, keine ersetzende Prüfung.
+
+| Szenario | Erkannt durch |
+|---|---|
+| Test-Datenbank bzw. neu angelegte Installation (eigene Domäne) spricht fremde Agenten an | Agent: `fence_domain_mismatch` |
+| Agent einer anderen Installation zugeordnet (falsche `fence_domain` oder H einer anderen Domäne) | Agent: `fence_domain_mismatch` / `fence_misconfigured` |
+| Datenbank geklont, Web-Konfiguration nicht (AS4) | Core: Domäne in DB ≠ Web-Konfiguration |
+| Datenbank-Restore derselben Installation (Lauf-IDs fallen) | Agent: `stale_fence`; Abgleich nach E81 (AS4) |
+| **vollständiger Installationsklon** (Datenbank, Web-Konfiguration, Agent-Konfiguration und H) | **nicht** durch das Fencing; nur organisatorisch sowie durch `api_allowed_ips` (Quell-IP) und eigene Agent-Token je Installation |
+
+**Modi (E82)** – `fencing_mode` fehlt ⇒ `off`: Fencing-Felder werden ignoriert, H wird weder gelesen noch geschrieben,
+Antworten unverändert. `observe`: Prüfung und Fortschreiben von H wie `enforce`, aber keine Ablehnung; jede Antwort nach
+der Prüfung enthält zusätzlich `fence` (`mode`, `decision` accept/would_reject, `code`, `token`, `high_before`,
+`high_after`), Ablehnungsgründe zusätzlich im PHP-Log `[fence]`. `enforce`: fail-closed. Unbekannter Wert ⇒
+`fence_misconfigured` (fail-closed).
+
+**Endpunkte (F3)** – Prüfung unmittelbar nach dem Erwerb des `flock` und vor jeder Änderung; Anfragefelder
+`fence_token` (JSON-Zahl oder Dezimalzeichenkette) und `fence_domain`. Ablehnungen lassen den Bestand unverändert (kein
+Reload; die vor dem Lock geschriebene Temp-Datei von `zone_sync` wird entfernt). Codes:
+
+| Code | HTTP | Bedeutung |
+|---|---|---|
+| `fence_misconfigured` | 503 | Modus unbekannt, `fence_domain` fehlt oder ungültig |
+| `fence_fault` | 503 | Fehlermarke vorhanden |
+| `fence_token_missing` / `fence_token_invalid` | 400 | Token oder Domäne fehlt bzw. ungültig |
+| `fence_domain_mismatch` | 409 | Anfrage- oder gespeicherte Domäne ≠ konfigurierte Domäne |
+| `fence_uninitialized` | 409 | H fehlt (Initialisierung nur per CLI) |
+| `fence_invalid` | 503 | H unlesbar oder ungültig |
+| `stale_fence` | 409 | t < H |
+| `fence_persist_failed` | 503 | H nicht dauerhaft schreibbar (Bericht nennt den Schritt) |
+| `persist_unconfirmed` | 500 | nur `zone_sync`: Zonendatei ersetzt, Verzeichnis-`fsync` gescheitert; kein Reload, `rollback = failed` |
+
+Die heutige Einordnung (E63) ordnet alle Fencing-Codes als `rejected` (Bestand unverändert) und `persist_unconfirmed`
+wegen `rollback = failed` als `unknown` ein; eigene Codes im Journal folgen mit AS4.
+
+**Dauerhaftigkeit des Bestands (E84, E95)** – In allen Modi, auch `off`: Zonen-Temp-Datei und alle atomar ersetzten
+Dateien (`<zone>.conf`, `zones.conf`) werden vor dem `rename` mit `fsync` geschrieben; die betroffenen Verzeichnisse
+werden vor dem Reload synchronisiert (`conf_sync` mit Rollback bei Fehler, `zone_cleanup` als unvollständiger Cleanup mit
+`rndc`). E95: `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch (Golden G01);
+abweichend nur, wenn `fsync` scheitert – dort meldete der bisherige Agent einen nicht dauerhaften Erfolg.
+
+**`system/status` (I-A5, Teil AS1)** – in `observe`/`enforce` zusätzlich `capabilities` (`fencing`, `durable_writes`)
+und `fencing` (`mode`, `domain`, `state` ok/uninitialized/invalid/fault/domain_mismatch/misconfigured, `high`,
+`fault`); in `off` unverändert. HTTP-Status und BIND-Auswertung unverändert.
+
+**Lokale CLI (E81)** – `scripts/agent_fence-cli.php` (außerhalb des per Apache erreichbaren Agent-Baums), nur als
+Eigentümer des Zonenverzeichnisses, unter demselben `flock`: `status`; `init --domain --high` (nur ohne H und ohne
+Marke, Domäne = konfigurierte Domäne); `raise --high` (nur N > H, nie senken); `clear-fault --expect-high=N|missing`
+(nur bei passendem H: erneuter `fsync` von H und Verzeichnis, Temp-Reste entfernen, Marke entfernen). Betrieb:
+[`AGENT_FENCING.md`](AGENT_FENCING.md).
+
+**Timeout (E77, Präzisierung 2; Umsetzung AS2/AS4)** – Eine Zeitüberschreitung (Agent-Aufruf oder L3-Abfrage) ist
+immer `unknown`, nie `not_loaded` oder `rejected`. Die Zone bleibt unbestätigt und ausstehend, bis eine tatsächliche
+Verifikation vorliegt.
+
+**Grenzen von AS1** – Der Core sendet noch kein Token (AS4); vorher ist `enforce` auf installierten Agenten nicht
+einsetzbar (jede Verteilung würde mit `fence_token_missing` abgelehnt), zulässig sind `off` und `observe`. Keine
+Serial-Regel und keine L3-Prüfung (AS2), keine Schemaänderung (AS3).
+
+**Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
+I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
+`noauto_da_alloc`), G `off` gegen den bisherigen Agenten, M Mutationsproben.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -653,7 +759,7 @@ entfernt eine von einem neueren Lauf angelegte Zone, wenn der neuere Lauf keinen
 
 | ID | Invariante |
 |---|---|
-| F1 | **Ein** Fencing-Höchststand H je Agent für alle schreibenden Endpunkte: `zone_sync`, `conf_sync`, `zone_cleanup` (**[offen]**: Einbeziehung `system/control reload`). |
+| F1 | **Ein** Fencing-Höchststand H je Agent für alle schreibenden Endpunkte: `zone_sync`, `conf_sync`, `zone_cleanup` (`system/control reload` ohne Fencing, E75). |
 | F2 | Annahme ⇔ Token t ≥ H; danach H := t. Gleichheit zulässig (ein Lauf sendet mehrere Anfragen nacheinander). |
 | F3 | Prüfen, dauerhaft Fortschreiben und Ausführen unter dem exklusiven `flock` des Agenten; Prüfung von t **nach** Erwerb des `flock`. Reihenfolge: `flock` → H lesen → ablehnen oder H per Temp-Datei, `fsync` der Datei, `rename`, `fsync` des Verzeichnisses schreiben → erst danach ändern → Reload. Schlägt einer dieser Persistenzschritte fehl, wird die Anfrage ohne Änderung abgelehnt (fail-closed). |
 | F4 | H liegt dauerhaft im Zonenverzeichnis des Agenten (neben `.dnsmanager-agent.lock`, ext4). **Absturzsicherheit:** Der persistierte Höchststand darf auch nach einem Systemabsturz oder Stromausfall nie auf einen Wert unterhalb eines bereits akzeptierten Tokens zurückfallen; eine Änderung wird erst ausgeführt, wenn H dauerhaft geschrieben ist. Fehlt H, ist H unlesbar oder ungültig, oder schlägt eine Datei- bzw. Verzeichnisoperation fehl ⇒ im Erzwingungsmodus alle Schreibvorgänge abgelehnt (`fence_uninitialized` bzw. Persistenzfehler); Initialisierung nur ausdrücklich durch Admin mit Wert ≥ höchster vergebener Lauf-ID. Dauerhaftigkeit der Datei- und Verzeichnisoperationen und fail-closed-Verhalten sind in AS nachzuweisen. |
@@ -671,6 +777,10 @@ erkennbar); Abhilfe durch Anheben des `AUTO_INCREMENT`.
 **[offen]**: ob die Abfrage im Agenten oder im Monitoring erfolgt.
 
 **Einführung:** (1) Agent zeichnet nur auf, (2) Web sendet Token und Hashes, (3) Erzwingen, zuerst ns2.
+
+**Umsetzung:** AS1 (Agent) siehe Abschnitt 5e und [`AGENT_FENCING.md`](AGENT_FENCING.md); Präzisierungen der Freigabe:
+Write-ahead-Fehlermarke (E90), Timeout ⇒ `unknown` (E77), Domänenprüfung im Agenten mit dokumentierter Schutzgrenze
+gegenüber vollständigen Installationsklonen (E74).
 
 ## 12. Discard
 
@@ -797,13 +907,15 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` – **umgesetzt** (Abschnitt 5b, Migration 003, Tests `tests/history`) | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung – **umgesetzt** (Abschnitt 5c, Migration 004, Tests `tests/history`) | keine Geheimnisse (Suchtest); atomar mit Fachänderung; RR und RC; Web-Golden identisch |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung – **umgesetzt** (Abschnitt 5d, Migration 005, Tests `tests/history`) | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
-| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
+| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16); Arbeitspakete AS0 (Vorprüfung, geprüft), AS1 (Agent-Fencing, umgesetzt, Abschnitt 5e), AS2 (Serial-Regel, L3), AS3 (Migration 006), AS4 (Core), AS5 (Serial-Strategie), AS6 (Einführung), AS7 (Doku) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
 | **H3** | Historienoberfläche: Core-Read-Services (`ZoneHistoryReadService`, `ZoneSyncReadService`) **und** Weboberfläche mit Historienliste, Filtern, Detailansichten, Vorher-/Nachher-Vergleich, Berechtigungen und Paginierung | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse; Oberfläche nach `docs/UI_GUIDELINES.md` und `docs/UI_ROLE_MATRIX.md`, Web-Golden für bestehende Seiten unverändert |
 | **H4** | abgeleitete Zustände, `ZoneDiscardService` | alle Sperrgründe; Race-Tests (Lock-Wait, Gegenprobe, Mutationsprobe); Discard nur aus `pending_clean` |
 | **H4b** | Gruppen-Discard | Abhängigkeitshülle, Vorschau, Berechtigung für alle Zonen |
 | **H5** | `ZoneRestoreService`, Wiederherstellen und neu verteilen | Serial monoton; DynDNS-/Systemrecords geschützt; Revalidierung; Rollback |
 
-Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H3 → H4 → H4b → H5.
+| **R** | Retention (eigener Meilenstein nach H5, nicht Teil von AS): drei unabhängig konfigurierbare Fristen für DNS-Revisionen mit Snapshots, Audit-Historie und Publish-Journal; Konfiguration und administrative Bereinigung ausschließlich für Admins über einen Core-Service | erhalten bleiben aktuelle Heads und nötige Snapshots, die letzten verifizierten Agent-Zustände, alle für die Serial-Strategie (E78) nötigen Höchststände und die monotone Fencing-Token-Folge (`publish_runs` nie per `TRUNCATE`); Web, MCP und CLI nur als Adapter |
+
+Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H3 → H4 → H4b → H5 → R.
 
 ## 19. Testumgebung und Teststrategie
 
@@ -826,7 +938,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E1 | Variante C (Hybrid) | freigegeben (H1) |
 | E2 | additive Erweiterung `PublishBackend`/`ZoneBuildBackend` | freigegeben (H1) |
 | E3 | Baseline `unverified`; Ausgangsbestimmung lazy, Full Rebuild optional, Abgleich nach AS | freigegeben (H1) |
-| E4 | Berechtigung Discard/Restore | **offen** (Empfehlung: zunächst nur admin) |
+| E4 | Berechtigung Discard/Restore | entschieden 19.11.2026: Admin alle Zonen; zoneadmin Discard und normales Restore nur bei Schreibrecht; Gruppen-Discard nur bei Schreibrecht für alle Zonen; Wiederherstellen und neu verteilen bei `partial`/`unknown` nur Admin; Prüfung im Core (Präzisierung E85) |
 | E5 | Gruppen-Discard als eigener Meilenstein H4b | freigegeben (H1) |
 | E6 | Discard nur mit AS-geschützten Bestätigungen (kein `legacy`) | freigegeben (H1) |
 | E7 | Vorher-Prüfung in jeder Fachtransaktion | freigegeben (H1) |
@@ -837,7 +949,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E12 | Journal: Registrierung vor Seiteneffekt, Lese-Regel `unknown` (ersetzt „unrecorded“) | freigegeben (H1) |
 | E13 | AS vor Freischaltung von Discard | freigegeben (H1) |
 | E14 | Discard bei Server-, Zuweisungs- und DynDNS-Änderungen gesperrt | freigegeben (H1) |
-| E15/E16 | Serial-Strategie und Migration der Spalte `zones.soa_serial` | **offen** (Meilenstein AS); festgelegt ist nur die Anforderung, 32-Bit-Serials ohne Vorzeichen zu unterstützen (H2a berücksichtigt sie) |
+| E15/E16 | Serial-Strategie und Migration der Spalte `zones.soa_serial` | entschieden 19.11.2026 als E78/E79 (Umsetzung AS5/AS3) |
 | E17 | L3 über autoritative SOA-Abfrage an den lokalen BIND, keine sudoers-Erweiterung | entschieden 18.11.2026 |
 | E18 | Migration 002 nur mit den vier Grundtabellen; weitere Tabellen in den zugehörigen Meilensteinen | freigegeben (H2a) |
 | E19 | Spaltentypen der Grundtabellen (Abschnitt 5a), keine FKs auf Fachtabellen | freigegeben (H2a) |
@@ -895,6 +1007,28 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E71 | Lauf-ID als künftiger Fencing-Token, keine AS-Vorwegnahme | freigegeben (H2d) |
 | E72 | Web-Verträge unverändert; Abweichungen nur unter Fehlerinjektion | freigegeben (H2d) |
 | E73 | Laufeigene Advisory-Sperre als Identitätsnachweis (Neustart, Verbindungs-ID-Wiederverwendung); Testumgebung isoliert (Q1) | umgesetzt (H2d, Präzisierungen 1 und 3) – zur Bestätigung im Review |
+| E74 | Eigene Fencing-Domäne je Installation; der Agent prüft Anfrage- und gespeicherte Domäne gegen seine lokal konfigurierte Domäne; Core-Prüfung DB ↔ Web-Konfiguration zusätzlich (AS4); Schutzgrenze: vollständiger Installationsklon nicht erkennbar (Abschnitt 5e) | entschieden; Agent-Teil umgesetzt (AS1) |
+| E75 | `system/control reload` ohne Fencing, unter demselben `flock` | entschieden (AS1) |
+| E76 | L3 im Agenten nach dem Reload mit begrenztem Polling, zusätzlich periodisch im Monitoring | entschieden, Umsetzung AS2 |
+| E77 | Reload-Fehler oder `not_loaded` ⇒ Ziel nicht veröffentlicht, Zone bleibt ausstehend; **Timeout ⇒ immer `unknown`** (nie `not_loaded`/`rejected`), Zone unbestätigt und ausstehend bis zur tatsächlichen Verifikation | entschieden, Umsetzung AS2/AS4 |
+| E78 | Serial-Wahl nach RFC 1982 vollständig (Abstand 2³¹ undefiniert ⇒ nicht größer), Referenzmenge aus DB-Serial, bestätigten, zuletzt verifizierten und gemeldeten Serials je Zone und Server; keine numerische Sortierung; sonst Sperre `serial_unresolvable` | entschieden (= E15), Umsetzung AS5 |
+| E79 | `zones.soa_serial` → `INT UNSIGNED` | entschieden (= E16), Umsetzung AS3 |
+| E80 | Agent: fehlende Zonendatei ⇒ Installation unter gültigem Fencing; lesbar, aber ungültig ⇒ kontrollierter Reparaturpfad (nur mit ausdrücklichem Kennzeichen aus einer Admin-Core-Operation); nicht lesbar ⇒ fail-closed; kein Überschreiben unbekannter Zustände | entschieden, Umsetzung AS2 |
+| E81 | Agent senkt H nie; kein API-Reset; lokale CLI nur `init` (ohne H) und `raise`; nach DB-Restore kontrollierter Abgleich durch den Core (AS4) | entschieden; CLI umgesetzt (AS1) |
+| E82 | Modi `off` (Standard) → `observe` → `enforce`, unbekannter Wert fail-closed; Einführung zuerst auf ns2 | entschieden; umgesetzt (AS1) |
+| E83 | Core prüft vor jedem Agentaufruf Publish-Lock und Laufsperre, sonst Abbruch | entschieden, Umsetzung AS4 |
+| E84 | `fsync` auch für Zonen- und Konfigurationsdateien | entschieden; umgesetzt (AS1) |
+| E85 | Discard unveröffentlichter Änderungen (Admin; zoneadmin nur berechtigte Zonen; ohne L3, sofern seit P kein möglicherweise verteilter Versuch existiert) und Restore veröffentlichter oder möglicherweise verteilter Revisionen (Admin alle, zoneadmin berechtigte Zonen; `partial`/`unknown` nur Admin) sind getrennte Core-Vorgänge; Restore veröffentlicht nie selbst und löst nie Publish All aus (ersetzt die Empfehlung zu E4) | entschieden, Umsetzung H4/H5 |
+| E86 | Absturztests per dm-flakey | entschieden; umgesetzt (AS1) |
+| E87 | `zone_server_verification` als retentionsfeste Tabelle des letzten Stands | entschieden, Umsetzung AS3 |
+| E88 | AS-PRs nacheinander | entschieden |
+| E89 | Verzeichnis-`fsync` nativ in PHP (`fopen($dir, 'r')`), kein `sync`-Ersatz | entschieden (AS0); umgesetzt (AS1) |
+| E90 | Write-ahead-Fehlermarke: dauerhaft vor jeder Änderung von H, Entfernen erst nach vollständiger Persistenz; Aufheben nur lokal per CLI | entschieden (Präzisierung AS1); umgesetzt |
+| E91 | L3-Auswertung über Status, `aa` und Owner, nie über den Exit-Code von `dig` | entschieden (AS0), Umsetzung AS2 |
+| E92 | Cleanup-Verifikation: entfernte Zonen müssen `REFUSED` liefern (Verhalten nach Entfernen aus der Konfiguration in AS2 zu prüfen) | vorgeschlagen, AS2 |
+| E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
+| E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | entschieden (AS0), Umsetzung AS2 |
+| E95 | `fsync` in allen Modi; `off` im Normalbetrieb und in allen bisherigen Fehlerpfaden identisch, abweichend nur bei gescheitertem `fsync` | umgesetzt (AS1) – zur Bestätigung im Review |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Ort der L3-Abfrage (Agent oder Monitoring); Aufteilung des
@@ -908,6 +1042,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
+| 19.11.2026 | AS0 (technische Vorprüfung) und AS1 umgesetzt: Abschnitt 5e (Agent-Fencing, Write-ahead-Fehlermarke, Domäne und Schutzgrenze, Modi, CLI, dauerhafte Dateioperationen), Entscheidungen E74–E95 einschließlich E4 und E15/E16, Retention als Meilenstein R (Abschnitt 18), Betrieb in `AGENT_FENCING.md` |
 | 18.11.2026 | H2d umgesetzt: Abschnitt 5d (Publish-Journal, Migration 005), Präzisierung von Abschnitt 9 (Reaktivierung abgeleitet, E70), Entscheidungen E55–E73 mit den Präzisierungen der Freigabe (isolierte Testumgebung, Akteurskontext, J5/Neustart über laufeigene Sperre, operatives Ergebnis ≠ Bestätigung) |
 | 18.11.2026 | H2c umgesetzt: Abschnitt 5c (Audit-Ereignisse, Migration 004), Regeln R-A1–R-A8 (Abschnitt 6), Leserechte für H3 (Abschnitt 16), Entscheidungen E43–E54 mit den Präzisierungen aus dem Plan-Review (NULL-sichere CHECKs und `seq`, Serverstand unter Sperre, gemeinsame Änderungsmenge, strikte Policy); Korrektur in 5b (Publish gehört zu H2d) |
 | 18.11.2026 | H2b umgesetzt: Abschnitt 5b, Präzisierung von R-H2/R-H9 (Abschnitt 6), Entscheidungen E29–E42 mit den Präzisierungen aus dem Plan-Review (E33 Duplicate-Key-Pfad, E35 fehlende Heads ohne Gap-Sperre, E39 Bindung des Wächters an Verbindung und Transaktion, E42 Schutz von ns1), Migration 003 |

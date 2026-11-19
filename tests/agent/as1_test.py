@@ -40,6 +40,8 @@ INJECT_ERR = {'openat': 'EIO', 'read': 'EIO', 'write': 'ENOSPC', 'fsync': 'EIO',
 
 RESULTS = []          # (gruppe, id, ok, detail)
 OUT = None
+STOP_ON_FAIL = False  # Mutationsläufe: beim ersten Fehlschlag beenden (Mutation getötet)
+SCENARIOS = None      # Einschränkung der Szenarien (Mutationsläufe)
 
 
 def log(msg):
@@ -51,6 +53,8 @@ def log(msg):
 def check(group, tid, ok, detail=''):
     RESULTS.append((group, tid, bool(ok), detail))
     log(f"{'PASS' if ok else 'FAIL'} {group}/{tid} {detail}")
+    if STOP_ON_FAIL and not ok:
+        raise StopIteration('erster Fehlschlag')
     return ok
 
 
@@ -161,6 +165,7 @@ class Box:
         os.makedirs(self.confdir)
         with open(self.zonesconf, 'w') as f:
             f.write('')
+        open(os.path.join(self.zones, '.dnsmanager-agent.lock'), 'w').close()  # wie im Betrieb vorhanden
         with open(os.path.join(self.bind, 'named.conf'), 'w') as f:
             f.write(f'include "{self.zonesconf}";\n')
         open(self.rndclog, 'w').close()
@@ -276,7 +281,8 @@ class Server:
         if strace:
             cmd = ['strace'] + (['-f'] if strace.get('follow') else []) + ['-y', '-qq', '-o', strace['out'], '-e', 'trace=' + ','.join(strace.get('trace', PERSIST_SYSCALLS))] \
                 + (['-e', strace['inject']] if strace.get('inject') else []) + cmd
-        self.p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # eigene Prozessgruppe: strace und PHP werden gemeinsam beendet (kein verwaister Server)
+        self.p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         end = time.time() + 10
         while time.time() < end:
             try:
@@ -307,13 +313,26 @@ class Server:
             c.close()
 
     def stop(self):
-        if self.p.poll() is None:
-            self.p.terminate()
-        try:
-            self.p.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self.p.kill()
-            self.p.wait()
+        import signal
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(self.p.pid, sig)
+            except ProcessLookupError:
+                pass
+            try:
+                self.p.wait(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        # Gruppe vollständig beendet?
+        end = time.time() + 5
+        while time.time() < end:
+            try:
+                os.killpg(self.p.pid, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                return
+        raise RuntimeError('PHP-Webserver-Prozessgruppe nicht beendet')
 
 
 def call(box, ep, body=None, method='POST', token=TOKEN, strace=None):
@@ -545,11 +564,12 @@ def scenarios(box):
     def base():
         box.reset(); box.config('enforce'); box.put_zone('a.as1.test', 1, 'alt'); box.put_zone('b.as1.test', 1, 'alt')
         sh('sync'); box.init_high(10); sh('sync')
-    return {
+    all_ = {
         'zone_sync': (base, 'zones/zone_sync.php', lambda: fz('a.as1.test', 2, 'neu', 11)),
         'conf_sync': (base, 'zones/conf_sync.php', lambda: fc(box, 'c.as1.test', 11)),
         'zone_cleanup': (base, 'zones/zone_cleanup.php', lambda: fcl(['a.as1.test'], 11)),
     }
+    return {k: v for k, v in all_.items() if SCENARIOS is None or k in SCENARIOS}
 
 
 def expected_new(box, name):
@@ -626,7 +646,7 @@ def group_s(box):
                  r'openat\(.*\.dnsmanager-fence\.fault", O_WRONLY\|O_CREAT\|O_EXCL',
                  r'write\(\d+<<B>/zones/\.dnsmanager-fence\.fault>',
                  r'fsync\(\d+<<B>/zones/\.dnsmanager-fence\.fault>\)',
-                 r'openat\(AT_FDCWD, "<B>/zones", O_RDONLY',
+                 r'openat\(AT_FDCWD[^,]*, "<B>/zones", O_RDONLY',
                  r'fsync\(\d+<<B>/zones>\)',
                  r'openat\(.*\.dnsmanager-fence\.[0-9a-f]+\.tmp", O_WRONLY\|O_CREAT\|O_EXCL',
                  r'write\(\d+<<B>/zones/\.dnsmanager-fence\.[0-9a-f]+\.tmp>',
@@ -678,10 +698,14 @@ def step_key(line):
     m = re.match(r'^(?:\d+\s+)?(\w+)\((.*)$', line)
     if not m:
         return None
-    first = re.split(r', |\) = ', m.group(2), maxsplit=1)[0]
-    first = re.sub(r'^\d+<', '<', first)
-    first = re.sub(r'\.[0-9a-f]{16}\.tmp', '.X.tmp', first)
-    return m.group(1) + '(' + first
+    rest = m.group(2).replace(' <unfinished ...>', '')
+    args = re.split(r'\) = ', rest, maxsplit=1)[0].rstrip(')').split(', ')
+    # openat: Pfad und Flags (das erste Argument ist nur AT_FDCWD<Arbeitsverzeichnis>)
+    parts = args[1:3] if m.group(1) == 'openat' else args[:1]
+    key = ', '.join(parts)
+    key = re.sub(r'(^|, )\d+<', r'\1<', key)
+    key = re.sub(r'\.[0-9a-f]{16}\.tmp', '.X.tmp', key)
+    return m.group(1) + '(' + key
 
 
 def verify_after(box, name, t_old, r, label, G, post_crash=False):
@@ -714,7 +738,10 @@ def verify_after(box, name, t_old, r, label, G, post_crash=False):
                 problems.append('Reload trotz Fehler ohne Änderung')
             if not flagged and kind == 'old' and t_now.get('zones/zones.conf') != t_old.get('zones/zones.conf'):
                 problems.append('zones.conf verändert ohne Kennzeichnung')
-            if js.get('code') == 'fence_persist_failed' and not latch and h == (DOMAIN, 11):
+            # Ausnahme: Erst der Verzeichnis-fsync nach dem Entfernen der Marke ist gescheitert – H ist dann bereits
+            # dauerhaft (high_dir_sync erfolgreich); die Marke kann nach einem Absturz nur wieder erscheinen.
+            step = (js.get('fence') or {}).get('step')
+            if js.get('code') == 'fence_persist_failed' and not latch and h == (DOMAIN, 11) and step != 'latch_unlink_dir_sync':
                 problems.append('H erhöht, aber keine Fehlermarke')
     if zc is not None and post_crash:
         # zones.conf muss vollständig und gültig sein
@@ -735,7 +762,10 @@ def group_i(box):
             err = INJECT_ERR[p['name']]
             r = call(box, ep, mk(), strace={'out': tr, 'inject': f"inject={p['name']}:error={err}:when={p['when']}"})
             inj = [l.replace(box.bind, '<B>') for l in open(tr) if '(INJECTED)' in l]
-            same_path = len(inj) == 1 and step_key(inj[0]) == step_key(p['line'])
+            # Treffer am erwarteten Schritt: gleicher Syscall und Pfad UND gleiche Ordnungszahl unter allen Aufrufen
+            same_name = [l for l in trace_lines(tr, box.bind) if l['name'] == p['name']]
+            ordinal = next((i + 1 for i, l in enumerate(same_name) if '(INJECTED)' in l['line']), None)
+            same_path = len(inj) == 1 and step_key(inj[0]) == step_key(p['line']) and ordinal == p['when']
             problems, kind, h, latch = verify_after(box, name, t_old, r, p['line'], G)
             # Nach einem Fehler mit Fehlermarke muss die nächste Anfrage fail-closed sein
             if latch:
@@ -772,9 +802,13 @@ def group_c(box, flakey):
             elif r.get('status') is not None:
                 problems.append('Prozess wurde nicht beendet')
             if p is not None:
-                inj = [l.replace(box.bind, '<B>') for l in open(tr) if '(INJECTED)' in l or 'killed by SIGKILL' in l]
-                if not any(step_key(l) == step_key(p['line']) for l in inj):
-                    problems.append('Abbruch nicht am erwarteten Schritt')
+                # Der zuletzt begonnene Syscall muss der erwartete Schritt sein (gleicher Name, Pfad, Ordnungszahl)
+                tl = trace_lines(tr, box.bind)
+                last = tl[-1] if tl else None
+                ordn = sum(1 for l in tl if last and l['name'] == last['name'])
+                if not (last and last['name'] == p['name'] and ordn == p['when']
+                        and step_key(last['line'].replace(box.bind, '<B>')) == step_key(p['line'])):
+                    problems.append(f"Abbruch nicht am erwarteten Schritt ({last['line'][:80] if last else '-'})")
             check(G, f"C {name} {label[:60]}", not problems, f"{label} ⇒ zustand={kind} H={h} marke={latch} {problems}")
 
 
@@ -843,17 +877,17 @@ def group_g(src_box, ref_box):
 MUTATIONS = [
     ('M01 t<H angenommen', 'inc/fence.php', "if ($token < $h['high']) {", "if ($token < 0) {", 'F'),
     ('M02 H nie fortgeschrieben', 'inc/fence.php', "$r['raise'] = $token > $h['high'];", "$r['raise'] = false;", 'F'),
-    ('M03 ohne Write-ahead-Marke', 'inc/fence.php', "    if (!writeFileDurable($p['latch'], $latch)) {\n        return ['ok' => false, 'step' => 'latch_write'];\n    }\n    if (!syncDirectory($p['dir'])) {\n        return ['ok' => false, 'step' => 'latch_dir_sync'];\n    }\n", "", 'I'),
-    ('M04 ohne Verzeichnis-fsync nach rename von H', 'inc/fence.php', "    if (!syncDirectory($p['dir'])) {\n        return ['ok' => false, 'step' => 'high_dir_sync'];\n    }\n", "", 'CI'),
-    ('M05 ohne Datei-fsync', 'inc/file_utils.php', "$ok = @fflush($fh) && @fsync($fh);", "$ok = @fflush($fh);", 'C'),
+    ('M03 ohne Write-ahead-Marke', 'inc/fence.php', "    if (!writeFileDurable($p['latch'], $latch)) {\n        return ['ok' => false, 'step' => 'latch_write'];\n    }\n    if (!syncDirectory($p['dir'])) {\n        return ['ok' => false, 'step' => 'latch_dir_sync'];\n    }\n", "", 'I', 'zone_sync'),
+    ('M04 ohne Verzeichnis-fsync nach rename von H', 'inc/fence.php', "    if (!syncDirectory($p['dir'])) {\n        return ['ok' => false, 'step' => 'high_dir_sync'];\n    }\n", "", 'CI', 'zone_sync'),
+    ('M05 ohne Datei-fsync', 'inc/file_utils.php', "$ok = @fflush($fh) && @fsync($fh);", "$ok = @fflush($fh);", 'C', 'zone_sync'),
     ('M06 Prüfung vor dem flock', 'api/v1/zones/zone_sync.php', None, None, 'F'),
     ('M07 fehlendes H angenommen', 'inc/fence.php', "    if ($h['state'] === 'missing') {\n", "    if ($h['state'] === 'missing') { $h = ['state' => 'ok', 'domain' => $domain, 'high' => 1, 'detail' => null]; }\n    if (false) {\n", 'F'),
     ('M08 Fehlermarke ignoriert', 'inc/fence.php', "    return file_exists($latch) || is_link($latch);", "    return false;", 'F'),
     ('M09 Anfrage-Domäne nicht geprüft', 'inc/fence.php', "if (!hash_equals($domain, $in['fence_domain'])) {", "if (false) {", 'F'),
-    ('M10 Marke vor Persistenz entfernt', 'inc/fence.php', "    // 2. Neuen Wert dauerhaft schreiben\n", "    @unlink($p['latch']);\n    // 2. Neuen Wert dauerhaft schreiben\n", 'I'),
-    ('M11 zone_sync ohne Verzeichnis-fsync', 'api/v1/zones/zone_sync.php', "if (!syncDirectory($zoneDir)) {", "if (false) {", 'C'),
-    ('M12 conf_sync ohne Verzeichnis-fsync', 'api/v1/zones/conf_sync.php', "if (!syncDirectories($syncDirs)) {\n    $failWithRollback", "if (false) {\n    $failWithRollback", 'C'),
-    ('M13 Cleanup ohne Verzeichnis-fsync', 'api/v1/zones/zone_cleanup.php', "if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {", "if (false) {", 'C'),
+    ('M10 Marke vor Persistenz entfernt', 'inc/fence.php', "    // 2. Neuen Wert dauerhaft schreiben\n", "    @unlink($p['latch']);\n    // 2. Neuen Wert dauerhaft schreiben\n", 'I', 'zone_sync'),
+    ('M11 zone_sync ohne Verzeichnis-fsync', 'api/v1/zones/zone_sync.php', "if (!syncDirectory($zoneDir)) {", "if (false) {", 'C', 'zone_sync'),
+    ('M12 conf_sync ohne Verzeichnis-fsync', 'api/v1/zones/conf_sync.php', "if (!syncDirectories($syncDirs)) {\n    $failWithRollback", "if (false) {\n    $failWithRollback", 'C', 'conf_sync'),
+    ('M13 Cleanup ohne Verzeichnis-fsync', 'api/v1/zones/zone_cleanup.php', "if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {", "if (false) {", 'C', 'zone_cleanup'),
     ('M14 observe lehnt ab', 'inc/fence.php', "if ($e['code'] !== null && $mode !== 'observe') {", "if ($e['code'] !== null) {", 'F'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
@@ -861,7 +895,7 @@ MUTATIONS = [
 
 def mutate(src_agent, dst, mut):
     shutil.copytree(src_agent, dst)
-    _, f, old, new, _ = mut
+    f, old, new = mut[1], mut[2], mut[3]
     path = os.path.join(dst, f)
     s = open(path).read()
     if old is None:  # M06: Fencing-Block vor den Lock verschieben
@@ -888,7 +922,12 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--groups', default='FSICGM')
     ap.add_argument('--mutant')
+    ap.add_argument('--stop-on-fail', action='store_true')
+    ap.add_argument('--scenario')
     a = ap.parse_args()
+    global STOP_ON_FAIL, SCENARIOS
+    STOP_ON_FAIL = a.stop_on_fail
+    SCENARIOS = a.scenario.split(',') if a.scenario else None
     OUT = a.out
     os.makedirs(OUT, exist_ok=True)
     if os.geteuid() != 0:
@@ -916,6 +955,8 @@ def main():
         if 'G' in a.groups:
             ref_box = Box(root, a.ref, 'ref', bindbase)
             group_g(box, ref_box)
+    except StopIteration:
+        log('Abbruch nach erstem Fehlschlag (--stop-on-fail)')
     finally:
         flakey.close()
         shutil.rmtree(root, ignore_errors=True)
@@ -923,7 +964,8 @@ def main():
         for mut in MUTATIONS:
             sub_out = os.path.join(OUT, 'mut_' + mut[0].split()[0])
             p = subprocess.run([sys.executable, __file__, '--src', a.src, '--ref', a.ref or a.src, '--out', sub_out,
-                                '--groups', mut[4], '--mutant', mut[0].split()[0]], capture_output=True, text=True)
+                                '--groups', mut[4], '--mutant', mut[0].split()[0], '--stop-on-fail']
+                               + (['--scenario', mut[5]] if len(mut) > 5 else []), capture_output=True, text=True)
             fails = len(re.findall(r'^FAIL ', p.stdout, re.M))
             check('M', mut[0], fails > 0, f'getötet durch {fails} Fehlschläge in Gruppe {mut[4]}' if fails else f'NICHT getötet (rc={p.returncode}) {p.stderr[-300:]}')
     total = len(RESULTS)

@@ -317,6 +317,8 @@ Endpunkte, auf die sich die Web-App verlässt:
 
 Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; das Web bindet ihn über Adapter an.
 
+**Fencing (AS1, 19.11.2026):** Die drei schreibenden Endpunkte prüfen nach dem Agent-`flock` ein Fencing-Token gegen einen dauerhaft gespeicherten Höchststand (Modi `off`/`observe`/`enforce`, Fencing-Domäne, Write-ahead-Fehlermarke, lokale CLI `scripts/agent_fence-cli.php`); `system/status` meldet in `observe`/`enforce` Fähigkeiten und Fencing-Zustand. Alle fachlichen Fencing-Entscheidungen des Core (Token-Vergabe, Domäne, Abgleich, Abbruch bei Lock-Verlust) folgen mit AS4 im Core-Service `PublishService`/`PublishLedger`. Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5e, und `AGENT_FENCING.md`.
+
 ### 3.8 Paket 6 – Abschlussprüfung (erledigt, PR #64, `main` `2a077a2`)
 
 **Vorgehen (prüfbar wiederholbar):**
