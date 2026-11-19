@@ -24,8 +24,28 @@
  * @return never            Gibt niemals zurück (exit nach Ausgabe)
  */
 function sendJsonResponse(int $statusCode, array $data): never {
+    // AS1: Zusatzangaben (z. B. Fencing-Bericht) nur, wenn sie gesetzt wurden – im Modus off nie (Antwort unverändert)
+    $data += agentResponseAttach();
     http_response_code($statusCode);
     header('Content-Type: application/json');
     echo json_encode($data, JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/**
+ * Merkt Zusatzangaben für alle folgenden Antworten dieser Anfrage vor (AS1, Fencing-Bericht). Schlüssel der
+ * eigentlichen Antwortdaten haben Vorrang.
+ *
+ * @param string|null $key   Schlüssel (null = nur lesen)
+ * @param mixed       $value Wert
+ *
+ * @return array Alle vorgemerkten Zusatzangaben
+ */
+function agentResponseAttach(?string $key = null, mixed $value = null): array {
+    static $extra = [];
+    if ($key !== null) {
+        $extra[$key] = $value;
+    }
+
+    return $extra;
 }

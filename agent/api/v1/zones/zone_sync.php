@@ -19,6 +19,7 @@ require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
+require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -53,8 +54,8 @@ try {
 $finalPath = "$zoneDir/db.$safeName";
 $lockPath = agentLockPath($config);
 
-// === Temporäre Datei schreiben ===
-if (!writeTextFile($tmpPath, $zoneData)) {
+// === Temporäre Datei schreiben (AS1: vollständig und mit fsync) ===
+if (!writeFileDurable($tmpPath, $zoneData)) {
     @unlink($tmpPath);
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Schreiben der temporären Datei']);
 }
@@ -80,6 +81,15 @@ if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für die Zonenübernahme']);
 }
 
+// === AS1: Fencing-Prüfung unter dem Lock, vor jeder Änderung (F3) ===
+$fence = agentFenceCheck($config, $input);
+if (!$fence['allow']) {
+    @unlink($tmpPath);
+    flock($lockHandle, LOCK_UN);
+    fclose($lockHandle);
+    sendJsonResponse($fence['http'], $fence['body']);
+}
+
 // === named-checkconf-Preflight (unter dem Lock, vor Übernahme und Reload) ===
 $preflight = checkBindConfig();
 if (!$preflight['ok']) {
@@ -100,6 +110,20 @@ if (!rename($tmpPath, $finalPath)) {
     flock($lockHandle, LOCK_UN);
     fclose($lockHandle);
     sendJsonResponse(500, ['status' => 'error', 'message' => "Fehler beim Verschieben nach $finalPath"]);
+}
+
+// === AS1: Übernahme dauerhaft machen (fsync des Zonenverzeichnisses) ===
+// Scheitert das, ist die Datei ersetzt, aber nicht dauerhaft bestätigt und nicht zurücknehmbar: kein Reload,
+// Fehlerantwort mit rollback = failed (Ergebnis unbestimmt).
+if (!syncDirectory($zoneDir)) {
+    flock($lockHandle, LOCK_UN);
+    fclose($lockHandle);
+    sendJsonResponse(500, [
+        'status' => 'error',
+        'message' => "Zonendatei für $zoneName ersetzt, aber nicht dauerhaft bestätigt (fsync des Verzeichnisses fehlgeschlagen) – kein Reload",
+        'code' => 'persist_unconfirmed',
+        'rollback' => 'failed'
+    ]);
 }
 
 // === BIND reload durchführen ===

@@ -11,6 +11,7 @@
  * - zone_sync.php
  * - zone_cleanup.php
  * - system/control.php (nur agentLockPath)
+ * - fence.php (AS1: writeFileDurable, syncDirectory)
  */
 
 /**
@@ -59,6 +60,8 @@ function writeTextFile(string $path, string $content): bool {
 /**
  * Ersetzt eine Textdatei atomar: vollständiger Inhalt in eine eindeutige Temp-Datei im selben
  * Verzeichnis (gleiches Dateisystem), danach rename() auf den Zielpfad.
+ * AS1: Die Temp-Datei wird vor dem rename() mit fsync() synchronisiert. Das Verzeichnis synchronisiert der
+ * Aufrufer an seinem Übernahmepunkt (syncDirectories), weil false hier stets "Ziel unverändert" bedeutet.
  *
  * Rechte: $mode, falls angegeben; sonst best effort die Rechte der bisherigen Zieldatei.
  * Owner/Gruppe sind die des schreibenden Prozesses.
@@ -77,24 +80,100 @@ function writeTextFileAtomic(string $path, string $content, ?int $mode = null): 
         return false;
     }
 
-    if (file_put_contents($tmpPath, $content) !== strlen($content)) {
-        @unlink($tmpPath);
-        return false;
-    }
-
     if ($mode === null && is_file($path)) {
         $existingPerms = @fileperms($path);
         if ($existingPerms !== false) {
             $mode = $existingPerms & 0777;
         }
     }
-    if ($mode !== null) {
-        @chmod($tmpPath, $mode);
+
+    // AS1: Inhalt (und Rechte) vor dem rename() dauerhaft schreiben (fsync der Temp-Datei)
+    if (!writeFileDurable($tmpPath, $content, $mode)) {
+        @unlink($tmpPath);
+        return false;
     }
 
     if (!rename($tmpPath, $path)) {
         @unlink($tmpPath);
         return false;
+    }
+
+    return true;
+}
+
+/**
+ * Legt eine neue Datei exklusiv an (O_CREAT|O_EXCL), schreibt den vollständigen Inhalt und synchronisiert sie mit
+ * fsync() (AS1). Die Datei darf noch nicht existieren. Rechte: $mode best effort (wie writeTextFileAtomic), vor dem
+ * fsync gesetzt.
+ *
+ * Bei false ist der Zustand der Datei unbestimmt (ggf. angelegt, unvollständig oder nicht dauerhaft); der Aufrufer
+ * entfernt sie bzw. behandelt den Fehler fail-closed.
+ *
+ * @param string   $path    Absoluter Pfad der neu anzulegenden Datei
+ * @param string   $content Vollständiger Inhalt
+ * @param int|null $mode    Optionale Zugriffsrechte
+ *
+ * @return bool true nur, wenn Anlegen, vollständiges Schreiben, fsync und Schließen gelungen sind
+ */
+function writeFileDurable(string $path, string $content, ?int $mode = null): bool {
+    $fh = @fopen($path, 'x');
+    if ($fh === false) {
+        return false;
+    }
+    $ok = true;
+    $len = strlen($content);
+    $off = 0;
+    while ($off < $len) {
+        $w = @fwrite($fh, substr($content, $off));
+        if ($w === false || $w === 0) {
+            $ok = false;
+            break;
+        }
+        $off += $w;
+    }
+    if ($ok && $mode !== null) {
+        @chmod($path, $mode);
+    }
+    if ($ok) {
+        $ok = @fflush($fh) && @fsync($fh);
+    }
+    $closed = @fclose($fh);
+
+    return $ok && $closed;
+}
+
+/**
+ * Synchronisiert einen Verzeichniseintrag dauerhaft: open(O_RDONLY) auf das Verzeichnis und fsync() (AS1, AS0/A:
+ * unter PHP 8.5 auf ext4 nachgewiesen; opendir()-Handles sind dafür ungeeignet, uutils-sync ist kein Ersatz).
+ * Nötig nach rename() und unlink(), damit die Namensänderung einen Absturz übersteht.
+ *
+ * @param string $dir Absoluter Verzeichnispfad
+ *
+ * @return bool true bei Erfolg
+ */
+function syncDirectory(string $dir): bool {
+    $dh = @fopen($dir, 'r');
+    if ($dh === false) {
+        return false;
+    }
+    $ok = @fsync($dh);
+    @fclose($dh);
+
+    return $ok;
+}
+
+/**
+ * Synchronisiert mehrere Verzeichnisse (Duplikate einmal), bricht beim ersten Fehler ab.
+ *
+ * @param string[] $dirs
+ *
+ * @return bool true, wenn alle synchronisiert wurden
+ */
+function syncDirectories(array $dirs): bool {
+    foreach (array_unique(array_map(static fn (string $d): string => rtrim($d, '/') === '' ? '/' : rtrim($d, '/'), $dirs)) as $dir) {
+        if (!syncDirectory($dir)) {
+            return false;
+        }
     }
 
     return true;

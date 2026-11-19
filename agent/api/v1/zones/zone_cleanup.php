@@ -28,6 +28,7 @@ require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
+require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -80,6 +81,13 @@ $releaseLock = function () use (&$lockHandle): void {
     }
     $lockHandle = null;
 };
+
+// === AS1: Fencing-Prüfung unter dem Lock, vor jeder Änderung (F3) ===
+$fence = agentFenceCheck($config, $input);
+if (!$fence['allow']) {
+    $releaseLock();
+    sendJsonResponse($fence['http'], $fence['body']);
+}
 
 // === Verwaltete .conf-Dateien scannen ===
 $confFiles = glob("$confDir/*.conf");
@@ -151,6 +159,8 @@ if (!$preflight['ok']) {
     $restored = $zonesConfExisted
         ? writeTextFileAtomic($zonesConfPath, $oldZonesConf, $oldZonesConfPerms)
         : (!file_exists($zonesConfPath) || @unlink($zonesConfPath));
+    // AS1: wiederhergestellten Zustand dauerhaft machen
+    $restored = $restored && syncDirectory(dirname($zonesConfPath));
 
     if (!$restored) {
         error_log('[zone_cleanup] ROLLBACK FEHLGESCHLAGEN: zones.conf konnte nach named-checkconf-Fehler nicht wiederhergestellt werden');
@@ -210,6 +220,12 @@ foreach ($orphanConfFiles as $base => $confFile) {
         continue;
     }
     $removedConf[] = basename($confFile);
+}
+
+// === AS1: Änderungen dauerhaft machen (fsync der Verzeichnisse) vor dem Reload ===
+// Der Bestand ist bereits verändert; ein Fehler macht den Cleanup unvollständig (Fehlerantwort mit "rndc").
+if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {
+    $errors[] = 'Änderungen nicht dauerhaft bestätigt (fsync des Verzeichnisses fehlgeschlagen)';
 }
 
 // === E: genau ein BIND-Reload (zones.conf includiert die Orphans bereits nicht mehr) ===

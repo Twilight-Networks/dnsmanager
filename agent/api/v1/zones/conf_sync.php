@@ -20,6 +20,7 @@ require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
+require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -65,6 +66,16 @@ $releaseLock = function () use (&$lockHandle): void {
     $lockHandle = null;
 };
 
+// === AS1: Fencing-Prüfung unter dem Lock, vor jeder Änderung (F3) ===
+$fence = agentFenceCheck($config, $input);
+if (!$fence['allow']) {
+    $releaseLock();
+    sendJsonResponse($fence['http'], $fence['body']);
+}
+
+// AS1: Verzeichnisse, deren Einträge eine Übernahme bzw. ein Rollback ändern kann
+$syncDirs = [$confDir, dirname($confDir), dirname($zonesConfPath)];
+
 // === Zustand vor der ersten Änderung sichern (für Rollback) ===
 // Schlägt ein Backup-Lesevorgang fehl, wird ohne jede Änderung abgebrochen.
 $confExisted = file_exists($confPath);
@@ -97,7 +108,7 @@ if ($zonesConfExisted) {
 // damit zones.conf nie auf eine bereits entfernte .conf zeigt.
 $rollback = function () use (
     $confPath, $confExisted, $oldConf, $oldConfPerms,
-    $zonesConfPath, $zonesConfExisted, $oldZonesConf, $oldZonesConfPerms
+    $zonesConfPath, $zonesConfExisted, $oldZonesConf, $oldZonesConfPerms, $syncDirs
 ): bool {
     $ok = true;
 
@@ -121,6 +132,11 @@ $rollback = function () use (
         if (!$ok || !@unlink($confPath)) {
             $ok = false;
         }
+    }
+
+    // 3. AS1: wiederhergestellten Zustand dauerhaft machen
+    if ($ok && !syncDirectories($syncDirs)) {
+        $ok = false;
     }
 
     return $ok;
@@ -190,6 +206,11 @@ if (!$preflight['ok']) {
         'check_output' => trim($preflight['output']),
         'exit_code' => $preflight['exit_code']
     ]);
+}
+
+// === AS1: Übernahme dauerhaft machen (fsync der Verzeichnisse) vor dem Reload ===
+if (!syncDirectories($syncDirs)) {
+    $failWithRollback(500, 'Konfigurationsübernahme nicht dauerhaft bestätigt (fsync des Verzeichnisses fehlgeschlagen) – Änderung zurückgerollt, kein Reload');
 }
 
 // === BIND reload (nur nach erfolgreichem Preflight) ===
