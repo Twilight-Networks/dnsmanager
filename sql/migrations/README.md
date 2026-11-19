@@ -367,3 +367,44 @@ bash scripts/migrate_004_audit_events.sh --db dnsmanager --check
 - **Wiederanlauf:** Die Anweisung ist atomar; nach einem Abbruch (Exit 3) das Skript erneut ausführen.
 - **Rückweg:** Code-Rollback auf H2b ohne Löschen der Tabelle (E27); der H2b-Code nutzt sie nicht. `DROP TABLE` nur als
   freigegebene, datenverlustbehaftete Sondermaßnahme mit Sicherung.
+
+## 005 – Publish-Journal (AP1/H2d)
+
+| Datei | Zweck |
+|---|---|
+| `005_publish_journal.sql` | wiederholbares SQL (`CREATE TABLE IF NOT EXISTS`, je Tabelle atomar) |
+| `../../scripts/migrate_005_publish_journal.sh` | Preflight, Sicherung, Ausführung, Nachprüfung (Muster und Exitcodes wie 004) |
+
+Neue Tabellen (E55/E56): `publish_runs` (Lauf unter dem Publish-Lock mit Akteurskontext, künftiger Fencing-Token),
+`zone_publish_attempts` (erzeugter Zonenstand: Revision, `content_hash`, `render_hash`, `file_hash`, Serial),
+`zone_publish_targets` (Ergebnis je Zielserver für `zone_sync` und `conf_sync`), `publish_cleanup_results` (Ergebnis des
+Orphan-Cleanups je Server, nur Zähler). CHECK-Bedingungen NULL-sicher; Fremdschlüssel nur auf `publish_runs`,
+`zone_publish_attempts` und `zone_revisions` (`RESTRICT`), keine auf Fachtabellen; append-only. Keine Agent-Felder vor AS.
+Bestehende Tabellen werden nicht verändert; `deployments` bleibt unberührt. Voraussetzung: Migration 002 (erwartete
+Reihenfolge 002 → 003 → 004 → 005).
+
+### Verbindliche Reihenfolge
+
+1. **Sicherung und Migration 005** (Code noch alt; Migration 002 muss vorhanden und unverändert sein).
+2. **Prüfung** `--check` → Exitcode 0.
+3. **Code** ausrollen (per festem SHA). Ab diesem Stand registriert jeder Publish-Lauf das Journal (H2d).
+
+Der alte Code bleibt mit dem erweiterten Schema lauffähig (er liest und schreibt die Tabellen nicht). Der neue Code mit
+altem Schema antwortet bei Login und geschützten Seiten mit 503 (`SchemaCheck`, fail-closed); Publish und DynDNS-Publish
+enden ohne Seiteneffekt mit dem Status `exception` (Laufregistrierung J1 scheitert).
+
+### Ablauf
+
+```bash
+bash scripts/migrate_005_publish_journal.sh --db dnsmanager --check
+#    Exit 1 = Migration erforderlich, 0 = vorhanden, 2 = Migration 002 fehlt/abweichend oder Tabelle abweichend
+bash scripts/migrate_005_publish_journal.sh --db dnsmanager --apply --backup-dir /root/dnsmanager-backup
+bash scripts/migrate_005_publish_journal.sh --db dnsmanager --check
+```
+
+- **Preflight:** die vier Grundtabellen aus 002 exakt wie erwartet; jede vorhandene Journaltabelle vollständig wie
+  erwartet (auch ein gleichnamiger CHECK mit anderem Ausdruck oder eine andere FK-Regel ⇒ Exit 2 ohne Änderung).
+- **Wiederanlauf:** Jede Anweisung ist atomar; nach einem Abbruch (Exit 3) sind einzelne Tabellen vollständig angelegt,
+  das erneut ausgeführte Skript ergänzt die fehlenden.
+- **Rückweg:** Code-Rollback auf H2c ohne Löschen der Tabellen (E27); der H2c-Code nutzt sie nicht. `DROP TABLE` nur als
+  freigegebene, datenverlustbehaftete Sondermaßnahme mit Sicherung.

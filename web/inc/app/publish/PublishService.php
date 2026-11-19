@@ -47,13 +47,30 @@
  * Verbindung verwenden.
  *
  * Ergebnisvertrag: siehe publishAll().
+ *
+ * Publish-Journal (AP1/H2d, J1–J8, E55–E73; docs/ARCHITECTURE_HISTORY.md Abschnitt 5d):
+ * - Unter dem Lock und VOR jedem Seiteneffekt (auch vor der Übernahme von bind_dirty/changed): J6 – offene Vorgänge
+ *   beendeter Läufe als abandoned markieren; J1 – Lauf mit Akteurskontext registrieren und die laufeigene Sperre
+ *   beziehen (E73). Scheitert eines davon, endet der Lauf mit dem bestehenden Status 'exception' ("Publish-Journal: …"),
+ *   ohne Flag-Änderung und ohne Backend-Aufruf (E58, Q7).
+ * - Das Backend erhält die Journal-Anbindung (bindJournal): Versuch atomar mit der Serial (J2), Ergebnis je
+ *   Agentenantwort (J4), Cleanup-Registrierung (E66). processZone() trägt das operative Ergebnis des Versuchs ein (E65);
+ *   eine Exception lässt den Versuch offen (J5 unknown, J6 abandoned) – es wird kein Ergebnis erfunden.
+ * - Der Lauf wird mit dem Service-Status abgeschlossen; danach werden laufeigene Sperre und Publish-Lock freigegeben.
+ * - J4-Schreibfehler ändern das operative Ergebnis nicht (Bericht 'journal', Logzeile "[publish] Journal: …", Q4).
+ * - changed/bind_dirty, Meldungen, Ergebnisstatus und Web-Verträge bleiben unverändert (J8); die Berichte enthalten
+ *   zusätzlich 'runId' und 'journal'.
+ * Das operative Ergebnis 'published' ist keine L2-/L3-Bestätigung (E65): Vor AS sind alle Bestätigungen "legacy".
  */
 
 require_once __DIR__ . '/../Actor.php';
 require_once __DIR__ . '/../ActorAccess.php';
 require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
+require_once __DIR__ . '/../history/HistoryContext.php';
 require_once __DIR__ . '/PublishBackend.php';
+require_once __DIR__ . '/PublishLedger.php';
+require_once __DIR__ . '/PublishJournal.php';
 
 final class PublishService
 {
@@ -173,6 +190,27 @@ final class PublishService
             return $this->finish($messages, $report);
         }
 
+        // AP1/H2d (E58): J6 und J1 unter dem Lock, vor jedem Seiteneffekt. Fehler ⇒ exception ohne Flag-Änderung.
+        $ledger = new PublishLedger($this->pdo);
+        try {
+            $journal = $this->openJournal($ledger, function () use ($actor): array {
+                $stmt = $this->pdo->prepare("SELECT bind_dirty FROM system_status WHERE id = :id");
+                $stmt->execute(['id' => 1]);
+                $bindDirty = $stmt->fetchColumn();
+                $stmt->closeCursor();
+                return ['all', null, $bindDirty !== false && (int)$bindDirty !== 0, HistoryContext::forUser($actor, 'publish.all')];
+            });
+        } catch (Throwable $e) {
+            $detail = $e->getMessage();
+            $messages[] = new ServiceMessage('error', 'publish.exception', ['detail' => $detail]);
+            $report = $this->emptyReport('exception');
+            $report['exception'] = $detail;
+            $report['pending'] = $this->readPending();
+            $report['lock'] = $this->releasePublishLock(null, null);
+            return $this->finish($messages, $report);
+        }
+        $run = $journal->run();
+
         // Laufzustand
         $errors = [];             // fatale Fehler (Lauf scheitert, Flags werden wiederhergestellt)
         $warnings = [];           // Warnungen (Lauf erfolgreich, ggf. Teilverteilung/Retry)
@@ -231,6 +269,10 @@ final class PublishService
                 $bindDirtyClaimed = (int)$stmt->fetchColumn() !== 0;
                 $fullRebuild = $bindDirtyClaimed;
                 $flags['bindDirtyClaimed'] = $bindDirtyClaimed;
+                // AP1/H2d: Alle Schreiber von bind_dirty halten denselben Lock – die Übernahme muss der Registrierung entsprechen
+                if ($bindDirtyClaimed !== $run->fullRebuild) {
+                    throw new LogicException('Publish-Journal: übernommener Full-Rebuild-Zustand weicht von der Laufregistrierung ab');
+                }
 
                 // Betroffene Zonen
                 if ($bindDirtyClaimed) {
@@ -242,14 +284,15 @@ final class PublishService
                 $stmt->execute();
                 $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-                $run = [
+                $runState = [
                     'messages' => &$messages, 'errors' => &$errors, 'warnings' => &$warnings,
                     'claimedZoneIds' => &$claimedZoneIds, 'pendingClaimedIds' => &$pendingClaimedIds,
                     'publishedZoneIds' => &$publishedZoneIds, 'partialZoneIds' => &$partialZoneIds,
                     'zoneReports' => &$zoneReports, 'currentZoneReport' => &$currentZoneReport, 'flags' => &$flags,
+                    'journal' => $journal,
                 ];
                 foreach ($zones as $zone) {
-                    $this->processZone((int)$zone['id'], (string)$zone['name'], $bindDirtyClaimed, $run);
+                    $this->processZone((int)$zone['id'], (string)$zone['name'], $bindDirtyClaimed, $runState);
                 }
 
                 if (empty($errors)) {
@@ -344,32 +387,16 @@ final class PublishService
                 ]);
             }
 
+            // AP1/H2d: Lauf mit dem Service-Status abschließen (J4; Fehler nur im Bericht und Log)
+            $journal->finishRun((string)$status);
+
             // Tatsächlich ausstehende Änderungen nach dem Lauf (lesend, ohne Seiteneffekt)
             $pending = $this->readPending();
         } finally {
-            // 7. Publish-Lock freigeben (bei hartem Abbruch: Verbindungsende)
+            // 7. Laufeigene Sperre und Publish-Lock freigeben (bei hartem Abbruch: Verbindungsende)
             // Nicht hier protokolliert: Der Aufrufer meldet eine nicht bestätigte Freigabe nach dem
             // Ergebnis (Reihenfolge wie bisher: Ergebnis-Meldungen, danach Freigabe-Warnung).
-            try {
-                $stmtUnlock = $this->pdo->prepare("SELECT RELEASE_LOCK(?)");
-                $stmtUnlock->execute([self::LOCK_NAME]);
-                $releaseResult = $stmtUnlock->fetchColumn(); // 1 = freigegeben, 0 = von anderer Verbindung gehalten, NULL = Lock existiert nicht
-                $lock['releaseResult'] = ($releaseResult === null || $releaseResult === false) ? null : (int)$releaseResult;
-                if ($releaseResult !== null && $releaseResult !== false && (int)$releaseResult === 1) {
-                    $lock['released'] = true;
-                } else {
-                    $lock['released'] = false;
-                    $lock['releaseError'] = match (true) {
-                        $releaseResult === false => 'RELEASE_LOCK lieferte kein Ergebnis',
-                        $releaseResult === null  => 'RELEASE_LOCK = NULL: Lock existiert nicht (mehr)',
-                        default                  => 'RELEASE_LOCK = ' . (int)$releaseResult . ': Lock wird nicht von dieser Verbindung gehalten',
-                    };
-                }
-            } catch (Throwable $e) {
-                $lock['released'] = false;
-                $lock['releaseException'] = true;
-                $lock['releaseError'] = $e->getMessage();
-            }
+            $lock = $this->releasePublishLock($ledger, $run);
         }
 
         $report = [
@@ -386,6 +413,8 @@ final class PublishService
             'exception'                 => $exceptionDetail,
             'rolledBackOpenTransaction' => $rolledBackOpenTransaction,
             'lock'                      => $lock,
+            'runId'                     => $run->id,
+            'journal'                   => $journal->report(),
         ];
 
         return $this->finish($messages, $report);
@@ -414,15 +443,20 @@ final class PublishService
      * und abschließend genau einer 'publish.zone_result' mit Rohdaten:
      * status published | already_published | partial | failed | generation_failed | claim_failed | not_found |
      * locked | lock_failed | invalid_state | exception, zoneId, zoneName, changedReset, keptPending, errors,
-     * warnings, exception, lock.
+     * warnings, exception, lock, runId, journal.
+     *
+     * @param HistoryContext|null $context AP1/H2d: Akteurskontext des Laufs (Akteur, Kanal, Korrelation), z. B. derselbe
+     *        Kontext wie die zugehörige DynDNS-Änderung. Ohne Angabe: Systemkontext (Kanal "system", neue Korrelation).
+     *        Es entsteht keine Änderungsmenge der Historie.
      */
-    public function publishZone(int $zoneId, int $lockWaitSeconds = 5): ServiceResult
+    public function publishZone(int $zoneId, int $lockWaitSeconds = 5, ?HistoryContext $context = null): ServiceResult
     {
         $messages = [];
         $report = [
             'status' => null, 'zoneId' => $zoneId, 'zoneName' => null, 'changedReset' => false, 'keptPending' => false,
             'errors' => [], 'warnings' => [], 'exception' => null,
             'lock' => ['name' => self::LOCK_NAME, 'acquired' => false, 'released' => null, 'releaseResult' => null, 'releaseException' => false, 'releaseError' => null],
+            'runId' => null, 'journal' => null,
         ];
         $done = function (string $status) use (&$messages, &$report): ServiceResult {
             $report['status'] = $status;
@@ -473,16 +507,26 @@ final class PublishService
         $errors = []; $warnings = []; $claimedZoneIds = []; $pendingClaimedIds = []; $publishedZoneIds = [];
         $partialZoneIds = []; $zoneReports = []; $currentZoneReport = null;
         $flags = ['claimedZoneIds' => []];
-        $run = [
+        $runState = [
             'messages' => &$messages, 'errors' => &$errors, 'warnings' => &$warnings,
             'claimedZoneIds' => &$claimedZoneIds, 'pendingClaimedIds' => &$pendingClaimedIds,
             'publishedZoneIds' => &$publishedZoneIds, 'partialZoneIds' => &$partialZoneIds,
             'zoneReports' => &$zoneReports, 'currentZoneReport' => &$currentZoneReport, 'flags' => &$flags,
+            'journal' => null,
         ];
         $status = 'exception';
+        $ledger = new PublishLedger($this->pdo);
+        $journal = null;
 
         try {
             try {
+                // AP1/H2d (E58): J6 und J1 unter dem Lock, vor jedem Seiteneffekt (Fehler ⇒ exception ohne Flag-Änderung)
+                $journal = $this->openJournal($ledger, static fn (): array => [
+                    'zone', $zoneId, false, $context ?? HistoryContext::system('publish.zone', 'system'),
+                ]);
+                $runState['journal'] = $journal;
+                $report['runId'] = $journal->runId();
+
                 // Zonenname unter dem Lock frisch lesen (Umbenennung oder Löschung seit der Vorprüfung)
                 $stmt = $this->pdo->prepare("SELECT name FROM zones WHERE id = ?");
                 $stmt->execute([$zoneId]);
@@ -494,7 +538,7 @@ final class PublishService
                 } else {
                     $zoneName = (string)$freshName;
                     $report['zoneName'] = $zoneName;
-                    $this->processZone($zoneId, $zoneName, false, $run);
+                    $this->processZone($zoneId, $zoneName, false, $runState);
                     $outcome = $zoneReports[0]['outcome'] ?? null;
                 }
 
@@ -551,20 +595,20 @@ final class PublishService
                 $messages[] = new ServiceMessage('error', 'publish.exception', ['detail' => $e->getMessage()]);
                 $status = 'exception';
             }
+
+            // AP1/H2d: Lauf mit dem Service-Status abschließen (J4; Fehler nur im Bericht und Log)
+            $journal?->finishRun($status);
         } finally {
-            try {
-                $stmtUnlock = $this->pdo->prepare("SELECT RELEASE_LOCK(?)");
-                $stmtUnlock->execute([self::LOCK_NAME]);
-                $releaseResult = $stmtUnlock->fetchColumn();
-                $report['lock']['releaseResult'] = ($releaseResult === null || $releaseResult === false) ? null : (int)$releaseResult;
-                $report['lock']['released'] = $report['lock']['releaseResult'] === 1;
-            } catch (Throwable $e) {
-                $report['lock']['released'] = false;
+            $released = $this->releasePublishLock($ledger, $journal?->run());
+            $report['lock']['releaseResult'] = $released['releaseResult'];
+            $report['lock']['released'] = $released['releaseResult'] === 1 && !$released['releaseException'];
+            if ($released['releaseException']) {
                 $report['lock']['releaseException'] = true;
-                $report['lock']['releaseError'] = $e->getMessage();
+                $report['lock']['releaseError'] = $released['releaseError'];
             }
         }
 
+        $report['journal'] = $journal?->report();
         $report['errors'] = array_merge($report['errors'], $errors);
         $report['warnings'] = $warnings;
 
@@ -646,6 +690,12 @@ final class PublishService
                 'zoneName' => $zoneName,
                 'output'   => (string)($validation['output'] ?? ''),
             ]);
+        }
+
+        // AP1/H2d (J2): Mit Journal muss jede erzeugte Datei (verbrauchte Serial) einen registrierten Versuch haben
+        $attempt = $validation['journal'] ?? null;
+        if ($run['journal'] !== null && !is_array($attempt)) {
+            throw new LogicException("Publish-Journal: Zonendatei für $zoneName ohne registrierten Versuch (J2)");
         }
 
         $path = $validation['path'] ?? null;
@@ -742,8 +792,96 @@ final class PublishService
                 ]);
             }
         }
+        // AP1/H2d (E65): operatives Ergebnis des Versuchs – keine L2-/L3-Bestätigung der Ziele
+        if (is_array($attempt) && $run['journal'] !== null) {
+            $run['journal']->finishAttempt((int)$attempt['attemptId'], (string)$zoneReport['outcome']);
+        }
         $run['zoneReports'][] = $zoneReport;
         $run['currentZoneReport'] = null;
+    }
+
+    /* ---------------------------------------------------------------------------------------------- */
+    /* Publish-Journal: Laufbeginn und Freigabe (AP1/H2d)                                              */
+    /* ---------------------------------------------------------------------------------------------- */
+
+    /**
+     * J6 (offene Vorgänge beendeter Läufe ⇒ abandoned), danach J1 (Lauf registrieren, laufeigene Sperre) und Bindung
+     * an das Backend. Aufruf unter dem Publish-Lock, vor jedem Seiteneffekt.
+     *
+     * @param callable(): array{0: string, 1: ?int, 2: bool, 3: HistoryContext} $describe Laufangaben (nach J6 gelesen)
+     * @throws RuntimeException mit "Publish-Journal: …"
+     */
+    private function openJournal(PublishLedger $ledger, callable $describe): PublishJournal
+    {
+        try {
+            $ledger->abandonStale();
+            [$kind, $zoneId, $fullRebuild, $ctx] = $describe();
+            $run = $ledger->registerRun($kind, $zoneId, $fullRebuild, $ctx);
+        } catch (Throwable $e) {
+            throw new RuntimeException('Publish-Journal: ' . $e->getMessage(), 0, $e);
+        }
+        // Review S1: Scheitert die Bindung an das Backend, erhält der Aufrufer kein Lauf-Token. Der bereits registrierte
+        // Lauf wird deshalb hier abgeschlossen (exception) und seine laufeigene Sperre auf dieser – ggf. weiterverwendeten –
+        // Verbindung freigegeben; danach Abbruch wie J1 ohne Seiteneffekt.
+        try {
+            $journal = new PublishJournal($ledger, $run, $this->logger);
+            $this->backend->bindJournal($journal);
+        } catch (Throwable $e) {
+            try {
+                $ledger->finishRun($run, 'exception');
+            } catch (Throwable $finishError) {
+                // Lauf bleibt running; ohne Laufsperre nicht lebendig (J5 unknown), J6 markiert ihn später abandoned
+            }
+            $ledger->releaseRunLock($run);
+            try {
+                $this->backend->bindJournal(null);
+            } catch (Throwable $unbindError) {
+                // Bindung endet spätestens mit dem Backend
+            }
+            throw new RuntimeException('Publish-Journal: Bindung an das Backend fehlgeschlagen: ' . $e->getMessage(), 0, $e);
+        }
+
+        return $journal;
+    }
+
+    /**
+     * Löst die Journal-Bindung, gibt die laufeigene Sperre und danach den Publish-Lock frei.
+     *
+     * @return array{name: string, acquired: bool, released: bool, releaseResult: ?int, releaseException: bool, releaseError: ?string}
+     */
+    private function releasePublishLock(?PublishLedger $ledger, ?PublishRun $run): array
+    {
+        $lock = ['name' => self::LOCK_NAME, 'acquired' => true, 'released' => null, 'releaseResult' => null, 'releaseException' => false, 'releaseError' => null];
+        try {
+            $this->backend->bindJournal(null);
+        } catch (Throwable $e) {
+            // Bindung endet spätestens mit dem Backend
+        }
+        if ($ledger !== null && $run !== null) {
+            $ledger->releaseRunLock($run);
+        }
+        try {
+            $stmtUnlock = $this->pdo->prepare("SELECT RELEASE_LOCK(?)");
+            $stmtUnlock->execute([self::LOCK_NAME]);
+            $releaseResult = $stmtUnlock->fetchColumn(); // 1 = freigegeben, 0 = von anderer Verbindung gehalten, NULL = Lock existiert nicht
+            $lock['releaseResult'] = ($releaseResult === null || $releaseResult === false) ? null : (int)$releaseResult;
+            if ($releaseResult !== null && $releaseResult !== false && (int)$releaseResult === 1) {
+                $lock['released'] = true;
+            } else {
+                $lock['released'] = false;
+                $lock['releaseError'] = match (true) {
+                    $releaseResult === false => 'RELEASE_LOCK lieferte kein Ergebnis',
+                    $releaseResult === null  => 'RELEASE_LOCK = NULL: Lock existiert nicht (mehr)',
+                    default                  => 'RELEASE_LOCK = ' . (int)$releaseResult . ': Lock wird nicht von dieser Verbindung gehalten',
+                };
+            }
+        } catch (Throwable $e) {
+            $lock['released'] = false;
+            $lock['releaseException'] = true;
+            $lock['releaseError'] = $e->getMessage();
+        }
+
+        return $lock;
     }
 
     /* ---------------------------------------------------------------------------------------------- */
@@ -821,6 +959,8 @@ final class PublishService
             'exception'                 => null,
             'rolledBackOpenTransaction' => false,
             'lock'                      => ['name' => self::LOCK_NAME, 'acquired' => false, 'released' => null, 'releaseResult' => null, 'releaseException' => false, 'releaseError' => null],
+            'runId'                     => null,
+            'journal'                   => null,
         ];
     }
 

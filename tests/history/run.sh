@@ -1,10 +1,12 @@
 #!/bin/bash
 # Datei: tests/history/run.sh
-# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c) reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
+# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c, H2d) reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
 #
-#   bash run.sh <App-SHA> <Basis-SHA>
+#   bash run.sh <App-SHA> <Basis-SHA> [<Generator-Basis-SHA>]
 #     <App-SHA>   zu prüfender Commit (40 Zeichen)
-#     <Basis-SHA> Commit, dessen sql/dnsmanager_schema.sql den Stand vor Migration 002 darstellt (z. B. origin/main)
+#     <Basis-SHA> Commit, dessen sql/dnsmanager_schema.sql den Stand vor Migration 002 darstellt
+#     <Generator-Basis-SHA> optional (H2d): Commit, gegen dessen Generator die Zonendateien byte-gleich sein müssen
+#                 (Standard: <Basis-SHA>; für H2d der Stand vor H2d, z. B. origin/main)
 #
 # Ablauf: eigener Klon ($REPO, Standard GitHub) → git archive beider Commits in ein frisches Verzeichnis unter /tmp →
 #   1. reine Tests (pure_test.php) inkl. unabhängiger Prüfung des Vertragsvektors mit sha256sum
@@ -13,6 +15,10 @@
 #   4. CLI-Test mit DML-Benutzer (cli_test.sh)
 #   5. H2b: Migration 003, statischer R-H8-Nachweis, Recorder-Tests (RR und RC), Mutationsproben
 #   6. H2c: Migration 004, Audit-Tests (RR und RC); statischer R-A-Nachweis und Mutationsproben in 5
+#   7. H2d: Migration 005, reine Journal-Tests (Vektor rh1 zusätzlich mit sha256sum), Journal-Tests unter RR (mit
+#      Byte-Vergleich der Zonendateien gegen den Basis-Commit und Zeitüberschreitungsfällen) und RC gegen eine isolierte
+#      Zweiserver-Umgebung mit dem echten Agent-Code (127.0.0.4/127.0.0.5, Sandbox unter /tmp); statischer Nachweis und
+#      Mutationsproben in 5. /etc/bind und die installierten Agenten werden nicht berührt (Nachweis Z01).
 # Nur isolierte Datenbanken dnsmgr_t21_r<RUN>_* und der Benutzer h2a<RUN> (Lauf-Kennung H2A_RUN, 8 Hex-Zeichen; optional
 # vorgebbar, sonst zufällig). Eigentum nach tests/history/owned.sh: Jede Suite legt ihre Ressourcen ohne IF NOT EXISTS an
 # und trägt sie danach in das gemeinsame Register dieses Laufs ein; aufgeräumt werden ausschließlich registrierte
@@ -21,12 +27,12 @@
 # 'dnsmanager_publish_all' ist serverweit: Die Tests belegen ihn nur kurz; ist er beim Start belegt, bricht der Lauf ab.
 
 set -uo pipefail
-SHA="${1:-}"; BASE="${2:-}"
-[[ "$SHA" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "Aufruf: bash run.sh <App-SHA> <Basis-SHA> (je 40 Zeichen)"; exit 2; }
+SHA="${1:-}"; BASE="${2:-}"; GBASE="${3:-${2:-}}"
+[[ "$SHA" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ && "$GBASE" =~ ^[0-9a-f]{40}$ ]] || { echo "Aufruf: bash run.sh <App-SHA> <Basis-SHA> [<Generator-Basis-SHA>] (je 40 Zeichen)"; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "als root ausführen"; exit 2; }
 REPO="${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}"
 
-echo "History-Tests H2a/H2b/H2c – $(hostname) $(date '+%F %T')"
+echo "History-Tests H2a/H2b/H2c/H2d – $(hostname) $(date '+%F %T')"
 export H2A_RUN="${H2A_RUN:-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 [[ "$H2A_RUN" =~ ^[0-9a-f]{8}$ ]] || { echo "ABBRUCH: ungültige Lauf-Kennung H2A_RUN"; exit 2; }
 echo "Lauf-Kennung: $H2A_RUN (Datenbanken dnsmgr_t21_r${H2A_RUN}_*, Benutzer h2a${H2A_RUN})"
@@ -44,11 +50,12 @@ cleanup() {
 trap cleanup EXIT
 
 git clone -q "$REPO" "$T/repo" || { echo "ABBRUCH: Klon"; exit 1; }
-for s in "$SHA" "$BASE"; do git -C "$T/repo" cat-file -e "$s^{commit}" || { echo "ABBRUCH: Commit $s unbekannt"; exit 1; }; done
+for s in "$SHA" "$BASE" "$GBASE"; do git -C "$T/repo" cat-file -e "$s^{commit}" || { echo "ABBRUCH: Commit $s unbekannt"; exit 1; }; done
 mkdir -m 750 "$T/app"; git -C "$T/repo" archive "$SHA" | tar -x -C "$T/app"
 git -C "$T/repo" show "$BASE:sql/dnsmanager_schema.sql" | grep -vE '^(CREATE DATABASE|USE )' > "$T/base_schema.sql"
+mkdir -m 750 "$T/base"; git -C "$T/repo" archive "$GBASE" | tar -x -C "$T/base"
 echo "Anwendung: Commit $SHA Tree $(git -C "$T/repo" rev-parse "$SHA^{tree}")"
-echo "Basis:     Commit $BASE (Schema vor Migration 002)"
+echo "Basis:     Commit $BASE (Schema vor Migration 002); Generator-Basis $GBASE"
 echo "Umgebung:  $(mariadb -N -e 'SELECT VERSION()'), global $(mariadb -N -e 'SELECT @@global.transaction_isolation, @@global.innodb_snapshot_isolation' | tr '\t' ' '), PHP $(php -r 'echo PHP_VERSION;')"
 
 RC=0
@@ -70,6 +77,17 @@ php "$H/recorder_test.php" "$T/app" RC || RC=1
 bash "$H/migration004_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
 php "$H/audit_test.php" "$T/app" RR || RC=1
 php "$H/audit_test.php" "$T/app" RC || RC=1
+# AP1/H2d: Migration 005, Publish-Journal rein und gegen die isolierte Zweiserver-Umgebung (RR mit Basis-Byte-Vergleich, RC)
+bash "$H/migration005_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
+php "$H/journal_pure_test.php" "$T/app" || RC=1
+for kind in file render; do
+    want="$(grep -oE "^const VECTOR_$(echo $kind | tr a-z A-Z)_HASH = '[0-9a-f]{64}'" "$H/journal_pure_test.php" | grep -oE '[0-9a-f]{64}')"
+    opt="--dump-file"; [ "$kind" = render ] && opt="--dump-masked"
+    got="$(php "$H/journal_pure_test.php" "$T/app" "$opt" | sha256sum | cut -c1-64)"
+    if [ "$got" = "$want" ]; then echo "  ok   V02 rh1-Vektor ($kind): sha256sum = eingefrorener Hash"; else echo "  FAIL V02 rh1-Vektor ($kind): $got ≠ $want"; RC=1; fi
+done
+php "$H/journal_test.php" "$T/app" RR "$T/base" || RC=1
+H2D_SLOW=0 php "$H/journal_test.php" "$T/app" RC "$T/base" || RC=1
 [ "${H2B_SKIP_MUTATION:-0}" = 1 ] && echo "Hinweis: Mutationsproben übersprungen (H2B_SKIP_MUTATION=1)" || bash "$H/mutation_test.sh" "$T/app" || RC=1
 
 echo "GESAMT: $([ $RC = 0 ] && echo 'alle Suiten bestanden' || echo 'FEHLER')"

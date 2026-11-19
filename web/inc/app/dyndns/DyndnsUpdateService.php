@@ -338,7 +338,9 @@ final class DyndnsUpdateService
         }
 
         try {
-            $published = $this->publisher->publishZone($zone_id);
+            // AP1/H2d (Q2): Publish-Lauf mit Akteur, Kanal und Korrelation dieses Aufrufs (bei einer Änderung dieselbe
+            // Korrelation wie deren Änderungsmenge; bei einer reinen Wiederholung entsteht keine Änderungsmenge)
+            $published = $this->publisher->publishZone($zone_id, 5, $historyCtx->withOperation('publish.zone'));
             $last = $published->messages[count($published->messages) - 1] ?? null;
             $zr = ($last !== null && $last->code === 'publish.zone_result') ? $last->context : ['status' => 'exception', 'errors' => [], 'warnings' => [], 'exception' => 'Kein Publish-Ergebnis'];
         } catch (Throwable $e) {

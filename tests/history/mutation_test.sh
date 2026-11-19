@@ -1,11 +1,13 @@
 #!/bin/bash
 # Datei: tests/history/mutation_test.sh
-# Zweck: Mutationsproben der History-Erfassung (AP1/H2b) und der Audit-Ereignisse (AP1/H2c): Jede Mutation entfernt oder verfälscht genau eine Schutzregel
+# Zweck: Mutationsproben der History-Erfassung (AP1/H2b), der Audit-Ereignisse (AP1/H2c) und des Publish-Journals (AP1/H2d):
+#        Jede Mutation entfernt oder verfälscht genau eine Schutzregel
 #        in einer Kopie der Anwendung; die zugehörigen Tests müssen sie erkennen (rot werden). Eine nicht erkannte
 #        Mutation ist ein Fehler dieser Suite.
 #
 # Aufruf (als root auf dem Testsystem): bash mutation_test.sh <App-Verzeichnis>
-# Nutzt recorder_test.php (Abschnittsauswahl über H2B_ONLY), audit_test.php (Abschnitte "A:<Liste>" über H2C_ONLY) und
+# Nutzt recorder_test.php (Abschnittsauswahl über H2B_ONLY), audit_test.php (Abschnitte "A:<Liste>" über H2C_ONLY),
+# journal_test.php (Abschnitte "J:<Liste>" über H2D_ONLY, ohne Zeitüberschreitungsfälle), journal_pure_test.php ("JP") und
 # static_rh8_test.php; isolierte Datenbanken wie dort.
 
 set -uo pipefail
@@ -27,6 +29,10 @@ mutate() {
     fi
     if [ "$sections" = static ]; then
         php "$m/tests/history/static_rh8_test.php" "$m" > "$W/$id.log" 2>&1
+    elif [ "$sections" = JP ]; then
+        php "$m/tests/history/journal_pure_test.php" "$m" > "$W/$id.log" 2>&1
+    elif [[ "$sections" == J:* ]]; then
+        H2D_SLOW=0 H2D_ONLY="${sections#J:}" php "$m/tests/history/journal_test.php" "$m" "$iso" > "$W/$id.log" 2>&1
     elif [[ "$sections" == A:* ]]; then
         H2C_ONLY="${sections#A:}" php "$m/tests/history/audit_test.php" "$m" "$iso" > "$W/$id.log" 2>&1
     else
@@ -82,6 +88,34 @@ mutate MA10 sql/dnsmanager_schema.sql '    UNIQUE KEY uq_ae_change_set_seq (chan
 mutate MA11 web/inc/app/zones/ZoneService.php $'                    $dyndnsAccounts = (int)$stmt->fetchColumn();' $'                    $dyndnsAccounts = 0;' RC A:P 'Kaskadenzähler der Zonenlöschung falsch (E53)'
 mutate MA12 "$SV" $'            $ctx[\'audit\'] = \'failed\';' '' RR A:F 'Kennzeichen für gescheiterten Reload-Nachtrag entfernt (Q2)'
 mutate MA13 "$AP" '            if (!is_string($marker) || !in_array($marker, self::SECRET_MARKERS, true)) {' '            if (false) {' RR A:Q 'Kennzeichenprüfung entfernt (Wert statt Kennzeichen)'
+
+# ---- AP1/H2d: Publish-Journal
+PS=web/inc/app/publish/PublishService.php
+PL=web/inc/app/publish/PublishLedger.php
+PJ=web/inc/app/publish/PublishJournal.php
+PR=web/inc/app/publish/PublishJournalReader.php
+PC=web/inc/app/publish/PublishTargetClassifier.php
+LB=web/inc/deploy/LegacyBindPublishBackend.php
+DI=web/inc/deploy/bind_file_distributor.php
+echo "== Mutationsproben H2d"
+mutate MJ01 "$PS" $'            $ledger->abandonStale();\n' '' RR J:F 'Wiederanlauf J6 entfernt (offene Vorgänge bleiben offen)'
+mutate MJ02 "$LB" "generate_zone_file(\$zoneId, \$work->path(), 'publish', \$this->pdo, \$hook)" "generate_zone_file(\$zoneId, \$work->path(), 'publish', \$this->pdo, null)" RR J:P 'Versuch nicht registriert (J2)'
+mutate MJ04 "$PL" $'        $contentHash = $snapshot->contentHash();' $'        $contentHash = $head !== false ? (string)$head[\'head_hash\'] : $snapshot->contentHash();' RR J:P 'content_hash aus dem Head statt aus dem erzeugten Stand (J3)'
+mutate MJ05 "$DI" $'        [$servers, $missing] = distribute_registered_targets($servers, $registered, \'id\');' '        $missing = [];' RC J:N 'Konfiguration an die aktuelle statt die registrierte Zielmenge (E62)'
+mutate MJ06 "$PC" '    private const CURL_NOT_SENT = [1, 2, 3, 5, 6, 7, 35,' '    private const CURL_NOT_SENT = [1, 2, 3, 5, 6, 7, 28, 35,' RR JP 'Zeitüberschreitung als failed statt unknown (Q3)'
+mutate MJ07 "$PJ" $'        } catch (Throwable $e) {\n            $this->failure($what, $e->getMessage());\n        }' $'        } catch (LogicException $e) {\n            $this->failure($what, $e->getMessage());\n        }' RR J:F 'J4-Schreibfehler beeinflusst das operative Ergebnis'
+mutate MJ08 "$PL" " WHERE t.attempt_id = ? AND t.server_id = ? AND a.run_id = ? AND t.{\$ch}_sync = 'sending'\"" " WHERE t.attempt_id = ? AND t.server_id = ? AND a.run_id = ?\"" RR J:J 'Endzustand eines Ziels überschreibbar (J4a, dynamisch)'
+mutate MJ08s "$PL" " WHERE t.attempt_id = ? AND t.server_id = ? AND a.run_id = ? AND t.{\$ch}_sync = 'sending'\"" " WHERE t.attempt_id = ? AND t.server_id = ? AND a.run_id = ?\"" RR static 'Endzustand eines Ziels überschreibbar (J4a, statisch)'
+mutate MJ09 "$DI" $'    if ($journal !== null && !($journal[\'register\'])(array_column($servers, \'name\', \'id\'))) {' $'    if (false) {' RR J:P 'Cleanup ohne Vorregistrierung (E66)'
+mutate MJ10 "$PR" $'            && $runLockHolder !== null && $runLockHolder !== false && (int)$runLockHolder === $connectionId\n' '' RR J:L 'Lebendigkeit nur über die Verbindungs-ID (Wiederverwendung nach Neustart, E73)'
+mutate MJ11 "$PL" $'            if ($holder !== null && $holder !== false) {' $'            if (false) {' RR J:L 'J6 markiert auch einen lebendigen Lauf'
+mutate MJ12 "$DI" $'    if ($journal !== null && (!is_string($zone_bytes) || !hash_equals((string)$journal[\'fileHash\'], PublishHashContract::sha256($zone_bytes)))) {' $'    if (false) {' RR J:P 'Datei ohne Prüfung des registrierten file_hash gesendet'
+mutate MJ13 "$PL" "            \$kind, \$requestedZoneId, \$fullRebuild ? 1 : 0, \$connectionId, (int)\$row['w'], \$ctx->actorType," "            \$kind, \$requestedZoneId, \$fullRebuild ? 1 : 0, \$connectionId, 0, \$ctx->actorType," RR J:P,R 'Wasserstand der Reaktivierung falsch (E70)'
+mutate MJ14 "$PL" $'        $stmt = $this->pdo->prepare(\'SELECT GET_LOCK(?, 0)\');\n        $stmt->execute([$lock]);' $'        $stmt = $this->pdo->prepare(\'SELECT 1\');\n        $stmt->execute([]);' RR J:L 'Lauf ohne laufeigene Sperre (Identität nicht nachweisbar)'
+
+mutate MJ15 "$PS" $'            $ledger->releaseRunLock($run);\n            try {\n                $this->backend->bindJournal(null);' $'            try {\n                $this->backend->bindJournal(null);' RR J:S 'Laufsperre nach gescheiterter Backend-Bindung nicht freigegeben (Review S1)'
+
+mutate MJ16 "$PC" " || array_key_exists('rndc', \$json)) {" ") {" RR JP 'Cleanup-Fehler nach Reload als rejected eingeordnet (Praxistest)'
 
 echo "ERGEBNIS mutation: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" = 0 ]

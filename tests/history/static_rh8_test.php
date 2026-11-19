@@ -205,4 +205,81 @@ $posAudit = strpos($srv, 'AuditRecorder::recordStandalone(');
 T::ok($posCall !== false && $posAudit !== false && $posCall < $posAudit && !str_contains($srv, '->beginTransaction()'), 'R08', 'BIND-Reload: Nachtrag nach dem Agentenaufruf (E51), keine Fachtransaktion');
 $pol = (string)file_get_contents("$app/web/inc/app/history/AuditRecorder.php");
 T::ok(str_contains($pol, 'AuditPolicy::changes(') && str_contains($pol, 'AuditPolicy::label('), 'R09', 'AuditRecorder bildet Inhalte ausschließlich über AuditPolicy (R-A3)');
+/* ---------------------------------------------------------------- AP1/H2d: Publish-Journal statisch */
+T::section('Publish-Journal statisch (H2d)');
+$journalTables = 'publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results';
+$writersJ = [];
+$mentions = [];
+foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator("$app/web", FilesystemIterator::SKIP_DOTS)) as $f) {
+    if ($f->getExtension() !== 'php') {
+        continue;
+    }
+    $rel = substr($f->getPathname(), strlen($app) + 1);
+    $src = (string)file_get_contents($f->getPathname());
+    if (preg_match('/(INSERT\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+`?(' . $journalTables . ')\b/i', $src) === 1) {
+        $writersJ[] = $rel;
+    }
+    if (preg_match('/\b(' . $journalTables . ')\b|PublishLedger|PublishJournal\b|registerAttempt\(/', $src) === 1) {
+        $mentions[] = $rel;
+    }
+}
+sort($mentions);
+T::eq(['web/inc/app/publish/PublishLedger.php'], $writersJ, 'R10', 'Journaltabellen werden ausschließlich in PublishLedger geschrieben');
+T::eq([
+    'web/inc/app/SchemaCheck.php',
+    'web/inc/app/publish/PublishBackend.php',
+    'web/inc/app/publish/PublishJournal.php',
+    'web/inc/app/publish/PublishJournalReader.php',
+    'web/inc/app/publish/PublishLedger.php',
+    'web/inc/app/publish/PublishRun.php',
+    'web/inc/app/publish/PublishService.php',
+    'web/inc/deploy/LegacyBindPublishBackend.php',
+], $mentions, 'R11', 'Journal nur im Publish-Bereich und Backend; kein Fachservice, Adapter oder Skript kennt Journal oder Ledger (R-H9)');
+$ledger = (string)file_get_contents("$app/web/inc/app/publish/PublishLedger.php");
+// Alle UPDATE-Anweisungen: nur Lebenszyklusfelder, nur aus dem offenen Zustand (J4a, Q8)
+$lifecycle = ['status', 'result', 'finished_at', 'outcome', 'zone_sync', 'zone_sync_at', 'zone_http_status', 'zone_error_code',
+    'zone_error_detail', 'conf_sync', 'conf_sync_at', 'conf_http_status', 'conf_error_code', 'conf_error_detail', 'conf_hash',
+    'valid_zone_count', 'removed_conf_count', 'removed_zone_file_count', 'http_status', 'error_code', 'error_detail'];
+$updates = [];
+$badSet = [];
+$unguarded = [];
+// Anweisungen aus String-Literalen zusammensetzen ("…" . "…"), Interpolation {$ch} durch zone/conf ersetzt
+$flat = preg_replace('/"\s*\.\s*"/', '', preg_replace("/'\s*\.\s*'/", '', $ledger));
+preg_match_all('/UPDATE\s+(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results)\b(.*?)\bWHERE\b(.*?)(?:"\s*\)|"\s*;)/s', (string)$flat, $mm, PREG_SET_ORDER);
+foreach ($mm as $m) {
+    $updates[] = $m[1];
+    $set = preg_replace('/^.*?\bSET\b/s', '', $m[2]);
+    foreach (explode(',', (string)$set) as $assign) {
+        if (!preg_match('/(?:t\.)?([a-z_{}$]+)\s*=/', $assign, $col)) {
+            continue;
+        }
+        $c = str_replace(['{$ch}', '$ch'], ['zone', 'zone'], $col[1]);
+        if (!in_array($c, $lifecycle, true) && !in_array(str_replace('zone_', 'conf_', $c), $lifecycle, true)) {
+            $badSet[] = "{$m[1]}.$c";
+        }
+    }
+    if (preg_match("/(status\s*=\s*'(running|sending)'|_sync\s*=\s*'sending'|outcome\s+IS\s+NULL)/i", $m[3]) !== 1) {
+        $unguarded[] = $m[1] . ': WHERE' . substr(trim($m[3]), 0, 60);
+    }
+}
+T::ok(count($updates) >= 8, 'R12', 'UPDATE-Anweisungen des Ledgers gefunden (' . count($updates) . ')');
+T::eq([], $badSet, 'R12b', 'UPDATE ändert ausschließlich Lebenszyklusfelder, nie Registrierungsdaten (J4a)');
+T::eq([], $unguarded, 'R12c', 'jedes UPDATE nur aus dem offenen Zustand (bedingter Übergang, kein Überschreiben eines Endzustands)');
+T::ok(preg_match('/DELETE\s+FROM/i', $ledger) !== 1, 'R12d', 'Ledger löscht nie (append-only, E8)');
+// J2-Reihenfolge im Generator: Registrierung vor dem Serial-Update und vor dem Commit
+$gen = (string)file_get_contents("$app/web/inc/deploy/bind_file_generator.php");
+$posHook = strpos($gen, '$journal_info = $journal([');
+$posSerial = strpos($gen, 'UPDATE zones SET soa_serial');
+$posCheck = strpos($gen, "if (strpos((string)\$check_output, 'loaded serial') === false)");
+T::ok($posHook !== false && $posSerial !== false && $posCheck !== false && $posCheck < $posHook && $posHook < $posSerial, 'R13', 'Generator: named-checkzone → Versuch registrieren (J2) → Serial-Update → Commit');
+// J1/J6 vor jedem Seiteneffekt im PublishService
+$ps = (string)file_get_contents("$app/web/inc/app/publish/PublishService.php");
+$posOpenAll = strpos($ps, '$journal = $this->openJournal($ledger, function () use ($actor)');
+$posClaimAll = strpos($ps, 'UPDATE system_status SET bind_dirty = 2');
+$posOpenZone = strpos($ps, '$journal = $this->openJournal($ledger, static fn (): array => [');
+$posProcZone = strpos($ps, '$this->processZone($zoneId, $zoneName, false, $runState);');
+T::ok($posOpenAll !== false && $posClaimAll !== false && $posOpenAll < $posClaimAll, 'R14', 'Publish All: J6/J1 vor der Übernahme von bind_dirty/changed');
+T::ok($posOpenZone !== false && $posProcZone !== false && $posOpenZone < $posProcZone, 'R14b', 'Publish Zone: J6/J1 vor der Zonenverarbeitung');
+$open = (string)substr($ps, (int)strpos($ps, 'private function openJournal('), 900);
+T::ok(strpos($open, '->abandonStale()') !== false && strpos($open, '->abandonStale()') < strpos($open, '->registerRun('), 'R14c', 'J6 vor J1');
 T::finish('static');

@@ -102,7 +102,7 @@ final class BindAgentClient
      * @param array<string, mixed> $payload
      * @param int|null $connectTimeout Sekunden; null = nicht gesetzt (curl-Standard)
      *
-     * @return array{body: string|false, httpCode: int, curlError: string}
+     * @return array{body: string|false, httpCode: int, curlError: string, curlErrno: int, tlsConfigError: bool}
      */
     public function postJson(?string $apiIp, string $endpoint, string $token, array $payload, ?int $connectTimeout, int $timeout): array
     {
@@ -112,7 +112,7 @@ final class BindAgentClient
     /**
      * GET-Anfrage (z. B. Monitoring: system/status, zones/conf_check) mit denselben Headern wie bisher.
      *
-     * @return array{body: string|false, httpCode: int, curlError: string}
+     * @return array{body: string|false, httpCode: int, curlError: string, curlErrno: int, tlsConfigError: bool}
      */
     public function get(?string $apiIp, string $endpoint, string $token, ?int $connectTimeout, int $timeout): array
     {
@@ -121,13 +121,13 @@ final class BindAgentClient
 
     /**
      * @param array<string, mixed>|null $payload null = GET, sonst POST mit JSON
-     * @return array{body: string|false, httpCode: int, curlError: string}
+     * @return array{body: string|false, httpCode: int, curlError: string, curlErrno: int, tlsConfigError: bool}
      */
     private function request(?string $apiIp, string $endpoint, string $token, ?array $payload, ?int $connectTimeout, int $timeout): array
     {
         // S42: ungültige Vertrauensstellung → kein Verbindungsaufbau (Fail-Closed), keine Geheimnisse in der Meldung
         if ($this->tlsConfigError !== null) {
-            return ['body' => false, 'httpCode' => 0, 'curlError' => $this->tlsConfigError];
+            return ['body' => false, 'httpCode' => 0, 'curlError' => $this->tlsConfigError, 'curlErrno' => 0, 'tlsConfigError' => true];
         }
 
         $ch = curl_init($this->url($apiIp, $endpoint));
@@ -158,7 +158,10 @@ final class BindAgentClient
         $body = curl_exec($ch);
         $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
+        $curlErrno = curl_errno($ch);
 
-        return ['body' => is_string($body) ? $body : false, 'httpCode' => $httpCode, 'curlError' => $curlError];
+        // curlErrno und tlsConfigError (AP1/H2d, additiv): Einordnung für das Publish-Journal (PublishTargetClassifier)
+        return ['body' => is_string($body) ? $body : false, 'httpCode' => $httpCode, 'curlError' => $curlError,
+            'curlErrno' => $curlErrno, 'tlsConfigError' => false];
     }
 }

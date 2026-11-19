@@ -6,7 +6,7 @@ Stand: 13.11.2026, Basis `main` = `2a077a2` (nach Paket 6); **Core-Abschluss** m
 **Einordnung ns1/ns2 (Klarstellung 18.11.2026):** ns1 (192.168.53.122) und ns2 (192.168.53.125) sind die dedizierten Entwicklungs- und Testmaschinen des Projekts, keine externen Produktivsysteme. „Produktiv“, „Produktivstand“, „Produktivübernahme“ und „Produktion“ bezeichnen in diesem Dokument den dort installierten und abgenommenen Softwarestand. Die historischen Beschreibungen der Abnahmen bleiben unverändert.
 
 **Folgearchitektur:** Änderungshistorie, Versionsstände, Discard und Restore sind in [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) beschrieben (Architektur AP1/H1 freigegeben am 18.11.2026; umgesetzt sind H2a – History-Grundtabellen mit Migration 002, `SchemaCheck`-Erweiterung, Snapshot/Diff/Leser unter `web/inc/app/history/`, Baseline-CLI – H2b – `ZoneHistoryRecorder` in allen DNS-relevanten Schreibpfaden mit Migration 003 – und H2c – Audit-Ereignisse
-`audit_events` mit Migration 004, `AuditPolicy`/`AuditRecorder` in den Verwaltungspfaden). Die Lock-Reihenfolge ist mit H2b um `zone_history_state` erweitert (dort Abschnitt 5b und R-H9); die Erweiterungen der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den Meilensteinen H2d–H5 und AS.
+`audit_events` mit Migration 004, `AuditPolicy`/`AuditRecorder` in den Verwaltungspfaden – und H2d – Publish-Journal mit Migration 005, `PublishLedger`, Hash-Verträgen und strukturierten Zielergebnissen; `PublishBackend` additiv um `bindJournal()` erweitert, Distributoren mit `targets`). Die Lock-Reihenfolge ist mit H2b um `zone_history_state` erweitert (dort Abschnitt 5b und R-H9); das Journal ändert sie nicht (Abschnitt 5d: Journal-Schreibzugriffe nur im Publish-Lauf, nie aus Fachtransaktionen). Die übrigen Erweiterungen der Backend-Schnittstellen (Abschnitt 17) gelten erst mit den Meilensteinen H3–H5 und AS.
 
 ## 0. Ergebnis (Paket 6, Meilenstein abgeschlossen)
 
@@ -140,6 +140,10 @@ Keine neuen Core-Baustellen; als Nächstes folgt die UI-Modernisierung.
   - Historie (AP1/H2b): nach **allen** Zonensperren `zone_history_state` (X, vorhandene Zeilen, aufsteigend) und der
     Vorher-Snapshot (S); kein nicht sperrendes Lesen davor. Fehlende Heads entstehen vorher in eigener Transaktion.
     Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5b.
+  - Publish-Journal (AP1/H2d): Publish-Lock → laufeigene Sperre (Identitätsnachweis) → J6/J1 im Autocommit vor jedem
+    Seiteneffekt; in der Generator-Transaktion nach `zones` (X) nur lesend und INSERTs in `zone_publish_attempts`/
+    `zone_publish_targets` vor dem Serial-Commit; Ergebnisse im Autocommit. Einzelheiten: `ARCHITECTURE_HISTORY.md`,
+    Abschnitt 5d.
   - Audit (AP1/H2c): `audit_events`-INSERTs zuletzt vor dem Commit (nach den Historien-INSERTs); bis dahin nur
     sperrendes Lesen des Akteursnamens. Serveränderungen prüfen DNS-Relevanz und `active` auf dem gesperrten Stand
     (Abbruch `topology_locked`). Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5c.
