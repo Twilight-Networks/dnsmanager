@@ -583,7 +583,8 @@ Web-Konfiguration (AS4) ist eine zusätzliche, keine ersetzende Prüfung.
 
 **Modi (E82, Klarstellung E97 nach Review AS1)** – Die Modi steuern ausschließlich die **Fencing-Prüfung**, nie die
 Persistenz- und Integritätssicherung. `fencing_mode` fehlt ⇒ `off`: keine Fencing-Prüfung, Fencing-Felder werden
-ignoriert, H wird weder gelesen noch geschrieben, Antworten ohne Fehlermarke unverändert. `observe`: Prüfung und
+ignoriert, die schreibenden Endpunkte lesen und schreiben H nicht; Antworten sind unverändert, solange `posix` vorhanden
+ist und keine Fehlermarke vorliegt. `observe`: Prüfung und
 Fortschreiben von H wie `enforce`, Fencing-Gründe (Token, Domäne, Höchststand) werden nicht abgelehnt; jede Antwort nach
 der Prüfung enthält zusätzlich `fence` (`mode`, `decision` accept/would_reject/reject, `code`, `token`, `high_before`,
 `high_after`), Gründe zusätzlich im PHP-Log `[fence]`. `enforce`: fail-closed. Unbekannter Wert ⇒
@@ -591,7 +592,8 @@ der Prüfung enthält zusätzlich `fence` (`mode`, `decision` accept/would_rejec
 (`fence_fault`); in den Modi, die H verwenden (`observe`, `enforce`), brechen außerdem ein nicht lesbarer oder ungültiger
 Höchststand (`fence_invalid`) und ein gescheitertes dauerhaftes Fortschreiben von H (`fence_persist_failed`) die Anfrage
 ohne Änderung ab – das sind Integritätsfehler des gespeicherten Zustands, keine Fencing-Gründe; `fsync`-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade
-der Endpunkte (E95). `system/status` meldet auch in `off` eine vorhandene Marke (`fencing.state = fault`).
+der Endpunkte (E95). Ohne PHP-Erweiterung `posix` lehnt der Agent in jedem Modus jeden schreibenden Aufruf ab, noch
+vor der Fehlermarke (`agent_requirement_missing`, E100). `system/status` meldet beides auch in `off` (siehe unten).
 
 **Endpunkte (F3)** – Prüfung unmittelbar nach dem Erwerb des `flock` und vor jeder Änderung; Anfragefelder
 `fence_token` (JSON-Zahl oder Dezimalzeichenkette) und `fence_domain`. Ablehnungen lassen den Bestand unverändert (kein
@@ -600,7 +602,8 @@ Reload; die vor dem Lock geschriebene Temp-Datei von `zone_sync` wird entfernt).
 | Code | HTTP | Bedeutung |
 |---|---|---|
 | `fence_misconfigured` | 503 | Modus unbekannt, `fence_domain` fehlt oder ungültig |
-| `fence_fault` | 503 | Fehlermarke vorhanden |
+| `agent_requirement_missing` | 503 | PHP-Erweiterung `posix` fehlt (E100); in jedem Modus, vor allen anderen Prüfungen |
+| `fence_fault` | 503 | Fehlermarke vorhanden oder ihre Existenz nicht prüfbar (E97, E99); in jedem Modus |
 | `fence_token_missing` / `fence_token_invalid` | 400 | Token oder Domäne fehlt bzw. ungültig |
 | `fence_domain_mismatch` | 409 | Anfrage- oder gespeicherte Domäne ≠ konfigurierte Domäne |
 | `fence_uninitialized` | 409 | H fehlt (Initialisierung nur per CLI) |
@@ -616,8 +619,12 @@ wegen `rollback = failed` als `unknown` ein; eigene Codes im Journal folgen mit 
 **Dauerhaftigkeit des Bestands (E84, E95)** – In allen Modi, auch `off`: Zonen-Temp-Datei und alle atomar ersetzten
 Dateien (`<zone>.conf`, `zones.conf`) werden vor dem `rename` mit `fsync` geschrieben; die betroffenen Verzeichnisse
 werden vor dem Reload synchronisiert (`conf_sync` mit Rollback bei Fehler, `zone_cleanup` als unvollständiger Cleanup mit
-`rndc`). E95: `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch (Golden G01);
-abweichend nur, wenn `fsync` scheitert – dort meldete der bisherige Agent einen nicht dauerhaften Erfolg.
+`rndc`). E95: `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen
+Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend:
+gescheitertes `fsync` (E95; der bisherige Agent meldete dort einen nicht dauerhaften Erfolg), Lesefehler des
+Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung,
+verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder
+Bestandsdatei (E99), fehlende PHP-Erweiterung `posix` (E100).
 
 **Befund S43 (behoben mit AS1)** – Die Fehlerinjektion zeigte, dass `glob()` bei einem Lesefehler des
 Konfigurationsverzeichnisses eine leere Liste liefert: `conf_sync` hätte `zones.conf` ohne Includes geschrieben und
@@ -665,9 +672,13 @@ L1b/L2b mit neutralisiertem Abgleich: der Nachweis greift allein; L7/L8: nicht e
 Durchlauf verkürzt – hier greift allein der Abgleich von S43), Mutationsproben M16–M21. Beide Schichten sind damit
 jeweils einzeln nachgewiesen.
 
-**`system/status` (I-A5, Teil AS1)** – in `observe`/`enforce` zusätzlich `capabilities` (`fencing`, `durable_writes`)
-und `fencing` (`mode`, `domain`, `state` ok/uninitialized/invalid/fault/domain_mismatch/misconfigured, `high`,
-`fault`); in `off` unverändert. HTTP-Status und BIND-Auswertung unverändert.
+**`system/status` (I-A5, Teil AS1)** – zusätzlich `capabilities` (`fencing`, `durable_writes`) und `fencing` (`mode`,
+`domain`, `state`, `high`, `fault`): in `observe`/`enforce` immer; in `off` nur, wenn Schreibvorgänge gesperrt sind –
+bei vorhandener oder nicht prüfbarer Fehlermarke (`state = fault`) oder fehlender PHP-Erweiterung `posix`
+(`state = requirement_missing`); sonst ist die Antwort in `off` unverändert. `state` in dieser Rangfolge:
+`requirement_missing` (`high` und `fault` dann `null`), `fault`, `misconfigured`, `uninitialized`, `invalid`,
+`domain_mismatch`, `ok`. Zur Anzeige liest `system/status` H, auch in `off`, wenn eine Fehlermarke gemeldet wird; die
+schreibenden Endpunkte lesen H in `off` nie. HTTP-Status und BIND-Auswertung unverändert.
 
 **Lokale CLI (E81)** – `scripts/agent_fence-cli.php` (außerhalb des per Apache erreichbaren Agent-Baums), nur als
 Eigentümer des Zonenverzeichnisses, unter demselben `flock`: `status`; `init --domain --high` (nur ohne H und ohne
@@ -1108,10 +1119,10 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E92 | Cleanup-Verifikation: entfernte Zonen müssen `REFUSED` liefern (Verhalten nach Entfernen aus der Konfiguration in AS2 zu prüfen) | vorgeschlagen, AS2 |
 | E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
 | E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | entschieden (AS0), Umsetzung AS2 |
-| E95 | `fsync` in allen Modi. `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend: gescheitertes `fsync` (E95), Lesefehler des Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung, verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder Bestandsdatei (E99) | umgesetzt (AS1) – zur Bestätigung im Review |
-| E96 | Befund S43: `listConfFiles()` (glob-Liste, Lesefehlererkennung über `scandir()` und Abgleich) in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall); ergänzt durch E98 (gleichartige Verkürzung beider Durchläufe), einzeln nachgewiesen durch L7/L8 | umgesetzt (AS1) – zur Bestätigung im Review |
-| E97 | Klarstellung E90/E95 (Review AS1): Modi steuern nur die Fencing-Prüfung; Fehlermarke sperrt alle drei schreibenden Endpunkte in jedem Modus (auch `off`); Integritätsfehler von H (unlesbar/ungültig/nicht prüfbar, Persistenzfehler) brechen auch in `observe` ab; in `off` wird H weder gelesen noch geschrieben, geprüft wird nur die Fehlermarke; `fsync`-Fehler modusunabhängig; `system/status` meldet die Marke auch in `off` | umgesetzt (AS1, Nachtrag) |
-| E98 | Vollständigkeit der Auflistung (Review AS1, S43-Ergänzung): bisherige `zones.conf` nur vollständig gelesen (Länge = `fstat`), jedes bisherige Include muss erhalten bleiben (Cleanup: außer selbst erkannten Verwaisten), sonst `listing_incomplete` ohne Änderung und Reload. Verwaiste Include-Zeilen sperren `conf_sync` und `zone_cleanup` fail-closed (`zone_sync` scheitert dann bereits am bestehenden `named-checkconf`-Preflight), bis sie nach `AGENT_FENCING.md` Abschnitt 6 bereinigt sind: benötigte Zone durch erneute Veröffentlichung (Selbstheilung über `conf_sync` dieser Zone) bzw. Vorlage, nicht benötigte Zone durch Entfernen der Zeile unter der Agent-Sperre; BIND bedient währenddessen den zuletzt geladenen Stand | umgesetzt (AS1, Nachtrag) – zur Bestätigung im Review |
+| E95 | `fsync` in allen Modi. `off` ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend: gescheitertes `fsync` (E95), Lesefehler des Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung, verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder Bestandsdatei (E99), fehlende PHP-Erweiterung `posix` (E100) | umgesetzt (AS1) – akzeptiert |
+| E96 | Befund S43: `listConfFiles()` (glob-Liste, Lesefehlererkennung über `scandir()` und Abgleich) in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall); ergänzt durch E98 (gleichartige Verkürzung beider Durchläufe), einzeln nachgewiesen durch L7/L8 | umgesetzt (AS1) – akzeptiert |
+| E97 | Klarstellung E90/E95 (Review AS1): Modi steuern nur die Fencing-Prüfung; Fehlermarke sperrt alle drei schreibenden Endpunkte in jedem Modus (auch `off`); Integritätsfehler von H (unlesbar/ungültig/nicht prüfbar, Persistenzfehler) brechen auch in `observe` ab; in `off` lesen und schreiben die schreibenden Endpunkte H nicht, geprüft wird nur die Fehlermarke (`system/status` liest H in `off` nur zur Anzeige bei gemeldeter Fehlermarke); `fsync`-Fehler modusunabhängig; `system/status` meldet die Marke auch in `off` | umgesetzt (AS1, Nachtrag) |
+| E98 | Vollständigkeit der Auflistung (Review AS1, S43-Ergänzung): bisherige `zones.conf` nur vollständig gelesen (Länge = `fstat`), jedes bisherige Include muss erhalten bleiben (Cleanup: außer selbst erkannten Verwaisten), sonst `listing_incomplete` ohne Änderung und Reload. Verwaiste Include-Zeilen sperren `conf_sync` und `zone_cleanup` fail-closed (`zone_sync` scheitert dann bereits am bestehenden `named-checkconf`-Preflight), bis sie nach `AGENT_FENCING.md` Abschnitt 6 bereinigt sind: benötigte Zone durch erneute Veröffentlichung (Selbstheilung über `conf_sync` dieser Zone) bzw. Vorlage, nicht benötigte Zone durch Entfernen der Zeile unter der Agent-Sperre; BIND bedient währenddessen den zuletzt geladenen Stand | umgesetzt (AS1, Nachtrag) – akzeptiert |
 | E99 | Nicht prüfbare Existenz (Review AS1, Nachtrag): `file_exists()` liefert bei jedem `stat`-Fehler „nicht vorhanden“ (nachgewiesen). `pathState()` unterscheidet über `posix_access()` und `errno` vorhanden / nicht vorhanden (nur ENOENT) / nicht prüfbar; „nicht prüfbar“ gilt fail-closed: Fehlermarke ⇒ vorhanden (alle Modi), H ⇒ `fence_invalid`, Sicherung von `<zone>.conf`/`zones.conf` ⇒ Abbruch ohne Änderung, Rollback und Entfernen verwaister Dateien ⇒ nie als entfernt gewertet; ohne `posix` kein Rückfall (E100) | umgesetzt (AS1, Nachtrag) – akzeptiert |
 | E100 | `ext-posix` ist verbindliche Agent-Voraussetzung (Abnahme AS1): ohne sie lehnt `agentFenceCheck()` in jedem Modus jeden schreibenden Aufruf mit `agent_requirement_missing` (503) ab, `pathState()` liefert „nicht prüfbar“ (kein Rückfall auf `file_exists()`), `system/status` meldet `requirement_missing` auch in `off`, die CLI verweigert; README und `AGENT_FENCING.md` nennen die Voraussetzung | umgesetzt (AS1, Abnahme) |
 
@@ -1127,6 +1138,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
+| 19.11.2026 | Abnahme AS1, Bereinigung nach Preflight: Abschnitt 5e (Modi, Codetabelle mit `agent_requirement_missing`, Dauerhaftigkeit/E95, `system/status`) und Register E95/E97 an das umgesetzte Verhalten angeglichen; nur Dokumentation und Kommentare |
 | 19.11.2026 | Abnahme AS1: E100 (`ext-posix` verbindlich, kein Rückfall, Prüfung bei jedem schreibenden Aufruf; X7, M26/M27) |
 | 19.11.2026 | Abnahmevorbereitung AS1: E99 (nicht prüfbare Existenz fail-closed, Gruppe X, M25), E95 abschließend präzisiert, E98 um Wiederherstellungsweg ergänzt (`AGENT_FENCING.md` Abschnitt 6, auf ns2 nachgewiesen), Register numerisch geordnet |
 | 19.11.2026 | Review AS1: E97 (Fehlermarke und Persistenzfehler in jedem Modus, `off` deaktiviert nur die Fencing-Prüfung) und E98 (Vollständigkeitsnachweis der Verzeichnisauflistung, vollständiges Lesen von `zones.conf`); Restgrenze von S43 geschlossen; Gruppe L, Mutationen M19–M24 |

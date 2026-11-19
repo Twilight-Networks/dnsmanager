@@ -61,7 +61,8 @@ $response = [
     'bind' => $bindStatus
 ];
 
-// === AS1: Fähigkeiten und Fencing-Zustand (nur in observe/enforce; im Modus off unveränderte Antwort) ===
+// === AS1: Fähigkeiten und Fencing-Zustand – in observe/enforce immer; in off nur bei gesperrten Schreibvorgängen
+// (Fehlermarke vorhanden oder nicht prüfbar, fehlende PHP-Erweiterung posix), sonst unveränderte Antwort ===
 $fenceStatus = agentFenceStatus($config);
 if ($fenceStatus !== null) {
     $response['capabilities'] = ['fencing' => 1, 'durable_writes' => 1];

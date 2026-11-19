@@ -54,8 +54,13 @@ return [
     /** ---------------------------------------
      *  Fencing (Meilenstein AS, docs/ARCHITECTURE_HISTORY.md Abschnitt 5e)
      * --------------------------------------- */
-    // Modus: 'off' (Standard, wenn nicht gesetzt: Verhalten wie ohne Fencing), 'observe' (prüfen und Höchststand
-    // fortschreiben, nie ablehnen), 'enforce' (fail-closed). Ein unbekannter Wert sperrt alle Schreibvorgänge.
+    // Modus (steuert nur die Fencing-Prüfung, nie die Integritätssicherung):
+    // - 'off' (Standard, wenn nicht gesetzt): keine Fencing-Prüfung, der Höchststand wird nicht verwendet;
+    // - 'observe': prüfen und Höchststand fortschreiben, Fencing-Gründe (Token, Domäne, Höchststand) nicht ablehnen,
+    //   aber Integritätsfehler (Höchststand ungültig oder nicht dauerhaft speicherbar) ablehnen;
+    // - 'enforce': fail-closed.
+    // In JEDEM Modus sperren eine Fehlermarke (.dnsmanager-fence.fault) und eine fehlende PHP-Erweiterung posix alle
+    // Schreibvorgänge (docs/AGENT_FENCING.md). Ein unbekannter Wert sperrt alle Schreibvorgänge.
     // 'fencing_mode' => 'off',
 
     // Fencing-Domäne der Installation (UUID in Kleinbuchstaben). Muss der Domäne der Datenbank dieser Installation

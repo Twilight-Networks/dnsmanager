@@ -24,7 +24,8 @@
  * @return never            Gibt niemals zurück (exit nach Ausgabe)
  */
 function sendJsonResponse(int $statusCode, array $data): never {
-    // AS1: Zusatzangaben (z. B. Fencing-Bericht) nur, wenn sie gesetzt wurden – im Modus off nie (Antwort unverändert)
+    // AS1: Zusatzangaben (z. B. Fencing-Bericht) nur, wenn sie gesetzt wurden – im Modus off nur bei einer Ablehnung
+    // wegen Fehlermarke oder fehlender PHP-Erweiterung posix, sonst ist die Antwort unverändert
     $data += agentResponseAttach();
     http_response_code($statusCode);
     header('Content-Type: application/json');

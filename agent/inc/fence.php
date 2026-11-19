@@ -12,20 +12,25 @@
  * - E90 (Write-ahead-Fault-Latch): Bevor H geändert wird, wird die Fehlermarke <zone_data_dir>/.dnsmanager-fence.fault
  *   dauerhaft angelegt (Datei-fsync, Verzeichnis-fsync). Erst nach vollständig erfolgreicher Persistenz des neuen
  *   Werts (Temp-Datei, fsync, rename, Verzeichnis-fsync) wird sie entfernt (unlink, Verzeichnis-fsync). Jede
- *   vorhandene Marke – auch nach Absturz oder fsync-Fehler – sperrt im Modus enforce alle Schreibvorgänge, bis ein
+ *   vorhandene Marke – auch nach Absturz oder fsync-Fehler – sperrt in JEDEM Modus (E97) alle Schreibvorgänge, bis ein
  *   Administrator sie lokal per CLI nach Prüfung von H aufhebt. Damit ist jeder Zustand, in dem der Seitencache von
  *   der Platte abweichen könnte, durch eine dauerhafte Marke abgedeckt.
  * - E74: Der Agent prüft selbst die lokal konfigurierte Domäne (fence_domain): Anfrage-Domäne und gespeicherte
  *   Domäne müssen ihr entsprechen. Schutzgrenze: Ein vollständiger Installationsklon (Datenbank, Web-Konfiguration,
  *   Agent-Konfiguration und H-Datei) ist davon nicht unterscheidbar (siehe Abschnitt 5e).
  *
- * Modi (api_config.php 'fencing_mode'): fehlt ⇒ off (keine Fencing-Prüfung, H wird weder gelesen noch geschrieben);
- * observe (prüfen, H fortschreiben, Fencing-Gründe nicht ablehnen, Ergebnis in der Antwort); enforce (fail-closed).
- * Ein unbekannter Wert gilt als Fehlkonfiguration und wird wie enforce mit fence_misconfigured behandelt.
+ * Modi (api_config.php 'fencing_mode'): fehlt ⇒ off (keine Fencing-Prüfung; die schreibenden Endpunkte lesen und
+ * schreiben H nicht); observe (prüfen, H fortschreiben, Fencing-Gründe – Token, Domäne, Höchststand, fehlende
+ * Initialisierung, Konfiguration – nicht ablehnen, Ergebnis in der Antwort); enforce (fail-closed). Ein unbekannter
+ * Wert gilt als Fehlkonfiguration und wird wie enforce mit fence_misconfigured behandelt.
  * E97 (Klarstellung zu E90/E95): Die Modi steuern nur die Fencing-PRÜFUNG, nie die Persistenz- und
- * Integritätssicherung. In JEDEM Modus – auch off – sperrt eine vorhandene Fehlermarke alle drei schreibenden
- * Endpunkte (fence_fault); in observe und enforce brechen außerdem ein unlesbarer bzw. ungültiger Höchststand
- * (fence_invalid) und ein gescheitertes dauerhaftes Fortschreiben von H (fence_persist_failed) ohne Änderung ab. fsync-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade der Endpunkte.
+ * Integritätssicherung. In JEDEM Modus – auch off – sperrt eine vorhandene oder nicht prüfbare Fehlermarke (E99) alle
+ * drei schreibenden Endpunkte (fence_fault); in observe und enforce brechen außerdem ein unlesbarer, ungültiger oder
+ * nicht prüfbarer Höchststand (fence_invalid) und ein gescheitertes dauerhaftes Fortschreiben von H
+ * (fence_persist_failed) ohne Änderung ab. fsync-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade
+ * der Endpunkte.
+ * E100: Ohne PHP-Erweiterung posix lehnt agentFenceCheck() in jedem Modus jeden schreibenden Aufruf ab
+ * (agent_requirement_missing), noch vor der Fehlermarke; es gibt keinen Rückfall.
  *
  * Die Datei definiert ausschließlich Funktionen und Konstanten (kein Seiteneffekt beim Einbinden; sie liegt im per
  * Apache erreichbaren Agent-Baum).
@@ -331,10 +336,12 @@ function agentFenceCheck(array $config, mixed $input): array {
 }
 
 /**
- * Fencing-Zustand für system/status (ohne Seiteneffekt, ohne Lock). Im Modus off null (Antwort unverändert), außer
- * eine Fehlermarke sperrt die Schreibvorgänge (E97): dann state = fault.
+ * Fencing-Zustand für system/status (ohne Seiteneffekt, ohne Lock). In observe/enforce immer; im Modus off null
+ * (Antwort unverändert), außer die Schreibvorgänge sind gesperrt: fehlende PHP-Erweiterung posix (E100,
+ * state = requirement_missing, high/fault = null) bzw. vorhandene oder nicht prüfbare Fehlermarke (E97/E99,
+ * state = fault). Zur Anzeige wird H dabei gelesen, auch in off bei gemeldeter Fehlermarke.
  *
- * @return array{mode: string, domain: ?string, state: string, high: ?int, fault: bool}|null
+ * @return array{mode: string, domain: ?string, state: string, high: ?int, fault: ?bool}|null
  */
 function agentFenceStatus(array $config): ?array {
     $mode = fenceMode($config);
