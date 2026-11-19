@@ -19,9 +19,13 @@
  *   Domäne müssen ihr entsprechen. Schutzgrenze: Ein vollständiger Installationsklon (Datenbank, Web-Konfiguration,
  *   Agent-Konfiguration und H-Datei) ist davon nicht unterscheidbar (siehe Abschnitt 5e).
  *
- * Modi (api_config.php 'fencing_mode'): fehlt ⇒ off (unverändertes Verhalten, H wird weder gelesen noch geschrieben);
- * observe (prüfen, H fortschreiben, nie ablehnen, Ergebnis in der Antwort); enforce (fail-closed). Ein unbekannter
- * Wert gilt als Fehlkonfiguration und wird wie enforce mit fence_misconfigured behandelt.
+ * Modi (api_config.php 'fencing_mode'): fehlt ⇒ off (keine Fencing-Prüfung, H wird weder gelesen noch geschrieben);
+ * observe (prüfen, H fortschreiben, Fencing-Gründe nicht ablehnen, Ergebnis in der Antwort); enforce (fail-closed).
+ * Ein unbekannter Wert gilt als Fehlkonfiguration und wird wie enforce mit fence_misconfigured behandelt.
+ * E97 (Klarstellung zu E90/E95): Die Modi steuern nur die Fencing-PRÜFUNG, nie die Persistenz- und
+ * Integritätssicherung. In JEDEM Modus – auch off – sperrt eine vorhandene Fehlermarke alle drei schreibenden
+ * Endpunkte (fence_fault), und ein gescheitertes dauerhaftes Fortschreiben von H bricht die Anfrage ohne Änderung ab
+ * (fence_persist_failed). fsync-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade der Endpunkte.
  *
  * Die Datei definiert ausschließlich Funktionen und Konstanten (kein Seiteneffekt beim Einbinden; sie liegt im per
  * Apache erreichbaren Agent-Baum).
@@ -243,6 +247,20 @@ function fenceEvaluate(array $config, string $mode, mixed $input): array {
  */
 function agentFenceCheck(array $config, mixed $input): array {
     $mode = fenceMode($config);
+
+    // E97: Fehlermarke sperrt in jedem Modus (auch off) – Integritätssicherung, keine Fencing-Prüfung
+    if (fenceLatchPresent($config)) {
+        $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault', 'token' => null,
+            'high_before' => null, 'high_after' => null];
+        error_log(sprintf('[fence] mode=%s decision=reject code=fence_fault', $mode));
+        agentResponseAttach('fence', $report);
+        return ['allow' => false, 'http' => 503, 'body' => [
+            'status'  => 'error',
+            'message' => 'Fencing: Fehlermarke vorhanden – Schreibvorgänge gesperrt bis zur lokalen Prüfung (CLI clear-fault)',
+            'code'    => 'fence_fault',
+        ]];
+    }
+
     if ($mode === 'off') {
         return ['allow' => true, 'http' => 200, 'body' => null];
     }
@@ -257,6 +275,7 @@ function agentFenceCheck(array $config, mixed $input): array {
         'high_after'  => $e['high'],
     ];
 
+    $persistFailed = false;
     if ($e['code'] === null && $e['raise']) {
         $persist = fencePersistHigh($config, (string)fenceConfiguredDomain($config), (int)$e['token']);
         if ($persist['ok']) {
@@ -267,17 +286,20 @@ function agentFenceCheck(array $config, mixed $input): array {
             $e['message'] = 'Fencing: Höchststand konnte nicht dauerhaft gespeichert werden (Schritt ' . $persist['step'] . ') – keine Änderung';
             $report['code'] = $e['code'];
             $report['step'] = $persist['step'];
+            $persistFailed = true;
         }
     }
 
+    // observe lehnt Fencing-Gründe nicht ab; ein Persistenzfehler bricht dagegen in jedem Modus ab (E97)
+    $reject = $e['code'] !== null && ($mode !== 'observe' || $persistFailed);
     if ($e['code'] !== null) {
-        $report['decision'] = $mode === 'observe' ? 'would_reject' : 'reject';
+        $report['decision'] = $reject ? 'reject' : 'would_reject';
         error_log(sprintf('[fence] mode=%s decision=%s code=%s token=%s high=%s', $mode, $report['decision'], $e['code'],
             $e['token'] ?? '-', $e['high'] ?? '-'));
     }
     agentResponseAttach('fence', $report);
 
-    if ($e['code'] !== null && $mode !== 'observe') {
+    if ($reject) {
         return ['allow' => false, 'http' => $e['http'], 'body' => [
             'status'  => 'error',
             'message' => $e['message'],
@@ -289,21 +311,22 @@ function agentFenceCheck(array $config, mixed $input): array {
 }
 
 /**
- * Fencing-Zustand für system/status (ohne Seiteneffekt, ohne Lock). null im Modus off (Antwort unverändert).
+ * Fencing-Zustand für system/status (ohne Seiteneffekt, ohne Lock). Im Modus off null (Antwort unverändert), außer
+ * eine Fehlermarke sperrt die Schreibvorgänge (E97): dann state = fault.
  *
  * @return array{mode: string, domain: ?string, state: string, high: ?int, fault: bool}|null
  */
 function agentFenceStatus(array $config): ?array {
     $mode = fenceMode($config);
-    if ($mode === 'off') {
+    $fault = fenceLatchPresent($config);
+    if ($mode === 'off' && !$fault) {
         return null;
     }
     $domain = fenceConfiguredDomain($config);
-    $fault = fenceLatchPresent($config);
     $h = fenceReadHigh($config);
     $state = match (true) {
-        $mode === 'invalid' || $domain === null => 'misconfigured',
         $fault                                  => 'fault',
+        $mode === 'invalid' || $domain === null => 'misconfigured',
         $h['state'] === 'missing'               => 'uninitialized',
         $h['state'] !== 'ok'                    => 'invalid',
         $h['domain'] !== $domain                => 'domain_mismatch',

@@ -12,7 +12,10 @@
 #   I  Fehlerinjektion (strace inject) für jeden einzelnen Persistenz- und Dateischritt der drei Endpunkte
 #   C  Absturzsimulation (strace SIGKILL vor jedem Schritt + dm-flakey drop_writes) und Stromausfall nach Abschluss
 #   G  off gegenüber dem bisherigen Agenten (Referenz-Checkout) beobachtbar identisch
+#   L  Vollständigkeit der Verzeichnisauflistung (getdents-Teilauflistung in beiden Durchläufen, verkürztes Lesen von
+#      zones.conf, verwaiste Include-Zeilen, Gegenproben ohne Fehlalarm) – E98
 #   M  Mutationsproben (jede Mutation muss mindestens einen Test scheitern lassen)
+#   I und C laufen für alle Modi (off, observe, enforce; Einschränkung mit --modes).
 #
 # Aufruf (root, Test-VM): as1_test.py --src <Checkout> --ref <Referenz-Checkout> --out <Ergebnisverzeichnis> [--groups FSICGM]
 # Voraussetzungen: php (CLI), strace, named-checkzone, named-checkconf, losetup, mkfs.ext4, dmsetup, dm_flakey.
@@ -45,6 +48,7 @@ SCENARIOS = None      # Einschränkung der Szenarien (Mutationsläufe)
 # Strengster ext4-Fall und deterministische Absturztests: keine Datenzuteilung beim rename (noauto_da_alloc) und
 # kein periodischer Journal-Commit innerhalb eines Falls (commit=300) – dauerhaft ist nur, was fsync festschreibt.
 MOUNT_OPTS = 'noauto_da_alloc,commit=300'
+MODES = ['enforce', 'observe', 'off']   # Modi für I und C (E97: Persistenz- und Integritätssicherung in jedem Modus)
 
 
 def log(msg):
@@ -288,7 +292,8 @@ class Server:
                '-S', f'127.0.0.1:{self.port}', '-t', box.agent]
         if strace:
             cmd = ['strace'] + (['-f'] if strace.get('follow') else []) + ['-y', '-qq', '-o', strace['out'], '-e', 'trace=' + ','.join(strace.get('trace', PERSIST_SYSCALLS))] \
-                + (['-e', strace['inject']] if strace.get('inject') else []) + cmd
+                + (['-e', strace['inject']] if strace.get('inject') else []) \
+                + [a for path in strace.get('paths', []) for a in ('-P', path)] + cmd
         # eigene Prozessgruppe: strace und PHP werden gemeinsam beendet (kein verwaister Server)
         self.p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         end = time.time() + 10
@@ -502,8 +507,9 @@ def group_f(box):
         f.write('test\n')
     r = call(box, 'zones/conf_sync.php', fc(box, 'e.as1.test', 20))
     fe = (r['json'] or {}).get('fence', {})
-    check(G, 'F08b observe mit Fehlermarke: angenommen, H unverändert', r['status'] == 200 and fe.get('code') == 'fence_fault'
-          and box.high() == (DOMAIN, 15), f"fence={fe}")
+    check(G, 'F08b observe mit Fehlermarke: abgelehnt (E97), H unverändert', r['status'] == 503 and code(r) == 'fence_fault'
+          and fe.get('decision') == 'reject' and box.high() == (DOMAIN, 15)
+          and not os.path.exists(os.path.join(box.confdir, 'e.as1.test.conf')), f"status={r['status']} fence={fe}")
     os.unlink(os.path.join(box.zones, '.dnsmanager-fence.fault'))
     # F09 system/status je Modus und Zustand
     box.config(None)
@@ -563,15 +569,50 @@ def group_f(box):
     r = call(box, 'zones/zone_cleanup.php', fcl(['a.as1.test'], 8))
     check(G, 'F12b Cleanup mit gültigem Token', r['status'] == 200 and not os.path.exists(os.path.join(box.confdir, 'b.as1.test.conf'))
           and box.high() == (DOMAIN, 8), f"{r['json']}")
+    # F13 (E97): Eine Fehlermarke sperrt in JEDEM Modus alle drei schreibenden Endpunkte – ohne Änderung, ohne Reload
+    latchp = os.path.join(box.zones, '.dnsmanager-fence.fault')
+    for mode in ['off', 'observe', 'enforce']:
+        box.reset(); box.config('enforce'); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
+        box.init_high(10)
+        box.config(mode)
+        with open(latchp, 'w') as f:
+            f.write('test\n')
+        for ep, body in [('zones/zone_sync.php', fz('a.as1.test', 2, 'x', 11)), ('zones/conf_sync.php', fc(box, 'c.as1.test', 11)),
+                         ('zones/zone_cleanup.php', fcl(['a.as1.test'], 11))]:
+            t0, n0 = box.tree(), box.rndc_calls()
+            r = call(box, ep, body)
+            check(G, f'F13 Fehlermarke {mode} {ep}', r['status'] == 503 and code(r) == 'fence_fault' and box.tree() == t0
+                  and box.rndc_calls() == n0 and box.high() == (DOMAIN, 10), f"status={r['status']} code={code(r)}")
+        r = call(box, 'system/status.php', method='GET')
+        fs = (r['json'] or {}).get('fencing') or {}
+        check(G, f'F13b status {mode} meldet Fehlermarke', fs.get('state') == 'fault' and fs.get('fault') is True and fs.get('mode') == mode, f'{fs}')
+        rc, d = box.cli_run('clear-fault', '--expect-high=10')
+        r = call(box, 'zones/zone_sync.php', fz('a.as1.test', 2, 'x', 11))
+        check(G, f'F13c {mode} nach clear-fault wieder schreibbar', rc == 0 and r['status'] == 200 and not box.latch(), f"rc={rc} status={r['status']}")
+    # F14 (E97): Scheitert das dauerhafte Fortschreiben von H (Verzeichnis unveränderlich), bricht auch observe ab
+    for ep, mk in [('zones/conf_sync.php', lambda: fc(box, 'c.as1.test', 12)), ('zones/zone_cleanup.php', lambda: fcl(['a.as1.test'], 12))]:
+        box.reset(); box.config('enforce'); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
+        box.init_high(10)
+        box.config('observe')
+        t0, n0 = box.tree(), box.rndc_calls()
+        sh(['chattr', '+i', box.zones])
+        try:
+            r = call(box, ep, mk())
+        finally:
+            sh(['chattr', '-i', box.zones])
+        fe = (r['json'] or {}).get('fence', {})
+        check(G, f'F14 observe Persistenzfehler bricht ab {ep}', r['status'] == 503 and code(r) == 'fence_persist_failed'
+              and fe.get('decision') == 'reject' and box.tree() == t0 and box.rndc_calls() == n0 and box.high() == (DOMAIN, 10),
+              f"status={r['status']} fence={fe}")
 
 
 # ------------------------------------------------------------------------------------------------------------------
 # Szenarien für S/I/C: Ausgangsbestand dauerhaft, dann eine Anfrage mit t > H (enforce)
 # ------------------------------------------------------------------------------------------------------------------
-def scenarios(box):
+def scenarios(box, mode='enforce'):
     def base():
         box.reset(); box.config('enforce'); box.put_zone('a.as1.test', 1, 'alt'); box.put_zone('b.as1.test', 1, 'alt')
-        sh('sync'); box.init_high(10); sh('sync')
+        sh('sync'); box.init_high(10); box.config(mode); sh('sync')
     all_ = {
         'zone_sync': (base, 'zones/zone_sync.php', lambda: fz('a.as1.test', 2, 'neu', 11)),
         'conf_sync': (base, 'zones/conf_sync.php', lambda: fc(box, 'c.as1.test', 11)),
@@ -716,7 +757,7 @@ def step_key(line):
     return m.group(1) + '(' + key
 
 
-def verify_after(box, name, t_old, r, label, G, post_crash=False):
+def verify_after(box, name, t_old, r, label, G, post_crash=False, mode='enforce'):
     t_now = box.tree()
     kind = state_kind(box, name, t_old, t_now)
     h = box.high()
@@ -725,18 +766,25 @@ def verify_after(box, name, t_old, r, label, G, post_crash=False):
     js = r.get('json') or {}
     status = r.get('status')
     problems = []
-    if h not in [(DOMAIN, 10), (DOMAIN, 11)]:
-        problems.append(f'H={h}')
-    if kind == 'new' and h != (DOMAIN, 11):
-        problems.append('Änderung ohne dauerhaftes Token')
-    if kind == 'mixed' and not (name == 'zone_cleanup' and h == (DOMAIN, 11)):
+    new_h = (DOMAIN, 10) if mode == 'off' else (DOMAIN, 11)   # off: H wird weder gelesen noch geschrieben
+    if mode == 'off':
+        if h != (DOMAIN, 10):
+            problems.append(f'H={h} (off darf H nicht ändern)')
+        if latch:
+            problems.append('Fehlermarke in off entstanden')
+    else:
+        if h not in [(DOMAIN, 10), (DOMAIN, 11)]:
+            problems.append(f'H={h}')
+        if kind == 'new' and h != (DOMAIN, 11):
+            problems.append('Änderung ohne dauerhaftes Token')
+    if kind == 'mixed' and not (name == 'zone_cleanup' and h == new_h):
         problems.append('Mischzustand')
     if not ok_other:
         problems.append(f'fremde Datei verändert: {bad}')
     zc = t_now.get('zones/zones.conf')
     if not post_crash:
         if status == 200:
-            if not (kind == 'new' and h == (DOMAIN, 11) and not latch):
+            if not (kind == 'new' and h == new_h and not latch):
                 problems.append('200 ohne vollständigen Zustand')
             if open(box.zonesconf).read() != box.expected_zonesconf():
                 problems.append('zones.conf bindet nicht genau die vorhandenen .conf-Dateien ein')
@@ -751,7 +799,7 @@ def verify_after(box, name, t_old, r, label, G, post_crash=False):
             # Ausnahme: Erst der Verzeichnis-fsync nach dem Entfernen der Marke ist gescheitert – H ist dann bereits
             # dauerhaft (high_dir_sync erfolgreich); die Marke kann nach einem Absturz nur wieder erscheinen.
             step = (js.get('fence') or {}).get('step')
-            if js.get('code') == 'fence_persist_failed' and not latch and h == (DOMAIN, 11) and step != 'latch_unlink_dir_sync':
+            if mode != 'off' and js.get('code') == 'fence_persist_failed' and not latch and h == (DOMAIN, 11) and step != 'latch_unlink_dir_sync':
                 problems.append('H erhöht, aber keine Fehlermarke')
     if zc is not None and post_crash:
         # zones.conf muss vollständig und gültig sein
@@ -762,9 +810,9 @@ def verify_after(box, name, t_old, r, label, G, post_crash=False):
 
 def group_i(box):
     G = 'I'
-    for name, (base, ep, mk) in scenarios(box).items():
+    for mode, name, (base, ep, mk) in [(m, n, v) for m in MODES for n, v in scenarios(box, m).items()]:
         pts = persist_points(box, name, base, ep, mk)
-        log(f'I {name}: {len(pts)} Schritte')
+        log(f'I {mode} {name}: {len(pts)} Schritte')
         for p in pts:
             err = INJECT_ERR[p['name']]
             # Socket-Reads des HTTP-Servers (TCP-Segmentierung) können die Ordnungszahl von read verschieben: bei einem
@@ -782,13 +830,13 @@ def group_i(box):
                 if same_path:
                     break
                 log(f"I {name} {p['name']}#{p['when']}: Fehltreffer (Versuch {attempt + 1}), wiederhole")
-            problems, kind, h, latch = verify_after(box, name, t_old, r, p['line'], G)
-            # Nach einem Fehler mit Fehlermarke muss die nächste Anfrage fail-closed sein
+            problems, kind, h, latch = verify_after(box, name, t_old, r, p['line'], G, mode=mode)
+            # Nach einem Fehler mit Fehlermarke muss die nächste Anfrage fail-closed sein (in jedem Modus, E97)
             if latch:
                 r2 = call(box, ep, mk())
                 if not (r2['status'] == 503 and code(r2) == 'fence_fault'):
                     problems.append('nach Fehlermarke nicht fail-closed')
-            check(G, f"I {name} {p['name']}#{p['when']} {err}", same_path and not problems,
+            check(G, f"I {mode} {name} {p['name']}#{p['when']} {err}", same_path and not problems,
                   f"{p['line'][:110]} ⇒ status={r.get('status')} code={code(r)} zustand={kind} H={h} marke={latch} {problems}"
                   + ('' if same_path else ' INJEKTION NICHT AM ERWARTETEN SCHRITT'))
 
@@ -798,7 +846,7 @@ def group_i(box):
 # ------------------------------------------------------------------------------------------------------------------
 def group_c(box, flakey):
     G = 'C'
-    for name, (base, ep, mk) in scenarios(box).items():
+    for mode, name, (base, ep, mk) in [(m, n, v) for m in MODES for n, v in scenarios(box, m).items()]:
         pts = persist_points(box, name, base, ep, mk)
         for p in pts + [None]:
             base()
@@ -811,9 +859,10 @@ def group_c(box, flakey):
                 r = call(box, ep, mk(), strace={'out': tr, 'inject': f"inject={p['name']}:signal=SIGKILL:when={p['when']}"})
                 label = f"SIGKILL vor {p['name']}#{p['when']} {p['line'][:90]}"
             flakey.power_loss()
-            problems, kind, h, latch = verify_after(box, name, t_old, {'status': None}, label, G, post_crash=True)
+            problems, kind, h, latch = verify_after(box, name, t_old, {'status': None}, label, G, post_crash=True, mode=mode)
+            new_h = (DOMAIN, 10) if mode == 'off' else (DOMAIN, 11)
             if p is None:
-                if not (r['status'] == 200 and kind == 'new' and h == (DOMAIN, 11) and not latch):
+                if not (r['status'] == 200 and kind == 'new' and h == new_h and not latch):
                     problems.append(f"bestätigte Änderung nicht dauerhaft (status={r['status']} zustand={kind} H={h} marke={latch})")
                 if open(box.zonesconf).read() != box.expected_zonesconf():
                     problems.append('bestätigte zones.conf nicht dauerhaft')
@@ -827,7 +876,106 @@ def group_c(box, flakey):
                 if not (last and last['name'] == p['name'] and ordn == p['when']
                         and step_key(last['line'].replace(box.bind, '<B>')) == step_key(p['line'])):
                     problems.append(f"Abbruch nicht am erwarteten Schritt ({last['line'][:80] if last else '-'})")
-            check(G, f"C {name} {label[:60]}", not problems, f"{label} ⇒ zustand={kind} H={h} marke={latch} {problems}")
+            check(G, f"C {mode} {name} {label[:60]}", not problems, f"{label} ⇒ zustand={kind} H={h} marke={latch} {problems}")
+
+
+# ------------------------------------------------------------------------------------------------------------------
+# Gruppe L – Vollständigkeit der Verzeichnisauflistung (E98)
+# ------------------------------------------------------------------------------------------------------------------
+L_ZONES = 2000   # so viele Einträge, dass jeder Verzeichnisdurchlauf mehrere getdents64-Aufrufe braucht
+
+
+def group_l(box_main):
+    G = 'L'
+    # Zweite Agentkopie, in der die erste Schicht (Abgleich scandir/glob in listConfFiles, S43) neutralisiert ist: so wird
+    # nachgewiesen, dass der Vollständigkeitsnachweis (E98) eine gleichartig verkürzte Auflistung allein abfängt.
+    nocheck_tree = os.path.join(os.path.dirname(box_main.d), 'nocheck-agent')
+    shutil.copytree(box_main.agent, nocheck_tree)
+    fu = os.path.join(nocheck_tree, 'inc', 'file_utils.php')
+    t = open(fu).read()
+    t = t.replace('    return $expected === $got ? $glob : false;', '    return $glob;')
+    open(fu, 'w').write(t)
+    box_nocheck = Box(os.path.dirname(box_main.d), box_main.src, 'lnocheck', os.path.dirname(box_main.bind), nocheck_tree)
+    box = box_main
+
+    def base_many(orphan):
+        box.reset(); box.config(None)
+        for i in range(L_ZONES):
+            with open(os.path.join(box.confdir, f'z{i:04d}.as1.test.conf'), 'w') as f:
+                f.write(box.conf_text(f'z{i:04d}.as1.test'))
+        if orphan:
+            box.put_zone('orph.as1.test', 1)
+        box.rebuild_zonesconf()
+        sh('sync')
+
+    def base_few():
+        box.reset(); box.config(None); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
+
+    def partial_listing(ep, body, label):
+        """getdents64 auf dem Konfigurationsverzeichnis: je Durchlauf (scandir, glob) den 2. Aufruf mit EIO beantworten."""
+        tr = os.path.join(OUT, 'l_base.txt')
+        call(box, ep, body(), strace={'out': tr, 'trace': ['getdents64'], 'paths': [box.confdir]})
+        n = len(trace_lines(tr, box.bind))
+        k = n // 2
+        if n == 0 or n % 2 or k < 3:
+            check(G, f'{label} Grundlage', False, f'getdents64-Aufrufe auf dem Verzeichnis: {n} (erwartet 2 Durchläufe mit ≥ 3 Aufrufen)')
+            return None
+        # Unter Injektion endet der 1. Durchlauf nach seinem 2. Aufruf; der 2. Durchlauf beginnt deshalb mit Aufruf 3 und
+        # wird mit seinem 2. Aufruf (= 4) verkürzt (k aus dem Ausgangslauf belegt nur, dass mehrere Aufrufe nötig sind).
+        return 'inject=getdents64:error=EIO:when=2..4+2', k
+
+    names = [f'z{i:04d}.as1.test' for i in range(L_ZONES)]
+    # L1 conf_sync / L2 zone_cleanup: beide Durchläufe verkürzt ⇒ Abbruch, bisherige Konfiguration bleibt, kein Reload.
+    # Variante a: vollständiger Agent (welche Schicht greift, ist zufallsabhängig – beide führen zu 500 ohne Änderung);
+    # Variante b: Abgleich neutralisiert ⇒ der Vollständigkeitsnachweis muss allein greifen (code listing_incomplete).
+    for variant, vbox in [('a', box_main), ('b', box_nocheck)]:
+        box = vbox
+        for lid, ep, mk, orphan in [('L1', 'zones/conf_sync.php', lambda: fc(box, 'neu.as1.test'), False),
+                                    ('L2', 'zones/zone_cleanup.php', lambda: fcl(names), True)]:
+            base_many(orphan)
+            inj = partial_listing(ep, mk, f'{lid}{variant}')
+            if not inj:
+                continue
+            base_many(orphan)
+            t0, n0 = box.tree(), box.rndc_calls()
+            tr = os.path.join(OUT, 'l_inj.txt')
+            r = call(box, ep, mk(), strace={'out': tr, 'trace': ['getdents64'], 'paths': [box.confdir], 'inject': inj[0]})
+            hits = sum(1 for l in open(tr) if '(INJECTED)' in l)
+            code_ok = code(r) == 'listing_incomplete' if variant == 'b' else True
+            check(G, f'{lid}{variant} {ep} Teilauflistung (getdents, beide Durchläufe)', hits == 2 and r['status'] == 500 and code_ok
+                  and box.tree() == t0 and box.rndc_calls() == n0,
+                  f"Injektionen={hits} je Durchlauf {inj[1]} Aufrufe status={r['status']} code={code(r)} {(r['json'] or {}).get('message', '')[:80]}")
+    box = box_main
+    # L3/L4 verkürztes Lesen der bisherigen zones.conf (read EIO) ⇒ Abbruch ohne Änderung
+    for lid, ep, mk in [('L3', 'zones/conf_sync.php', lambda: fc(box, 'c.as1.test')),
+                        ('L4', 'zones/zone_cleanup.php', lambda: fcl(['a.as1.test']))]:
+        base_few()
+        t0, n0 = box.tree(), box.rndc_calls()
+        tr = os.path.join(OUT, 'l_read.txt')
+        r = call(box, ep, mk(), strace={'out': tr, 'trace': ['read'], 'paths': [box.zonesconf], 'inject': 'inject=read:error=EIO:when=1'})
+        hits = sum(1 for l in open(tr) if '(INJECTED)' in l)
+        check(G, f'{lid} {ep} zones.conf verkürzt gelesen', hits == 1 and r['status'] == 500 and box.tree() == t0
+              and box.rndc_calls() == n0, f"Injektionen={hits} status={r['status']} {(r['json'] or {}).get('message', '')[:80]}")
+    # L5 verwaiste Include-Zeile (Datei fehlt) ⇒ nicht zweifelsfrei vollständig ⇒ fail-closed (E98)
+    for ep, mk in [('zones/conf_sync.php', lambda: fc(box, 'c.as1.test')), ('zones/zone_cleanup.php', lambda: fcl(['a.as1.test']))]:
+        base_few()
+        with open(box.zonesconf, 'a') as f:
+            f.write(f'include "{box.confdir}/weg.as1.test.conf";\n')
+        sh('sync')
+        t0, n0 = box.tree(), box.rndc_calls()
+        r = call(box, ep, mk())
+        check(G, f'L5 verwaiste Include-Zeile {ep}', r['status'] == 500 and code(r) == 'listing_incomplete' and box.tree() == t0
+              and box.rndc_calls() == n0, f"status={r['status']} code={code(r)}")
+    # L6 Gegenproben ohne Injektion: kein Fehlalarm, zones.conf vollständig
+    base_many(False)
+    r = call(box, 'zones/conf_sync.php', fc(box, 'neu.as1.test'))
+    check(G, 'L6 conf_sync mit 2000 Zonen ohne Fehler', r['status'] == 200 and open(box.zonesconf).read() == box.expected_zonesconf()
+          and box.rndc_calls() == 1, f"status={r['status']}")
+    base_many(True)
+    r = call(box, 'zones/zone_cleanup.php', fcl(names))
+    check(G, 'L6b zone_cleanup mit 2000 Zonen und einer verwaisten', r['status'] == 200
+          and not os.path.exists(os.path.join(box.confdir, 'orph.as1.test.conf'))
+          and open(box.zonesconf).read() == box.expected_zonesconf() and box.rndc_calls() == 1, f"{(r['json'] or {}).get('removed_conf')}")
 
 
 # ------------------------------------------------------------------------------------------------------------------
@@ -908,10 +1056,15 @@ MUTATIONS = [
     ('M11 zone_sync ohne Verzeichnis-fsync', 'api/v1/zones/zone_sync.php', "if (!syncDirectory($zoneDir)) {", "if (false) {", 'C', 'zone_sync'),
     ('M12 conf_sync ohne Verzeichnis-fsync', 'api/v1/zones/conf_sync.php', "if (!syncDirectories($syncDirs)) {\n    $failWithRollback", "if (false) {\n    $failWithRollback", 'C', 'conf_sync'),
     ('M13 Cleanup ohne Verzeichnis-fsync', 'api/v1/zones/zone_cleanup.php', "if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {", "if (false) {", 'C', 'zone_cleanup'),
-    ('M14 observe lehnt ab', 'inc/fence.php', "if ($e['code'] !== null && $mode !== 'observe') {", "if ($e['code'] !== null) {", 'F'),
+    ('M14 observe lehnt ab', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $persistFailed);", "$reject = $e['code'] !== null;", 'F'),
     ('M16 conf_sync ohne Lesefehlererkennung (S43)', 'api/v1/zones/conf_sync.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'conf_sync'),
     ('M17 Cleanup ohne Lesefehlererkennung (S43)', 'api/v1/zones/zone_cleanup.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'zone_cleanup'),
     ('M18 Abgleich scandir/glob entfernt (S43)', 'inc/file_utils.php', '    return $expected === $got ? $glob : false;', '    return $glob;', 'I', 'conf_sync'),
+    ('M19 conf_sync ohne Vollständigkeitsnachweis (E98)', 'api/v1/zones/conf_sync.php', "if ($missingIncludes !== [] || $ownConf === false || !in_array($ownConf, $includedPaths, true)) {", "if (false) {", 'L'),
+    ('M20 Cleanup ohne Vollständigkeitsnachweis (E98)', 'api/v1/zones/zone_cleanup.php', "if ($missingIncludes === null || $missingIncludes !== []) {", "if (false) {", 'L'),
+    ('M21 Lesen ohne Längenprüfung (E98)', 'inc/file_utils.php', "    if (!is_string($data) || $st === false || strlen($data) !== (int)$st['size']) {", "    if (!is_string($data) || $st === false) {", 'L'),
+    ('M22 Fehlermarke nur in enforce (E97)', 'inc/fence.php', "    if (fenceLatchPresent($config)) {\n        $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault',", "    if (false) {\n        $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault',", 'F'),
+    ('M23 observe übergeht Persistenzfehler (E97)', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $persistFailed);", "$reject = $e['code'] !== null && $mode !== 'observe';", 'F'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
 
@@ -943,14 +1096,17 @@ def main():
     ap.add_argument('--src', required=True)
     ap.add_argument('--ref')
     ap.add_argument('--out', required=True)
-    ap.add_argument('--groups', default='FSICGM')
+    ap.add_argument('--groups', default='FSICLGM')
+    ap.add_argument('--modes')
     ap.add_argument('--mutant')
     ap.add_argument('--stop-on-fail', action='store_true')
     ap.add_argument('--scenario')
     a = ap.parse_args()
-    global STOP_ON_FAIL, SCENARIOS
+    global STOP_ON_FAIL, SCENARIOS, MODES
     STOP_ON_FAIL = a.stop_on_fail
     SCENARIOS = a.scenario.split(',') if a.scenario else None
+    if a.modes:
+        MODES = a.modes.split(',')
     OUT = a.out
     os.makedirs(OUT, exist_ok=True)
     if os.geteuid() != 0:
@@ -975,6 +1131,8 @@ def main():
             group_i(box)
         if 'C' in a.groups:
             group_c(box, flakey)
+        if 'L' in a.groups:
+            group_l(box)
         if 'G' in a.groups:
             ref_box = Box(root, a.ref, 'ref', bindbase)
             group_g(box, ref_box)

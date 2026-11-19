@@ -82,7 +82,8 @@ $confExisted = file_exists($confPath);
 $oldConf = null;
 $oldConfPerms = null;
 if ($confExisted) {
-    $oldConf = is_file($confPath) ? @file_get_contents($confPath) : false;
+    // E98: nur nachweislich vollständig gelesene Sicherung (sonst Rollback auf einen verkürzten Stand)
+    $oldConf = is_file($confPath) ? readFileComplete($confPath) : false;
     if ($oldConf === false) {
         $releaseLock();
         sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden .conf-Datei fehlgeschlagen – keine Änderung vorgenommen']);
@@ -95,7 +96,7 @@ $zonesConfExisted = file_exists($zonesConfPath);
 $oldZonesConf = null;
 $oldZonesConfPerms = null;
 if ($zonesConfExisted) {
-    $oldZonesConf = is_file($zonesConfPath) ? @file_get_contents($zonesConfPath) : false;
+    $oldZonesConf = is_file($zonesConfPath) ? readFileComplete($zonesConfPath) : false;
     if ($oldZonesConf === false) {
         $releaseLock();
         sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
@@ -187,10 +188,30 @@ if ($confFiles === false) {
     $failWithRollback(500, 'Fehler beim Lesen des Konfigurationsverzeichnisses');
 }
 $includes = [];
+$includedPaths = [];
 foreach ($confFiles as $file) {
     if (is_file($file)) {
-        $includes[] = 'include "' . realpath($file) . '";';
+        $real = realpath($file);
+        if ($real === false) {
+            $failWithRollback(500, 'Verzeichnisauflistung nicht zweifelsfrei vollständig (Pfad nicht auflösbar) – zones.conf unverändert, Änderung zurückgerollt, kein Reload', ['code' => 'listing_incomplete']);
+        }
+        $includes[] = 'include "' . $real . '";';
+        $includedPaths[] = $real;
     }
+}
+
+// E98 (S43-Ergänzung): Vollständigkeitsnachweis der Auflistung. conf_sync fügt genau eine Zone hinzu bzw. ersetzt sie;
+// es entfernt nie ein Include. Ein getdents()-Fehler mitten im Durchlauf kann scandir() und glob() gleichermaßen
+// verkürzen, ohne dass PHP einen Fehler meldet. Deshalb muss jedes bisherige Include und die eigene Datei in der neuen
+// Liste enthalten sein; sonst bleibt die bisherige Konfiguration erhalten (Rollback, kein Reload).
+$ownConf = realpath($confPath);
+$missingIncludes = array_values(array_diff(zonesConfIncludes((string)$oldZonesConf), $includedPaths));
+if ($missingIncludes !== [] || $ownConf === false || !in_array($ownConf, $includedPaths, true)) {
+    $failWithRollback(500, 'Verzeichnisauflistung nicht zweifelsfrei vollständig (' . count($missingIncludes)
+        . ' bisherige Includes fehlen) – zones.conf unverändert, Änderung zurückgerollt, kein Reload', [
+        'code' => 'listing_incomplete',
+        'missing_includes' => count($missingIncludes)
+    ]);
 }
 
 $zonesConfContent = implode("\n", $includes) . "\n";

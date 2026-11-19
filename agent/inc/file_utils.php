@@ -192,6 +192,45 @@ function listConfFiles(string $dir): array|false {
 }
 
 /**
+ * Liest eine Datei nur dann, wenn sie nachweislich vollständig gelesen wurde (S43-Ergänzung, E98).
+ *
+ * file_get_contents() liefert bei einem read()-Fehler eine leere bzw. verkürzte Zeichenkette statt false (unter
+ * PHP 8.5 nachgewiesen). Deshalb wird die gelesene Länge mit der Größe aus fstat() desselben Dateideskriptors
+ * verglichen; jede Abweichung gilt als Lesefehler.
+ *
+ * @param string $path Pfad der Datei
+ *
+ * @return string|false vollständiger Inhalt oder false
+ */
+function readFileComplete(string $path): string|false {
+    $fh = @fopen($path, 'r');
+    if ($fh === false) {
+        return false;
+    }
+    $st = @fstat($fh);
+    $data = $st === false ? false : @stream_get_contents($fh);
+    @fclose($fh);
+    if (!is_string($data) || $st === false || strlen($data) !== (int)$st['size']) {
+        return false;
+    }
+
+    return $data;
+}
+
+/**
+ * Pfade aller include-Zeilen einer vom Agenten erzeugten zones.conf (Format: include "<pfad>";).
+ *
+ * @param string $content Inhalt der zones.conf
+ *
+ * @return string[] eingebundene Pfade (ohne Duplikate)
+ */
+function zonesConfIncludes(string $content): array {
+    preg_match_all('/^include "([^"\r\n]*)";\r?$/m', $content, $m);
+
+    return array_values(array_unique($m[1]));
+}
+
+/**
  * Synchronisiert mehrere Verzeichnisse (Duplikate einmal), bricht beim ersten Fehler ab.
  *
  * @param string[] $dirs

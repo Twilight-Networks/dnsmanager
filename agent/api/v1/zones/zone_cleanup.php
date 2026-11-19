@@ -112,6 +112,48 @@ foreach ($confFiles as $file) {
     }
 }
 
+// === E98 (S43-Ergänzung): bisherige zones.conf vollständig lesen und Vollständigkeit der Auflistung nachweisen ===
+// Ein getdents()-Fehler mitten im Durchlauf kann scandir() und glob() gleichermaßen verkürzen, ohne dass PHP einen Fehler
+// meldet. Jedes bisherige Include muss deshalb entweder in der Behalten-Liste oder unter den als verwaist erkannten
+// Dateien stehen; sonst ohne jede Änderung und ohne Reload abbrechen (auch statt eines No-op-Erfolgs).
+$zonesConfExisted = file_exists($zonesConfPath);
+$oldZonesConf = null;
+$oldZonesConfPerms = null;
+if ($zonesConfExisted) {
+    $oldZonesConf = is_file($zonesConfPath) ? readFileComplete($zonesConfPath) : false;
+    if ($oldZonesConf === false) {
+        $releaseLock();
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
+    }
+    $perms = @fileperms($zonesConfPath);
+    $oldZonesConfPerms = $perms !== false ? ($perms & 0777) : null;
+}
+$keepPaths = [];
+$listedPaths = [];
+foreach (array_merge($keepConfFiles, array_values($orphanConfFiles)) as $i => $file) {
+    $real = realpath($file);
+    if ($real === false) {
+        $listedPaths = null;
+        break;
+    }
+    $listedPaths[] = $real;
+    if ($i < count($keepConfFiles)) {
+        $keepPaths[] = $real;
+    }
+}
+$missingIncludes = $listedPaths === null ? null : array_values(array_diff(zonesConfIncludes((string)$oldZonesConf), $listedPaths));
+if ($missingIncludes === null || $missingIncludes !== []) {
+    $releaseLock();
+    sendJsonResponse(500, [
+        'status' => 'error',
+        'message' => 'Verzeichnisauflistung nicht zweifelsfrei vollständig – keine Änderung, kein Reload',
+        'code' => 'listing_incomplete',
+        'missing_includes' => $missingIncludes === null ? null : count($missingIncludes),
+        'removed_conf' => [],
+        'removed_zone_files' => []
+    ]);
+}
+
 // === No-op: keine verwaisten .conf ===
 if (empty($orphanConfFiles)) {
     $releaseLock();
@@ -126,24 +168,11 @@ if (empty($orphanConfFiles)) {
 
 // === A/B: neue zones.conf ohne verwaiste Includes im Speicher erzeugen ===
 $includes = [];
-foreach ($keepConfFiles as $file) {
-    $includes[] = 'include "' . realpath($file) . '";';
+foreach ($keepPaths as $real) {
+    $includes[] = 'include "' . $real . '";';
 }
 $zonesConfContent = implode("\n", $includes) . "\n";
-
-// === Bisherigen Zustand von zones.conf sichern (für Rollback); bei Lesefehler ohne Änderung abbrechen ===
-$zonesConfExisted = file_exists($zonesConfPath);
-$oldZonesConf = null;
-$oldZonesConfPerms = null;
-if ($zonesConfExisted) {
-    $oldZonesConf = is_file($zonesConfPath) ? @file_get_contents($zonesConfPath) : false;
-    if ($oldZonesConf === false) {
-        $releaseLock();
-        sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
-    }
-    $perms = @fileperms($zonesConfPath);
-    $oldZonesConfPerms = $perms !== false ? ($perms & 0777) : null;
-}
+// Die Sicherung der bisherigen zones.conf (für Rollback) liegt bereits vollständig gelesen vor (E98, oben).
 
 // === C: zones.conf atomar ersetzen (Temp-Datei im selben Verzeichnis + rename) ===
 // Bei Fehler bleibt die bisherige zones.conf unverändert (kein Rollback nötig).

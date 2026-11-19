@@ -42,12 +42,14 @@ gesenkt; `init` nur ohne vorhandenen H und ohne Marke.
 4. `system/status` bzw. `status` der CLI prüfen (`state = ok`).
 5. `enforce` erst nach AS4 und nur stufenweise (zuerst ns2).
 
-Rückweg: `fencing_mode` entfernen (= `off`). H und eine etwaige Marke bleiben liegen und werden in `off` nicht beachtet.
+Rückweg: `fencing_mode` entfernen (= `off`). H bleibt liegen und wird in `off` weder gelesen noch geschrieben. Eine
+etwaige Fehlermarke sperrt dagegen auch in `off` alle Schreibvorgänge (E97) und muss nach Abschnitt 4 aufgehoben werden.
 
 ## 4. Fehlermarke aufheben
 
 Eine Marke entsteht vor jeder Erhöhung von H und bleibt nur nach einem Abbruch (Absturz, Persistenz- oder
-Dateisystemfehler) liegen.
+Dateisystemfehler) liegen. Sie sperrt `zone_sync`, `conf_sync` und `zone_cleanup` in **jedem** Modus (auch `off`) mit
+`fence_fault`; `system/status` zeigt sie als `fencing.state = fault`.
 
 1. Ursache klären (Dateisystem, `dmesg`, freier Platz, Schreibschutz). Solange das Dateisystem fehlerhaft ist, nicht
    aufheben.
@@ -67,7 +69,18 @@ Agenten anspricht. Dagegen helfen nur organisatorische Maßnahmen: neue Domäne 
 `api_allowed_ips` auf den Agenten (nur die Quelladresse der eigenen Oberfläche) und keine Weitergabe der
 Agent-Konfiguration.
 
-## 6. Datenbank-Restore
+## 6. Verwaiste Include-Zeile (`listing_incomplete`)
+
+`conf_sync` und `zone_cleanup` brechen mit `listing_incomplete` ohne Änderung und ohne Reload ab, wenn ein bisheriges
+`include` aus `zones.conf` in der neuen Verzeichnisauflistung fehlt (E98). Ursache ist entweder ein Lesefehler des
+Dateisystems oder eine `include`-Zeile auf eine nicht mehr vorhandene `.conf`.
+
+1. Dateisystem prüfen (`dmesg`); bei Lesefehlern zuerst diese beheben.
+2. Sonst die betroffene Zeile ermitteln: jede `include`-Zeile der `zones.conf` muss auf eine vorhandene Datei zeigen.
+3. Sicherung von `zones.conf` (Rechte erhalten), Zeile entfernen oder die `.conf` wiederherstellen, `named-checkconf`
+   prüfen; danach erneut veröffentlichen.
+
+## 7. Datenbank-Restore
 
 Ein zurückgespieltes Backup kann die Lauf-ID-Folge unter H senken; die Agenten lehnen dann mit `stale_fence` ab
 (fail-closed). Abhilfe ab AS4 per Core-Abgleich (H aller Agenten lesen, `publish_runs.AUTO_INCREMENT` darüber setzen).
