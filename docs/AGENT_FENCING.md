@@ -11,7 +11,7 @@ Modi `off` und `observe` zulässig.
 | `api_config.php` `fencing_mode` | `off` (Standard, wenn nicht gesetzt), `observe`, `enforce`; ein unbekannter Wert sperrt alle Schreibvorgänge |
 | `api_config.php` `fence_domain` | UUID der Installation (Kleinbuchstaben); Pflicht für `observe`/`enforce` |
 | `<zone_data_dir>/.dnsmanager-fence` | Höchststand H: `dnsmanager-fence v1 domain=<uuid> high=<n>` |
-| `<zone_data_dir>/.dnsmanager-fence.fault` | Fehlermarke (Write-ahead); solange vorhanden, lehnt `enforce` alle Schreibvorgänge ab |
+| `<zone_data_dir>/.dnsmanager-fence.fault` | Fehlermarke (Write-ahead); solange sie vorhanden oder ihre Existenz nicht prüfbar ist, lehnen alle drei schreibenden Endpunkte (`zone_sync`, `conf_sync`, `zone_cleanup`) in jedem Modus (`off`, `observe`, `enforce`) jeden Aufruf ab (`fence_fault`, E97/E99) |
 | `scripts/agent_fence-cli.php` | lokale Verwaltung von H (nicht per Apache erreichbar) |
 
 **Voraussetzung:** PHP-Erweiterung `posix` für die Apache-PHP-Instanz des Agenten und für die CLI (Ubuntu:

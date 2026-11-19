@@ -12,8 +12,11 @@ Voraussetzungen (Test-VM, root): `php` (CLI), `strace`, `named-checkzone`, `name
 `mkfs.ext4`, `dmsetup`, Kernelmodul `dm_flakey` (wird bei Bedarf geladen und danach wieder entladen).
 
 ```bash
-python3 tests/agent/as1_test.py --src <Checkout des Prüfstands> --ref <Checkout des Basis-Commits> --out <Ergebnisse> [--groups FSICGM]
+python3 tests/agent/as1_test.py --src <Checkout des Prüfstands> --ref <Checkout des Basis-Commits> --out <Ergebnisse> [--groups FSICLXGM]
 ```
+
+Ohne `--groups` laufen alle Gruppen `FSICLXGM`; das schließt L (Vollständigkeit der Verzeichnisauflistung, E98) und
+X (nicht prüfbare Existenz, E99; fehlende PHP-Erweiterung `posix`, E100; verkürzter Read von H) ein.
 
 | Gruppe | Inhalt |
 |---|---|
@@ -23,8 +26,8 @@ python3 tests/agent/as1_test.py --src <Checkout des Prüfstands> --ref <Checkout
 | C | für alle drei Modi: Absturz vor jedem dieser Schritte (`inject=…:signal=SIGKILL`) mit anschließendem Stromausfall (dm-flakey `drop_writes`, Neu-Einhängen) sowie Stromausfall nach bestätigtem Abschluss; Invarianten: H ∈ {alt, neu}, sichtbare Änderung ⇒ H dauerhaft ≥ Token, keine Mischzustände, `named.conf`/`zones.conf` gültig, bestätigte Änderung dauerhaft |
 | G | `off` (ohne Schlüssel, ausdrücklich `off`, mit Fencing-Feldern im Body) gegenüber dem Agenten des Basis-Commits: HTTP-Status, Content-Type, Body, Dateibaum und Reload-Aufrufe je Schritt identisch |
 | L | Vollständigkeit der Verzeichnisauflistung (E98): 2000 Zonen, `getdents64`-Fehler im jeweils 2. Aufruf **beider** Durchläufe (`strace -P` auf das Verzeichnis) für `conf_sync` und `zone_cleanup` – a mit vollständigem Agenten, b mit neutralisiertem `scandir`/`glob`-Abgleich (der Vollständigkeitsnachweis muss allein greifen); verkürztes Lesen der bisherigen `zones.conf` (`read` EIO); verwaiste Include-Zeile; L7/L8: nicht eingebundene `.conf`-Dateien und nur der `glob`-Durchlauf verkürzt (hier greift allein der Abgleich `scandir`/`glob`, S43); Gegenproben ohne Fehlalarm |
-| X | nicht prüfbare Existenz (E99): `stat`/`access` mit EIO (`strace -P`) auf Fehlermarke (vorhanden und fehlend, alle Modi × alle Endpunkte), H (`observe`/`enforce`), bestehende `<zone>.conf`/`zones.conf` und verwaiste Zonendatei im Cleanup; X7 ohne `ext-posix` (E100: alle Modi × Endpunkte, Status, CLI, `pathState()` ohne Rückfall); Gegenprobe |
-| M | Mutationsproben M01–M27; jede wird in einem eigenen Lauf mit den zugeordneten Gruppen ausgeführt und muss mindestens einen Fehlschlag erzeugen |
+| X | nicht prüfbare Existenz (E99): `stat`/`access` mit EIO (`strace -P`) auf Fehlermarke (vorhanden und fehlend, alle Modi × alle Endpunkte), H (`observe`/`enforce`), bestehende `<zone>.conf`/`zones.conf` und verwaiste Zonendatei im Cleanup; X7 ohne `ext-posix` (E100: alle Modi × Endpunkte, Status, CLI, `pathState()` ohne Rückfall); X8 verkürzter Read von H mit syntaktisch gültigem Präfix (`fstat` per `strace` `poke_exit` um 3 Bytes größer als der Inhalt; `observe`/`enforce` × alle Endpunkte und `system/status`, Gegenprobe ohne Injektion); Gegenprobe |
+| M | Mutationsproben M01–M28; jede wird in einem eigenen Lauf mit den zugeordneten Gruppen ausgeführt und muss mindestens einen Fehlschlag erzeugen |
 
 Ergebnisse: `as1_test.log` (eine Zeile je Fall), Mitschnitte und Golden-Daten im Ausgabeverzeichnis. Laufzeit auf ns2
 etwa 30–60 Minuten für alle Gruppen.

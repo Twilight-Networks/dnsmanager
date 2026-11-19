@@ -124,9 +124,11 @@ function fenceReadHigh(array $config): array {
     if (is_link($path) || !is_file($path)) {
         return ['state' => 'invalid', 'domain' => null, 'high' => null, 'detail' => 'keine reguläre Datei'];
     }
-    $raw = @file_get_contents($path, false, null, 0, AGENT_FENCE_MAX_BYTES + 1);
+    // Nur ein nachweislich vollständiger Read zählt (gelesene Länge = fstat-Größe, höchstens AGENT_FENCE_MAX_BYTES):
+    // ein verkürzter Read könnte sonst zufällig ein syntaktisch gültiges Präfix liefern (Review AS1)
+    $raw = readFileComplete($path, AGENT_FENCE_MAX_BYTES);
     if (!is_string($raw)) {
-        return ['state' => 'invalid', 'domain' => null, 'high' => null, 'detail' => 'nicht lesbar'];
+        return ['state' => 'invalid', 'domain' => null, 'high' => null, 'detail' => 'nicht vollständig lesbar'];
     }
     if (preg_match('/^dnsmanager-fence v1 domain=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) high=([1-9][0-9]{0,18})\n$/D', $raw, $m) !== 1) {
         return ['state' => 'invalid', 'domain' => null, 'high' => null, 'detail' => 'ungültiges Format'];

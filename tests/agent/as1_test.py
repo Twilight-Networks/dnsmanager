@@ -14,11 +14,12 @@
 #   G  off gegenüber dem bisherigen Agenten (Referenz-Checkout) beobachtbar identisch
 #   L  Vollständigkeit der Verzeichnisauflistung (getdents-Teilauflistung in beiden Durchläufen, verkürztes Lesen von
 #      zones.conf, verwaiste Include-Zeilen, Gegenproben ohne Fehlalarm) – E98
-#   X  nicht prüfbare Existenz (stat/access-Fehler) von Fehlermarke, H und Sicherungsdateien – E99
+#   X  nicht prüfbare Existenz (stat/access-Fehler) von Fehlermarke, H und Sicherungsdateien – E99; fehlende
+#      PHP-Erweiterung posix – E100; verkürzter Read von H mit gültigem Präfix (Review AS1)
 #   M  Mutationsproben (jede Mutation muss mindestens einen Test scheitern lassen)
 #   I und C laufen für alle Modi (off, observe, enforce; Einschränkung mit --modes).
 #
-# Aufruf (root, Test-VM): as1_test.py --src <Checkout> --ref <Referenz-Checkout> --out <Ergebnisverzeichnis> [--groups FSICGM]
+# Aufruf (root, Test-VM): as1_test.py --src <Checkout> --ref <Referenz-Checkout> --out <Ergebnisverzeichnis> [--groups FSICLXGM]
 # Voraussetzungen: php (CLI), strace, named-checkzone, named-checkconf, losetup, mkfs.ext4, dmsetup, dm_flakey.
 
 import argparse
@@ -30,6 +31,7 @@ import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1129,6 +1131,34 @@ def group_x(box):
     p = sh(['php', '-r', probe], check_rc=False)
     check(G, 'X7e pathState mit posix (Gegenprobe)', p.stdout.strip() == 'present absent 1', f'ausgabe={p.stdout.strip()!r}')
 
+    # X8 (Review AS1): verkürzter Read von H mit syntaktisch gültigem Präfix. H enthält eine gültige Zeile (high=10), fstat
+    # desselben Deskriptors meldet per strace-poke 3 Bytes mehr – der Read liefert also weniger als die Datei lang ist.
+    # Ohne Längenprüfung würde das gültige Präfix akzeptiert und H auf 11 fortgeschrieben.
+    def short_read(ep, body, method='POST'):
+        s = os.stat(highp)
+        pre = struct.pack('<QQQIIIIQq', s.st_dev, s.st_ino, s.st_nlink, s.st_mode, s.st_uid, s.st_gid, 0, s.st_rdev, s.st_size + 3)
+        tr = os.path.join(OUT, 'x.txt')
+        r = call(box, ep, body, method=method, strace={'out': tr, 'trace': ['fstat'], 'paths': [highp],
+                                                       'inject': f'inject=fstat:poke_exit=@arg2={pre.hex()}'})
+        hits = sum(1 for l in open(tr) if 'INJECTED' in l)
+        return r, hits
+    for mode in ['observe', 'enforce']:
+        for ep, mk in eps:
+            base(mode)
+            t0, n0 = box.tree(), box.rndc_calls()
+            r, hits = short_read(ep, mk())
+            check(G, f'X8a H verkürzt gelesen {mode} {ep}', hits >= 1 and r['status'] == 503 and code(r) == 'fence_invalid'
+                  and box.tree() == t0 and box.rndc_calls() == n0 and box.high() == (DOMAIN, 10),
+                  f"Injektionen={hits} status={r['status']} code={code(r)} high={box.high()}")
+        base(mode)
+        r, hits = short_read('system/status.php', None, method='GET')
+        fs = (r['json'] or {}).get('fencing') or {}
+        check(G, f'X8b status {mode} H verkürzt gelesen', hits >= 1 and fs.get('state') == 'invalid' and fs.get('high') is None, f'{fs}')
+        # Gegenprobe: dieselbe H-Datei ohne Injektion wird angenommen und fortgeschrieben
+        base(mode)
+        r = call(box, 'zones/zone_sync.php', fz('a.as1.test', 2, 'x', 11))
+        check(G, f'X8c Gegenprobe {mode} vollständiger Read', r['status'] == 200 and box.high() == (DOMAIN, 11), f"status={r['status']} high={box.high()}")
+
     # X6 Gegenprobe: ohne Injektion unverändertes Verhalten in off
     base('off')
     r = call(box, 'zones/zone_cleanup.php', fcl(['a.as1.test']))
@@ -1226,6 +1256,7 @@ MUTATIONS = [
     ('M25 Prüffehler als "nicht vorhanden" (E99)', 'inc/file_utils.php', "    return posix_get_last_error() === 2 ? 'absent' : 'error';   // 2 = ENOENT", "    return 'absent';", 'X'),
     ('M26 ohne ausdrückliche posix-Prüfung (E100)', 'inc/fence.php', "    if (!agentPosixAvailable()) {\n        error_log(", "    if (false) {\n        error_log(", 'X'),
     ('M27 Rückfall auf file_exists() (E100)', 'inc/file_utils.php', "        return 'error';   // E100: kein Rückfall auf file_exists()", "        return file_exists($path) ? 'present' : 'absent';", 'X'),
+    ('M28 H ohne Vollständigkeitsprüfung gelesen', 'inc/fence.php', "$raw = readFileComplete($path, AGENT_FENCE_MAX_BYTES);", "$raw = @file_get_contents($path, false, null, 0, AGENT_FENCE_MAX_BYTES + 1);", 'X'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
 

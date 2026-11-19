@@ -653,7 +653,9 @@ er beide Durchläufe gleich, besteht der Abgleich von S43 (Gruppe L1a/L2a: beide
 fail-closed-Absicherung:
 1. Die bisherige `zones.conf` (und die bisherige `<zone>.conf`) wird nur verwendet, wenn sie nachweislich vollständig
    gelesen wurde (`readFileComplete()`: gelesene Länge = `fstat`-Größe desselben Deskriptors); sonst Abbruch ohne
-   Änderung.
+   Änderung. Ebenso wird der Höchststand H gelesen (`fenceReadHigh()`, zusätzlich Obergrenze `AGENT_FENCE_MAX_BYTES`):
+   Ein verkürzter Read gilt als ungültiger Höchststand (`fence_invalid`), auch wenn das gelesene Präfix syntaktisch
+   gültig ist (Review PR #103; Nachweis X8, M28).
 2. Vollständigkeitsnachweis: Jedes bisherige `include` muss in der neuen `zones.conf` wieder enthalten sein
    (`conf_sync` fügt nur hinzu bzw. ersetzt und entfernt nie; zusätzlich muss die eigene Datei enthalten sein);
    `zone_cleanup` darf nur die von ihm selbst als verwaist erkannten Dateien weglassen. Fehlt ein Include oder ist ein
@@ -718,7 +720,7 @@ Die Zone wurde in keinem Schritt entladen. Endzustand: alle Zonen DB = geladen a
 
 **Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
 I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
-`noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, L Vollständigkeit der Auflistung, X nicht prüfbare Existenz und fehlendes `ext-posix`, M Mutationsproben M01–M27; I und C für alle drei
+`noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, L Vollständigkeit der Auflistung, X nicht prüfbare Existenz, fehlendes `ext-posix` und verkürzter Read von H, M Mutationsproben M01–M28; I und C für alle drei
 Modi (E97), F13–F15 Fehlermarke, Persistenzfehler und ungültiges H je Modus und Endpunkt. M04 (Verzeichnis-`fsync` nach
 dem `rename` von H entfernt) ist auf ext4 äquivalent: Der Verzeichnis-`fsync` nach dem Entfernen der Marke schreibt das
 Journal in Reihenfolge fest und macht das `rename` mit dauerhaft; der Schritt bleibt als dateisystemunabhängige
@@ -1138,6 +1140,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
+| 19.11.2026 | Review PR #103: H wird nur nach nachweislich vollständigem Read akzeptiert (`readFileComplete()` mit Obergrenze `AGENT_FENCE_MAX_BYTES`; X8, M28); `AGENT_FENCING.md` Abschnitt 1 (Fehlermarke sperrt in jedem Modus) und Testaufruf `FSICLXGM` korrigiert |
 | 19.11.2026 | Abnahme AS1, Bereinigung nach Preflight: Abschnitt 5e (Modi, Codetabelle mit `agent_requirement_missing`, Dauerhaftigkeit/E95, `system/status`) und Register E95/E97 an das umgesetzte Verhalten angeglichen; nur Dokumentation und Kommentare |
 | 19.11.2026 | Abnahme AS1: E100 (`ext-posix` verbindlich, kein Rückfall, Prüfung bei jedem schreibenden Aufruf; X7, M26/M27) |
 | 19.11.2026 | Abnahmevorbereitung AS1: E99 (nicht prüfbare Existenz fail-closed, Gruppe X, M25), E95 abschließend präzisiert, E98 um Wiederherstellungsweg ergänzt (`AGENT_FENCING.md` Abschnitt 6, auf ns2 nachgewiesen), Register numerisch geordnet |

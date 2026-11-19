@@ -233,17 +233,25 @@ function pathState(string $path): string {
  * PHP 8.5 nachgewiesen). Deshalb wird die gelesene Länge mit der Größe aus fstat() desselben Dateideskriptors
  * verglichen; jede Abweichung gilt als Lesefehler.
  *
- * @param string $path Pfad der Datei
+ * Mit $maxBytes gilt eine Datei, deren fstat()-Größe die Obergrenze überschreitet, ebenfalls als nicht lesbar; gelesen
+ * werden dann höchstens $maxBytes + 1 Bytes (Höchststand H, AGENT_FENCE_MAX_BYTES).
+ *
+ * @param string   $path     Pfad der Datei
+ * @param int|null $maxBytes Größenobergrenze in Bytes (null = ohne Begrenzung)
  *
  * @return string|false vollständiger Inhalt oder false
  */
-function readFileComplete(string $path): string|false {
+function readFileComplete(string $path, ?int $maxBytes = null): string|false {
     $fh = @fopen($path, 'r');
     if ($fh === false) {
         return false;
     }
     $st = @fstat($fh);
-    $data = $st === false ? false : @stream_get_contents($fh);
+    if ($st !== false && $maxBytes !== null && (int)$st['size'] > $maxBytes) {
+        @fclose($fh);
+        return false;
+    }
+    $data = $st === false ? false : @stream_get_contents($fh, $maxBytes === null ? null : $maxBytes + 1);
     @fclose($fh);
     if (!is_string($data) || $st === false || strlen($data) !== (int)$st['size']) {
         return false;
