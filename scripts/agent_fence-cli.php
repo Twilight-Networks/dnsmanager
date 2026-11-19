@@ -67,8 +67,13 @@ if (!is_array($config) || !isset($config['zone_data_dir'])) {
 }
 $paths = fencePaths($config);
 
+// E100: ext-posix ist verbindlich (belastbare Existenzprüfung, Eigentümerprüfung) – kein Rückfall
+if (!agentPosixAvailable() || !function_exists('posix_geteuid')) {
+    cliOut(['error' => 'Agent-Voraussetzung fehlt: PHP-Erweiterung posix'], EXIT_REFUSED);
+}
+
 // Nur als Eigentümer des Zonenverzeichnisses (Dateieigentum wie bei den Endpunkten)
-$euid = function_exists('posix_geteuid') ? posix_geteuid() : (int)trim((string)shell_exec('id -u'));
+$euid = posix_geteuid();
 $owner = @fileowner($paths['dir']);
 if ($owner === false || $euid !== $owner) {
     cliOut(['error' => "Aufruf nur als Eigentümer von {$paths['dir']} (uid $owner), nicht als uid $euid"], EXIT_REFUSED);

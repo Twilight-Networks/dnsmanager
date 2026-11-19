@@ -253,6 +253,18 @@ function fenceEvaluate(array $config, string $mode, mixed $input): array {
 function agentFenceCheck(array $config, mixed $input): array {
     $mode = fenceMode($config);
 
+    // E100: Ohne ext-posix ist keine Existenzprüfung belastbar (pathState) – in jedem Modus kein schreibender Aufruf
+    if (!agentPosixAvailable()) {
+        error_log(sprintf('[fence] mode=%s decision=reject code=agent_requirement_missing (ext-posix)', $mode));
+        agentResponseAttach('fence', ['mode' => $mode, 'decision' => 'reject', 'code' => 'agent_requirement_missing',
+            'token' => null, 'high_before' => null, 'high_after' => null]);
+        return ['allow' => false, 'http' => 503, 'body' => [
+            'status'  => 'error',
+            'message' => 'Agent-Voraussetzung fehlt: PHP-Erweiterung posix – Schreibvorgänge gesperrt',
+            'code'    => 'agent_requirement_missing',
+        ]];
+    }
+
     // E97: Fehlermarke sperrt in jedem Modus (auch off) – Integritätssicherung, keine Fencing-Prüfung
     if (fenceLatchPresent($config)) {
         $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault', 'token' => null,
@@ -326,6 +338,11 @@ function agentFenceCheck(array $config, mixed $input): array {
  */
 function agentFenceStatus(array $config): ?array {
     $mode = fenceMode($config);
+    if (!agentPosixAvailable()) {
+        // E100: auch in off melden – Schreibvorgänge sind gesperrt
+        return ['mode' => $mode, 'domain' => fenceConfiguredDomain($config), 'state' => 'requirement_missing', 'high' => null,
+            'fault' => null];
+    }
     $fault = fenceLatchPresent($config);
     if ($mode === 'off' && !$fault) {
         return null;

@@ -287,10 +287,10 @@ def free_port():
 
 
 class Server:
-    def __init__(self, box, strace=None):
+    def __init__(self, box, strace=None, php_args=None):
         self.port = free_port()
-        cmd = ['php', '-d', 'display_errors=0', '-d', 'log_errors=1', '-d', f'error_log={box.phplog}',
-               '-S', f'127.0.0.1:{self.port}', '-t', box.agent]
+        cmd = ['php', '-d', 'display_errors=0', '-d', 'log_errors=1', '-d', f'error_log={box.phplog}'] + (php_args or []) \
+            + ['-S', f'127.0.0.1:{self.port}', '-t', box.agent]
         if strace:
             cmd = ['strace'] + (['-f'] if strace.get('follow') else []) + ['-y', '-qq', '-o', strace['out'], '-e', 'trace=' + ','.join(strace.get('trace', PERSIST_SYSCALLS))] \
                 + [a for inj in ([strace['inject']] if isinstance(strace.get('inject'), str) else strace.get('inject', []))
@@ -350,8 +350,8 @@ class Server:
         raise RuntimeError('PHP-Webserver-Prozessgruppe nicht beendet')
 
 
-def call(box, ep, body=None, method='POST', token=TOKEN, strace=None):
-    s = Server(box, strace)
+def call(box, ep, body=None, method='POST', token=TOKEN, strace=None, php_args=None):
+    s = Server(box, strace, php_args)
     try:
         return s.request(ep, body, method, token)
     finally:
@@ -1107,6 +1107,28 @@ def group_x(box):
     check(G, 'X5b verwaiste Zonendatei nicht prüfbar: .conf bleibt Marker', hits >= 1 and r['status'] == 500 and 'rndc' in js
           and os.path.exists(os.path.join(box.confdir, 'b.as1.test.conf')) and os.path.exists(os.path.join(box.zones, 'db.b.as1.test'))
           and js.get('removed_conf') == [], f"Injektionen={hits} status={r['status']} removed={js.get('removed_conf')} {js.get('errors')}")
+    # X7 (E100): ohne ext-posix in jedem Modus kein schreibender Aufruf, kein Rückfall auf file_exists()
+    noposix = ['-d', 'disable_functions=posix_access,posix_get_last_error,posix_geteuid']
+    for mode in ['off', 'observe', 'enforce']:
+        for ep, mk in eps:
+            base(mode)
+            t0, n0 = box.tree(), box.rndc_calls()
+            r = call(box, ep, mk(), php_args=noposix)
+            check(G, f'X7a ohne posix {mode} {ep}', r['status'] == 503 and code(r) == 'agent_requirement_missing' and box.tree() == t0
+                  and box.rndc_calls() == n0 and box.high() == (DOMAIN, 10), f"status={r['status']} code={code(r)}")
+        r = call(box, 'system/status.php', method='GET', php_args=noposix)
+        fs = (r['json'] or {}).get('fencing') or {}
+        check(G, f'X7b status ohne posix {mode}', fs.get('state') == 'requirement_missing' and fs.get('mode') == mode, f'{fs}')
+    p = sh(['php'] + noposix + [box.cli, f'--config={box.cfgpath}', 'status'], check_rc=False)
+    check(G, 'X7c CLI ohne posix verweigert', p.returncode == 2 and 'posix' in (p.stdout + p.stderr), f'rc={p.returncode}')
+    fu = os.path.join(box.agent, 'inc', 'file_utils.php')
+    probe = (f'require "{fu}"; echo pathState("{box.zonesconf}"), " ", pathState("{box.zones}/gibt-es-nicht"), " ", '
+             f'(int)agentPosixAvailable();')
+    p = sh(['php'] + noposix + ['-r', probe], check_rc=False)
+    check(G, 'X7d pathState ohne posix: nicht prüfbar (kein Rückfall)', p.stdout.strip() == 'error error 0', f'ausgabe={p.stdout.strip()!r}')
+    p = sh(['php', '-r', probe], check_rc=False)
+    check(G, 'X7e pathState mit posix (Gegenprobe)', p.stdout.strip() == 'present absent 1', f'ausgabe={p.stdout.strip()!r}')
+
     # X6 Gegenprobe: ohne Injektion unverändertes Verhalten in off
     base('off')
     r = call(box, 'zones/zone_cleanup.php', fcl(['a.as1.test']))
@@ -1202,6 +1224,8 @@ MUTATIONS = [
     ('M23 observe übergeht Integritätsfehler (E97)', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $integrity);", "$reject = $e['code'] !== null && $mode !== 'observe';", 'F'),
     ('M24 observe übergeht ungültiges H (E97)', 'inc/fence.php', "const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_invalid', 'fence_persist_failed'];", "const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_persist_failed'];", 'F'),
     ('M25 Prüffehler als "nicht vorhanden" (E99)', 'inc/file_utils.php', "    return posix_get_last_error() === 2 ? 'absent' : 'error';   // 2 = ENOENT", "    return 'absent';", 'X'),
+    ('M26 ohne ausdrückliche posix-Prüfung (E100)', 'inc/fence.php', "    if (!agentPosixAvailable()) {\n        error_log(", "    if (false) {\n        error_log(", 'X'),
+    ('M27 Rückfall auf file_exists() (E100)', 'inc/file_utils.php', "        return 'error';   // E100: kein Rückfall auf file_exists()", "        return file_exists($path) ? 'present' : 'absent';", 'X'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
 

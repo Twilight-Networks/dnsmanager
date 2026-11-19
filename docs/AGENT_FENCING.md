@@ -14,6 +14,11 @@ Modi `off` und `observe` zulässig.
 | `<zone_data_dir>/.dnsmanager-fence.fault` | Fehlermarke (Write-ahead); solange vorhanden, lehnt `enforce` alle Schreibvorgänge ab |
 | `scripts/agent_fence-cli.php` | lokale Verwaltung von H (nicht per Apache erreichbar) |
 
+**Voraussetzung:** PHP-Erweiterung `posix` für die Apache-PHP-Instanz des Agenten und für die CLI (Ubuntu:
+`php8.x-common`; Prüfung `php -m | grep -x posix`, für Apache `ls /etc/php/*/apache2/conf.d/ | grep posix`). Ohne sie
+lehnt der Agent in jedem Modus alle schreibenden Aufrufe mit `agent_requirement_missing` (503) ab, `system/status` meldet
+`fencing.state = requirement_missing`, und die CLI verweigert (E100). Es gibt keinen Rückfall.
+
 `api_config.php` liegt auf ns1/ns2 unter `/etc/dnsmanager/` mit `0640 root:www-data`; bei Änderungen Rechte erhalten
 und Lesbarkeit für `www-data` prüfen. Die Dateien im Zonenverzeichnis gehören `www-data`.
 

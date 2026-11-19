@@ -191,6 +191,11 @@ function listConfFiles(string $dir): array|false {
     return $expected === $got ? $glob : false;
 }
 
+/** E100: Ist die verbindliche PHP-Erweiterung posix (posix_access, posix_get_last_error) verfügbar? */
+function agentPosixAvailable(): bool {
+    return function_exists('posix_access') && function_exists('posix_get_last_error');
+}
+
 /**
  * Existenz eines Pfads mit Unterscheidung von Prüffehlern (E99).
  *
@@ -199,8 +204,8 @@ function listConfFiles(string $dir): array|false {
  * Sicherung vor Änderungen, Entfernen verwaister Dateien) gilt deshalb nur ENOENT als "nicht vorhanden"; jeder andere
  * Fehler ist "nicht prüfbar" und wird vom Aufrufer fail-closed behandelt. Symlinks (auch defekte) gelten als vorhanden.
  *
- * Ohne die PHP-Erweiterung posix (auf ns1/ns2 vorhanden, Ubuntu php-common) fällt die Funktion auf file_exists() zurück;
- * Prüffehler sind dann nicht unterscheidbar (dokumentierte Grenze).
+ * Voraussetzung ist die PHP-Erweiterung posix (E100). Fehlt sie, ist jede Existenz "nicht prüfbar" – kein Rückfall auf
+ * file_exists(); schreibende Endpunkte lehnen dann bereits in agentFenceCheck() ab (agent_requirement_missing).
  *
  * @param string $path Pfad
  *
@@ -211,8 +216,8 @@ function pathState(string $path): string {
     if (is_link($path)) {
         return 'present';
     }
-    if (!function_exists('posix_access')) {
-        return file_exists($path) ? 'present' : 'absent';
+    if (!agentPosixAvailable()) {
+        return 'error';   // E100: kein Rückfall auf file_exists()
     }
     if (@posix_access($path, POSIX_F_OK)) {
         return 'present';
