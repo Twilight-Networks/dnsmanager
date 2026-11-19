@@ -24,8 +24,8 @@
  * Ein unbekannter Wert gilt als Fehlkonfiguration und wird wie enforce mit fence_misconfigured behandelt.
  * E97 (Klarstellung zu E90/E95): Die Modi steuern nur die Fencing-PRÜFUNG, nie die Persistenz- und
  * Integritätssicherung. In JEDEM Modus – auch off – sperrt eine vorhandene Fehlermarke alle drei schreibenden
- * Endpunkte (fence_fault), und ein gescheitertes dauerhaftes Fortschreiben von H bricht die Anfrage ohne Änderung ab
- * (fence_persist_failed). fsync-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade der Endpunkte.
+ * Endpunkte (fence_fault); in observe und enforce brechen außerdem ein unlesbarer bzw. ungültiger Höchststand
+ * (fence_invalid) und ein gescheitertes dauerhaftes Fortschreiben von H (fence_persist_failed) ohne Änderung ab. fsync-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade der Endpunkte.
  *
  * Die Datei definiert ausschließlich Funktionen und Konstanten (kein Seiteneffekt beim Einbinden; sie liegt im per
  * Apache erreichbaren Agent-Baum).
@@ -37,6 +37,8 @@ const AGENT_FENCE_FILE = '.dnsmanager-fence';
 const AGENT_FENCE_LATCH = '.dnsmanager-fence.fault';
 const AGENT_FENCE_MODES = ['off', 'observe', 'enforce'];
 const AGENT_FENCE_MAX_BYTES = 256;
+/** E97: Integritätsfehler – brechen in jedem Modus ab, in dem H verwendet wird (fence_fault auch in off) */
+const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_invalid', 'fence_persist_failed'];
 
 /**
  * Wirksamer Modus: off | observe | enforce | invalid (unbekannter Wert, fail-closed).
@@ -290,8 +292,11 @@ function agentFenceCheck(array $config, mixed $input): array {
         }
     }
 
-    // observe lehnt Fencing-Gründe nicht ab; ein Persistenzfehler bricht dagegen in jedem Modus ab (E97)
-    $reject = $e['code'] !== null && ($mode !== 'observe' || $persistFailed);
+    // observe lehnt Fencing-Gründe (Token, Domäne, Höchststand, fehlende Initialisierung, Konfiguration) nicht ab.
+    // Integritätsfehler des gespeicherten Zustands brechen dagegen in jedem Modus ab (E97): Fehlermarke, unlesbarer bzw.
+    // ungültiger Höchststand, gescheitertes dauerhaftes Fortschreiben.
+    $integrity = $persistFailed || in_array($e['code'], AGENT_FENCE_INTEGRITY_CODES, true);
+    $reject = $e['code'] !== null && ($mode !== 'observe' || $integrity);
     if ($e['code'] !== null) {
         $report['decision'] = $reject ? 'reject' : 'would_reject';
         error_log(sprintf('[fence] mode=%s decision=%s code=%s token=%s high=%s', $mode, $report['decision'], $e['code'],

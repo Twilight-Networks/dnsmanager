@@ -589,6 +589,16 @@ def group_f(box):
         rc, d = box.cli_run('clear-fault', '--expect-high=10')
         r = call(box, 'zones/zone_sync.php', fz('a.as1.test', 2, 'x', 11))
         check(G, f'F13c {mode} nach clear-fault wieder schreibbar', rc == 0 and r['status'] == 200 and not box.latch(), f"rc={rc} status={r['status']}")
+    # F15 (E97): Ein ungültiger bzw. nicht lesbarer Höchststand ist ein Integritätsfehler – auch observe bricht ab
+    for ep, mk in [('zones/zone_sync.php', lambda: fz('a.as1.test', 2, 'x', 12)), ('zones/conf_sync.php', lambda: fc(box, 'c.as1.test', 12)),
+                   ('zones/zone_cleanup.php', lambda: fcl(['a.as1.test'], 12))]:
+        for label, content in [('ungültig', 'kaputt\n'), ('leer', '')]:
+            box.reset(); box.config('observe'); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1)
+            box.write_high_raw(content); sh('sync')
+            t0, n0 = box.tree(), box.rndc_calls()
+            r = call(box, ep, mk())
+            check(G, f'F15 observe H {label} bricht ab {ep}', r['status'] == 503 and code(r) == 'fence_invalid' and box.tree() == t0
+                  and box.rndc_calls() == n0, f"status={r['status']} code={code(r)}")
     # F14 (E97): Scheitert das dauerhafte Fortschreiben von H (Verzeichnis unveränderlich), bricht auch observe ab
     for ep, mk in [('zones/conf_sync.php', lambda: fc(box, 'c.as1.test', 12)), ('zones/zone_cleanup.php', lambda: fcl(['a.as1.test'], 12))]:
         box.reset(); box.config('enforce'); box.put_zone('a.as1.test', 1); box.put_zone('b.as1.test', 1); sh('sync')
@@ -849,15 +859,26 @@ def group_c(box, flakey):
     for mode, name, (base, ep, mk) in [(m, n, v) for m in MODES for n, v in scenarios(box, m).items()]:
         pts = persist_points(box, name, base, ep, mk)
         for p in pts + [None]:
-            base()
-            t_old = box.tree()
-            if p is None:
-                r = call(box, ep, mk())
-                label = 'nach Abschluss (Antwort 200)'
-            else:
+            # Pipe- und Socket-Reads können die Ordnungszahl von read verschieben: bei einem Fehltreffer (zuletzt begonnener
+            # Syscall ≠ erwarteter Schritt) bis zu zweimal wiederholen; gewertet wird nur ein Treffer am erwarteten Schritt.
+            for attempt in range(3):
+                base()
+                t_old = box.tree()
+                if p is None:
+                    r = call(box, ep, mk())
+                    label = 'nach Abschluss (Antwort 200)'
+                    break
                 tr = os.path.join(OUT, 'crash.txt')
                 r = call(box, ep, mk(), strace={'out': tr, 'inject': f"inject={p['name']}:signal=SIGKILL:when={p['when']}"})
                 label = f"SIGKILL vor {p['name']}#{p['when']} {p['line'][:90]}"
+                tl = trace_lines(tr, box.bind)
+                last = tl[-1] if tl else None
+                hit = last is not None and last['name'] == p['name'] \
+                    and sum(1 for l in tl if l['name'] == last['name']) == p['when'] \
+                    and step_key(last['line'].replace(box.bind, '<B>')) == step_key(p['line'])
+                if hit:
+                    break
+                log(f"C {mode} {name} {p['name']}#{p['when']}: Fehltreffer (Versuch {attempt + 1}), wiederhole")
             flakey.power_loss()
             problems, kind, h, latch = verify_after(box, name, t_old, {'status': None}, label, G, post_crash=True, mode=mode)
             new_h = (DOMAIN, 10) if mode == 'off' else (DOMAIN, 11)
@@ -1056,7 +1077,7 @@ MUTATIONS = [
     ('M11 zone_sync ohne Verzeichnis-fsync', 'api/v1/zones/zone_sync.php', "if (!syncDirectory($zoneDir)) {", "if (false) {", 'C', 'zone_sync'),
     ('M12 conf_sync ohne Verzeichnis-fsync', 'api/v1/zones/conf_sync.php', "if (!syncDirectories($syncDirs)) {\n    $failWithRollback", "if (false) {\n    $failWithRollback", 'C', 'conf_sync'),
     ('M13 Cleanup ohne Verzeichnis-fsync', 'api/v1/zones/zone_cleanup.php', "if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {", "if (false) {", 'C', 'zone_cleanup'),
-    ('M14 observe lehnt ab', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $persistFailed);", "$reject = $e['code'] !== null;", 'F'),
+    ('M14 observe lehnt ab', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $integrity);", "$reject = $e['code'] !== null;", 'F'),
     ('M16 conf_sync ohne Lesefehlererkennung (S43)', 'api/v1/zones/conf_sync.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'conf_sync'),
     ('M17 Cleanup ohne Lesefehlererkennung (S43)', 'api/v1/zones/zone_cleanup.php', '$confFiles = listConfFiles($confDir);', '$confFiles = glob("$confDir/*.conf");', 'I', 'zone_cleanup'),
     ('M18 Abgleich scandir/glob entfernt (S43)', 'inc/file_utils.php', '    return $expected === $got ? $glob : false;', '    return $glob;', 'I', 'conf_sync'),
@@ -1064,7 +1085,8 @@ MUTATIONS = [
     ('M20 Cleanup ohne Vollständigkeitsnachweis (E98)', 'api/v1/zones/zone_cleanup.php', "if ($missingIncludes === null || $missingIncludes !== []) {", "if (false) {", 'L'),
     ('M21 Lesen ohne Längenprüfung (E98)', 'inc/file_utils.php', "    if (!is_string($data) || $st === false || strlen($data) !== (int)$st['size']) {", "    if (!is_string($data) || $st === false) {", 'L'),
     ('M22 Fehlermarke nur in enforce (E97)', 'inc/fence.php', "    if (fenceLatchPresent($config)) {\n        $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault',", "    if (false) {\n        $report = ['mode' => $mode, 'decision' => 'reject', 'code' => 'fence_fault',", 'F'),
-    ('M23 observe übergeht Persistenzfehler (E97)', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $persistFailed);", "$reject = $e['code'] !== null && $mode !== 'observe';", 'F'),
+    ('M23 observe übergeht Integritätsfehler (E97)', 'inc/fence.php', "$reject = $e['code'] !== null && ($mode !== 'observe' || $integrity);", "$reject = $e['code'] !== null && $mode !== 'observe';", 'F'),
+    ('M24 observe übergeht ungültiges H (E97)', 'inc/fence.php', "const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_invalid', 'fence_persist_failed'];", "const AGENT_FENCE_INTEGRITY_CODES = ['fence_fault', 'fence_persist_failed'];", 'F'),
     ('M15 off liest H', 'inc/fence.php', "    if ($mode === 'off') {\n        return ['allow' => true, 'http' => 200, 'body' => null];\n    }\n\n    $e = fenceEvaluate", "    $e = fenceEvaluate", 'G'),
 ]
 

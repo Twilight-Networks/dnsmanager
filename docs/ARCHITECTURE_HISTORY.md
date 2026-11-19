@@ -588,8 +588,9 @@ Fortschreiben von H wie `enforce`, Fencing-Gründe (Token, Domäne, Höchststand
 der Prüfung enthält zusätzlich `fence` (`mode`, `decision` accept/would_reject/reject, `code`, `token`, `high_before`,
 `high_after`), Gründe zusätzlich im PHP-Log `[fence]`. `enforce`: fail-closed. Unbekannter Wert ⇒
 `fence_misconfigured` (fail-closed). **In jedem Modus** gilt (E97): eine vorhandene Fehlermarke sperrt
-(`fence_fault`); scheitert das dauerhafte Fortschreiben von H (nur `observe`/`enforce` schreiben H), bricht die Anfrage
-ohne Änderung ab (`fence_persist_failed`); `fsync`-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade
+(`fence_fault`); in den Modi, die H verwenden (`observe`, `enforce`), brechen außerdem ein nicht lesbarer oder ungültiger
+Höchststand (`fence_invalid`) und ein gescheitertes dauerhaftes Fortschreiben von H (`fence_persist_failed`) die Anfrage
+ohne Änderung ab – das sind Integritätsfehler des gespeicherten Zustands, keine Fencing-Gründe; `fsync`-Fehler der Bestandsdateien führen modusunabhängig in die Fehlerpfade
 der Endpunkte (E95). `system/status` meldet auch in `off` eine vorhandene Marke (`fencing.state = fault`).
 
 **Endpunkte (F3)** – Prüfung unmittelbar nach dem Erwerb des `flock` und vor jeder Änderung; Anfragefelder
@@ -680,8 +681,8 @@ ns2.
 
 **Tests (AS1)** – `tests/agent/as1_test.py`, Einzelheiten `tests/agent/README.md`: F Funktion, S strace-Reihenfolge,
 I Fehlerinjektion je Syscall (strace `inject`), C Absturz vor jedem Schritt plus Stromausfall (dm-flakey,
-`noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, L Vollständigkeit der Auflistung, M Mutationsproben M01–M23; I und C für alle drei
-Modi (E97), F13/F14 Fehlermarke und Persistenzfehler je Modus und Endpunkt. M04 (Verzeichnis-`fsync` nach
+`noauto_da_alloc,commit=300`: dauerhaft ist nur, was `fsync` festschreibt), G `off` gegen den bisherigen Agenten, L Vollständigkeit der Auflistung, M Mutationsproben M01–M24; I und C für alle drei
+Modi (E97), F13–F15 Fehlermarke, Persistenzfehler und ungültiges H je Modus und Endpunkt. M04 (Verzeichnis-`fsync` nach
 dem `rename` von H entfernt) ist auf ext4 äquivalent: Der Verzeichnis-`fsync` nach dem Entfernen der Marke schreibt das
 Journal in Reihenfolge fest und macht das `rename` mit dauerhaft; der Schritt bleibt als dateisystemunabhängige
 Absicherung.
@@ -1082,7 +1083,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
 | E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | entschieden (AS0), Umsetzung AS2 |
 | E95 | `fsync` in allen Modi; `off` im Normalbetrieb und in allen bisherigen Fehlerpfaden identisch, abweichend nur bei gescheitertem `fsync` | umgesetzt (AS1) – zur Bestätigung im Review |
-| E97 | Klarstellung E90/E95 (Review AS1): Modi steuern nur die Fencing-Prüfung; Fehlermarke sperrt alle drei schreibenden Endpunkte in jedem Modus (auch `off`); Persistenzfehler von H bricht auch in `observe` ab; `fsync`-Fehler modusunabhängig; `system/status` meldet die Marke auch in `off` | umgesetzt (AS1, Nachtrag) |
+| E97 | Klarstellung E90/E95 (Review AS1): Modi steuern nur die Fencing-Prüfung; Fehlermarke sperrt alle drei schreibenden Endpunkte in jedem Modus (auch `off`); Integritätsfehler von H (unlesbar/ungültig, Persistenzfehler) brechen auch in `observe` ab; `fsync`-Fehler modusunabhängig; `system/status` meldet die Marke auch in `off` | umgesetzt (AS1, Nachtrag) |
 | E98 | Vollständigkeit der Auflistung (Review AS1, S43-Ergänzung): bisherige `zones.conf` nur vollständig gelesen (Länge = `fstat`), jedes bisherige Include muss erhalten bleiben (Cleanup: außer selbst erkannten Verwaisten), sonst `listing_incomplete` ohne Änderung und Reload; verwaiste Include-Zeilen sperren fail-closed bis zur Bereinigung durch den Admin | umgesetzt (AS1, Nachtrag) – zur Bestätigung im Review |
 | E96 | Befund S43: `listConfFiles()` (glob-Liste, Lesefehlererkennung über `scandir()` und Abgleich) in `conf_sync` und `zone_cleanup`; Lesefehler des Konfigurationsverzeichnisses führen in die bestehenden Fehlerpfade statt zu einer leeren Liste (Verhaltensänderung nur im Fehlerfall) | umgesetzt (AS1) – zur Bestätigung im Review |
 
@@ -1098,7 +1099,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 | 18.11.2026 | Review PR #97: H3 umfasst ausdrücklich auch die Weboberfläche; E15/E16 als offen gekennzeichnet; F3/F4 um Absturzsicherheit und fail-closed bei Persistenzfehlern ergänzt; Unveränderlichkeit und Lebenszyklus der Journaldaten (J4, L1) präzisiert |
 | 18.11.2026 | H2a umgesetzt: Abschnitt 5a (endgültige Grundtabellen, Vertrag `zs1`, Diff, Leser, Baseline, `SchemaCheck`, Migration), Entscheidungen E18–E28, Reihenfolge Migration → Code → Initialisierung (Abschnitt 15) |
 | 18.11.2026 | Review PR #99: S1 – `SchemaCheck` und Migrationsskript prüfen CHECK-Bedingungen einschließlich normalisiertem Ausdruck (Abschnitt 5a); S2 – Testressourcen mit Lauf-Kennung und Eigentumsregister (`tests/history/owned.sh`) |
-| 19.11.2026 | Review AS1: E97 (Fehlermarke und Persistenzfehler in jedem Modus, `off` deaktiviert nur die Fencing-Prüfung) und E98 (Vollständigkeitsnachweis der Verzeichnisauflistung, vollständiges Lesen von `zones.conf`); Restgrenze von S43 geschlossen; Gruppe L, Mutationen M19–M23 |
+| 19.11.2026 | Review AS1: E97 (Fehlermarke und Persistenzfehler in jedem Modus, `off` deaktiviert nur die Fencing-Prüfung) und E98 (Vollständigkeitsnachweis der Verzeichnisauflistung, vollständiges Lesen von `zones.conf`); Restgrenze von S43 geschlossen; Gruppe L, Mutationen M19–M24 |
 | 19.11.2026 | AS0 (technische Vorprüfung) und AS1 umgesetzt: Abschnitt 5e (Agent-Fencing, Write-ahead-Fehlermarke, Domäne und Schutzgrenze, Modi, CLI, dauerhafte Dateioperationen), Entscheidungen E74–E96 einschließlich E4 und E15/E16, Befund S43, Retention als Meilenstein R (Abschnitt 18), Betrieb in `AGENT_FENCING.md` |
 | 18.11.2026 | H2d umgesetzt: Abschnitt 5d (Publish-Journal, Migration 005), Präzisierung von Abschnitt 9 (Reaktivierung abgeleitet, E70), Entscheidungen E55–E73 mit den Präzisierungen der Freigabe (isolierte Testumgebung, Akteurskontext, J5/Neustart über laufeigene Sperre, operatives Ergebnis ≠ Bestätigung) |
 | 18.11.2026 | H2c umgesetzt: Abschnitt 5c (Audit-Ereignisse, Migration 004), Regeln R-A1–R-A8 (Abschnitt 6), Leserechte für H3 (Abschnitt 16), Entscheidungen E43–E54 mit den Präzisierungen aus dem Plan-Review (NULL-sichere CHECKs und `seq`, Serverstand unter Sperre, gemeinsame Änderungsmenge, strikte Policy); Korrektur in 5b (Publish gehört zu H2d) |
