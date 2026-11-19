@@ -50,4 +50,20 @@ return [
     'bind_named_checkzone' => '/usr/bin/named-checkzone',
     'bind_named_checkconf' => '/usr/bin/named-checkconf',
     'bind_rndc'            => '/usr/sbin/rndc',
+
+    /** ---------------------------------------
+     *  Fencing (Meilenstein AS, docs/ARCHITECTURE_HISTORY.md Abschnitt 5e)
+     * --------------------------------------- */
+    // Modus (steuert nur die Fencing-Prüfung, nie die Integritätssicherung):
+    // - 'off' (Standard, wenn nicht gesetzt): keine Fencing-Prüfung, der Höchststand wird nicht verwendet;
+    // - 'observe': prüfen und Höchststand fortschreiben, Fencing-Gründe (Token, Domäne, Höchststand) nicht ablehnen,
+    //   aber Integritätsfehler (Höchststand ungültig oder nicht dauerhaft speicherbar) ablehnen;
+    // - 'enforce': fail-closed.
+    // In JEDEM Modus sperren eine Fehlermarke (.dnsmanager-fence.fault) und eine fehlende PHP-Erweiterung posix alle
+    // Schreibvorgänge (docs/AGENT_FENCING.md). Ein unbekannter Wert sperrt alle Schreibvorgänge.
+    // 'fencing_mode' => 'off',
+
+    // Fencing-Domäne der Installation (UUID in Kleinbuchstaben). Muss der Domäne der Datenbank dieser Installation
+    // entsprechen; der Agent nimmt nur Anfragen und Höchststände dieser Domäne an. Für observe/enforce Pflicht.
+    // 'fence_domain' => '00000000-0000-4000-8000-000000000000',
 ];

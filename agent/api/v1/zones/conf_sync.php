@@ -20,6 +20,7 @@ require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
+require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -65,13 +66,32 @@ $releaseLock = function () use (&$lockHandle): void {
     $lockHandle = null;
 };
 
+// === AS1: Fencing-Prüfung unter dem Lock, vor jeder Änderung (F3) ===
+$fence = agentFenceCheck($config, $input);
+if (!$fence['allow']) {
+    $releaseLock();
+    sendJsonResponse($fence['http'], $fence['body']);
+}
+
+// AS1: Verzeichnisse, deren Einträge eine Übernahme bzw. ein Rollback ändern kann
+$syncDirs = [$confDir, dirname($confDir), dirname($zonesConfPath)];
+
 // === Zustand vor der ersten Änderung sichern (für Rollback) ===
 // Schlägt ein Backup-Lesevorgang fehl, wird ohne jede Änderung abgebrochen.
-$confExisted = file_exists($confPath);
+// E99: Existenz fail-closed prüfen – ein Prüffehler darf nicht als "nicht vorhanden" gelten (sonst fehlende Sicherung und
+// Löschen statt Wiederherstellen im Rollback)
+$confState = pathState($confPath);
+$zonesConfState = pathState($zonesConfPath);
+if ($confState === 'error' || $zonesConfState === 'error') {
+    $releaseLock();
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Zustand der bestehenden Konfiguration nicht prüfbar – keine Änderung vorgenommen']);
+}
+$confExisted = $confState === 'present';
 $oldConf = null;
 $oldConfPerms = null;
 if ($confExisted) {
-    $oldConf = is_file($confPath) ? @file_get_contents($confPath) : false;
+    // E98: nur nachweislich vollständig gelesene Sicherung (sonst Rollback auf einen verkürzten Stand)
+    $oldConf = is_file($confPath) ? readFileComplete($confPath) : false;
     if ($oldConf === false) {
         $releaseLock();
         sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden .conf-Datei fehlgeschlagen – keine Änderung vorgenommen']);
@@ -80,11 +100,11 @@ if ($confExisted) {
     $oldConfPerms = $perms !== false ? ($perms & 0777) : null;
 }
 
-$zonesConfExisted = file_exists($zonesConfPath);
+$zonesConfExisted = $zonesConfState === 'present';
 $oldZonesConf = null;
 $oldZonesConfPerms = null;
 if ($zonesConfExisted) {
-    $oldZonesConf = is_file($zonesConfPath) ? @file_get_contents($zonesConfPath) : false;
+    $oldZonesConf = is_file($zonesConfPath) ? readFileComplete($zonesConfPath) : false;
     if ($oldZonesConf === false) {
         $releaseLock();
         sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
@@ -97,7 +117,7 @@ if ($zonesConfExisted) {
 // damit zones.conf nie auf eine bereits entfernte .conf zeigt.
 $rollback = function () use (
     $confPath, $confExisted, $oldConf, $oldConfPerms,
-    $zonesConfPath, $zonesConfExisted, $oldZonesConf, $oldZonesConfPerms
+    $zonesConfPath, $zonesConfExisted, $oldZonesConf, $oldZonesConfPerms, $syncDirs
 ): bool {
     $ok = true;
 
@@ -106,7 +126,7 @@ $rollback = function () use (
         if (!writeTextFileAtomic($zonesConfPath, $oldZonesConf, $oldZonesConfPerms)) {
             $ok = false;
         }
-    } elseif (file_exists($zonesConfPath) && !@unlink($zonesConfPath)) {
+    } elseif (pathState($zonesConfPath) !== 'absent' && !@unlink($zonesConfPath)) {   // E99
         $ok = false;
     }
 
@@ -115,12 +135,17 @@ $rollback = function () use (
         if (!writeTextFileAtomic($confPath, $oldConf, $oldConfPerms)) {
             $ok = false;
         }
-    } elseif (file_exists($confPath)) {
+    } elseif (pathState($confPath) !== 'absent') {   // E99
         // Neue .conf nur entfernen, wenn zones.conf erfolgreich wiederhergestellt wurde;
         // sonst würde die (Kandidaten-)zones.conf auf eine fehlende Datei zeigen.
         if (!$ok || !@unlink($confPath)) {
             $ok = false;
         }
+    }
+
+    // 3. AS1: wiederhergestellten Zustand dauerhaft machen
+    if ($ok && !syncDirectories($syncDirs)) {
+        $ok = false;
     }
 
     return $ok;
@@ -165,15 +190,36 @@ if (!writeTextFileAtomic($confPath, $confData)) {
 // === Ab hier wurde eine Live-Datei verändert: jeder kontrollierte Fehler führt zum Rollback ===
 
 // === Neue zones.conf generieren ===
-$confFiles = glob("$confDir/*.conf");
+// S43 (AS1): Lesefehler des Verzeichnisses erkennen (sonst würde zones.conf ohne Includes neu geschrieben und geladen)
+$confFiles = listConfFiles($confDir);
 if ($confFiles === false) {
     $failWithRollback(500, 'Fehler beim Lesen des Konfigurationsverzeichnisses');
 }
 $includes = [];
+$includedPaths = [];
 foreach ($confFiles as $file) {
     if (is_file($file)) {
-        $includes[] = 'include "' . realpath($file) . '";';
+        $real = realpath($file);
+        if ($real === false) {
+            $failWithRollback(500, 'Verzeichnisauflistung nicht zweifelsfrei vollständig (Pfad nicht auflösbar) – zones.conf unverändert, Änderung zurückgerollt, kein Reload', ['code' => 'listing_incomplete']);
+        }
+        $includes[] = 'include "' . $real . '";';
+        $includedPaths[] = $real;
     }
+}
+
+// E98 (S43-Ergänzung): Vollständigkeitsnachweis der Auflistung. conf_sync fügt genau eine Zone hinzu bzw. ersetzt sie;
+// es entfernt nie ein Include. Ein getdents()-Fehler mitten im Durchlauf kann scandir() und glob() gleichermaßen
+// verkürzen, ohne dass PHP einen Fehler meldet. Deshalb muss jedes bisherige Include und die eigene Datei in der neuen
+// Liste enthalten sein; sonst bleibt die bisherige Konfiguration erhalten (Rollback, kein Reload).
+$ownConf = realpath($confPath);
+$missingIncludes = array_values(array_diff(zonesConfIncludes((string)$oldZonesConf), $includedPaths));
+if ($missingIncludes !== [] || $ownConf === false || !in_array($ownConf, $includedPaths, true)) {
+    $failWithRollback(500, 'Verzeichnisauflistung nicht zweifelsfrei vollständig (' . count($missingIncludes)
+        . ' bisherige Includes fehlen) – zones.conf unverändert, Änderung zurückgerollt, kein Reload', [
+        'code' => 'listing_incomplete',
+        'missing_includes' => count($missingIncludes)
+    ]);
 }
 
 $zonesConfContent = implode("\n", $includes) . "\n";
@@ -190,6 +236,11 @@ if (!$preflight['ok']) {
         'check_output' => trim($preflight['output']),
         'exit_code' => $preflight['exit_code']
     ]);
+}
+
+// === AS1: Übernahme dauerhaft machen (fsync der Verzeichnisse) vor dem Reload ===
+if (!syncDirectories($syncDirs)) {
+    $failWithRollback(500, 'Konfigurationsübernahme nicht dauerhaft bestätigt (fsync des Verzeichnisses fehlgeschlagen) – Änderung zurückgerollt, kein Reload');
 }
 
 // === BIND reload (nur nach erfolgreichem Preflight) ===

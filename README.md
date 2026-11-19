@@ -209,7 +209,12 @@ Die Änderungen pro Version finden Sie in [CHANGELOG.md](CHANGELOG.md).
 
    ```bash
    apt install bind9
+   apt install php8.4 php8.4-cli php8.4-common
    ```
+
+   Die PHP-Erweiterung **posix** ist für den Agenten verbindlich (Bestandteil von `php8.4-common`; Prüfung:
+   `php -m | grep -x posix`). Fehlt sie, lehnt der Agent alle schreibenden Aufrufe ab
+   (`agent_requirement_missing`, siehe `docs/AGENT_FENCING.md`).
 
 2. **Projekt entpacken und platzieren:**
 

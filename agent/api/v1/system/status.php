@@ -16,6 +16,7 @@ require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/response.php';
+require_once __DIR__ . '/../../../inc/fence.php';
 
 // === Konfiguration laden und Token prüfen ===
 $config = require __DIR__ . '/../../../config/api_config.php';
@@ -59,6 +60,14 @@ $response = [
     'php_version' => PHP_VERSION,
     'bind' => $bindStatus
 ];
+
+// === AS1: Fähigkeiten und Fencing-Zustand – in observe/enforce immer; in off nur bei gesperrten Schreibvorgängen
+// (Fehlermarke vorhanden oder nicht prüfbar, fehlende PHP-Erweiterung posix), sonst unveränderte Antwort ===
+$fenceStatus = agentFenceStatus($config);
+if ($fenceStatus !== null) {
+    $response['capabilities'] = ['fencing' => 1, 'durable_writes' => 1];
+    $response['fencing'] = $fenceStatus;
+}
 
 // === Fehlerstatus erkennen ===
 if (!$bindRunning || !$rndcOk || !$dnsQueryOk) {

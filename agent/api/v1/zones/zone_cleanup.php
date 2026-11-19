@@ -28,6 +28,7 @@ require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
+require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -81,8 +82,16 @@ $releaseLock = function () use (&$lockHandle): void {
     $lockHandle = null;
 };
 
+// === AS1: Fencing-Prüfung unter dem Lock, vor jeder Änderung (F3) ===
+$fence = agentFenceCheck($config, $input);
+if (!$fence['allow']) {
+    $releaseLock();
+    sendJsonResponse($fence['http'], $fence['body']);
+}
+
 // === Verwaltete .conf-Dateien scannen ===
-$confFiles = glob("$confDir/*.conf");
+// S43 (AS1): Lesefehler des Verzeichnisses erkennen (sonst "keine verwaisten Zonen" als Erfolg)
+$confFiles = listConfFiles($confDir);
 if ($confFiles === false) {
     $releaseLock();
     sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Lesen des Konfigurationsverzeichnisses']);
@@ -103,6 +112,54 @@ foreach ($confFiles as $file) {
     }
 }
 
+// === E98 (S43-Ergänzung): bisherige zones.conf vollständig lesen und Vollständigkeit der Auflistung nachweisen ===
+// Ein getdents()-Fehler mitten im Durchlauf kann scandir() und glob() gleichermaßen verkürzen, ohne dass PHP einen Fehler
+// meldet. Jedes bisherige Include muss deshalb entweder in der Behalten-Liste oder unter den als verwaist erkannten
+// Dateien stehen; sonst ohne jede Änderung und ohne Reload abbrechen (auch statt eines No-op-Erfolgs).
+// E99: Existenz fail-closed prüfen
+$zonesConfState = pathState($zonesConfPath);
+if ($zonesConfState === 'error') {
+    $releaseLock();
+    sendJsonResponse(500, ['status' => 'error', 'message' => 'Zustand der bestehenden zones.conf nicht prüfbar – keine Änderung vorgenommen']);
+}
+$zonesConfExisted = $zonesConfState === 'present';
+$oldZonesConf = null;
+$oldZonesConfPerms = null;
+if ($zonesConfExisted) {
+    $oldZonesConf = is_file($zonesConfPath) ? readFileComplete($zonesConfPath) : false;
+    if ($oldZonesConf === false) {
+        $releaseLock();
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
+    }
+    $perms = @fileperms($zonesConfPath);
+    $oldZonesConfPerms = $perms !== false ? ($perms & 0777) : null;
+}
+$keepPaths = [];
+$listedPaths = [];
+foreach (array_merge($keepConfFiles, array_values($orphanConfFiles)) as $i => $file) {
+    $real = realpath($file);
+    if ($real === false) {
+        $listedPaths = null;
+        break;
+    }
+    $listedPaths[] = $real;
+    if ($i < count($keepConfFiles)) {
+        $keepPaths[] = $real;
+    }
+}
+$missingIncludes = $listedPaths === null ? null : array_values(array_diff(zonesConfIncludes((string)$oldZonesConf), $listedPaths));
+if ($missingIncludes === null || $missingIncludes !== []) {
+    $releaseLock();
+    sendJsonResponse(500, [
+        'status' => 'error',
+        'message' => 'Verzeichnisauflistung nicht zweifelsfrei vollständig – keine Änderung, kein Reload',
+        'code' => 'listing_incomplete',
+        'missing_includes' => $missingIncludes === null ? null : count($missingIncludes),
+        'removed_conf' => [],
+        'removed_zone_files' => []
+    ]);
+}
+
 // === No-op: keine verwaisten .conf ===
 if (empty($orphanConfFiles)) {
     $releaseLock();
@@ -117,24 +174,11 @@ if (empty($orphanConfFiles)) {
 
 // === A/B: neue zones.conf ohne verwaiste Includes im Speicher erzeugen ===
 $includes = [];
-foreach ($keepConfFiles as $file) {
-    $includes[] = 'include "' . realpath($file) . '";';
+foreach ($keepPaths as $real) {
+    $includes[] = 'include "' . $real . '";';
 }
 $zonesConfContent = implode("\n", $includes) . "\n";
-
-// === Bisherigen Zustand von zones.conf sichern (für Rollback); bei Lesefehler ohne Änderung abbrechen ===
-$zonesConfExisted = file_exists($zonesConfPath);
-$oldZonesConf = null;
-$oldZonesConfPerms = null;
-if ($zonesConfExisted) {
-    $oldZonesConf = is_file($zonesConfPath) ? @file_get_contents($zonesConfPath) : false;
-    if ($oldZonesConf === false) {
-        $releaseLock();
-        sendJsonResponse(500, ['status' => 'error', 'message' => 'Sicherung der bestehenden zones.conf fehlgeschlagen – keine Änderung vorgenommen']);
-    }
-    $perms = @fileperms($zonesConfPath);
-    $oldZonesConfPerms = $perms !== false ? ($perms & 0777) : null;
-}
+// Die Sicherung der bisherigen zones.conf (für Rollback) liegt bereits vollständig gelesen vor (E98, oben).
 
 // === C: zones.conf atomar ersetzen (Temp-Datei im selben Verzeichnis + rename) ===
 // Bei Fehler bleibt die bisherige zones.conf unverändert (kein Rollback nötig).
@@ -150,7 +194,9 @@ if (!$preflight['ok']) {
     // Es wurden noch keine Orphan-Dateien gelöscht; kein Reload.
     $restored = $zonesConfExisted
         ? writeTextFileAtomic($zonesConfPath, $oldZonesConf, $oldZonesConfPerms)
-        : (!file_exists($zonesConfPath) || @unlink($zonesConfPath));
+        : (pathState($zonesConfPath) === 'absent' || @unlink($zonesConfPath));   // E99
+    // AS1: wiederhergestellten Zustand dauerhaft machen
+    $restored = $restored && syncDirectory(dirname($zonesConfPath));
 
     if (!$restored) {
         error_log('[zone_cleanup] ROLLBACK FEHLGESCHLAGEN: zones.conf konnte nach named-checkconf-Fehler nicht wiederhergestellt werden');
@@ -195,8 +241,14 @@ $removedZoneFiles = [];
 $errors = [];
 foreach ($orphanConfFiles as $base => $confFile) {
     $zoneFile = "$zoneDir/db.$base";
-    if (file_exists($zoneFile)) {
-        if (!@unlink($zoneFile) && file_exists($zoneFile)) {
+    // E99: Prüffehler ⇒ .conf als Orphan-Marker behalten (Retry beim nächsten Cleanup), nie als "entfernt" werten
+    $zoneFileState = pathState($zoneFile);
+    if ($zoneFileState === 'error') {
+        $errors[] = "Verwaiste Zonendatei nicht prüfbar: " . basename($zoneFile);
+        continue;
+    }
+    if ($zoneFileState === 'present') {
+        if (!@unlink($zoneFile) && pathState($zoneFile) !== 'absent') {
             // .conf als Orphan-Marker behalten → Retry beim nächsten Cleanup
             $errors[] = "Verwaiste Zonendatei konnte nicht entfernt werden: " . basename($zoneFile);
             continue;
@@ -204,12 +256,18 @@ foreach ($orphanConfFiles as $base => $confFile) {
         $removedZoneFiles[] = basename($zoneFile);
     }
 
-    if (!@unlink($confFile) && file_exists($confFile)) {
+    if (!@unlink($confFile) && pathState($confFile) !== 'absent') {
         // Bereits entfernte db-Datei wird nicht wiederhergestellt
         $errors[] = "Verwaiste Konfigurationsdatei konnte nicht entfernt werden: " . basename($confFile);
         continue;
     }
     $removedConf[] = basename($confFile);
+}
+
+// === AS1: Änderungen dauerhaft machen (fsync der Verzeichnisse) vor dem Reload ===
+// Der Bestand ist bereits verändert; ein Fehler macht den Cleanup unvollständig (Fehlerantwort mit "rndc").
+if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {
+    $errors[] = 'Änderungen nicht dauerhaft bestätigt (fsync des Verzeichnisses fehlgeschlagen)';
 }
 
 // === E: genau ein BIND-Reload (zones.conf includiert die Orphans bereits nicht mehr) ===
