@@ -47,8 +47,12 @@ gesenkt; `init` nur ohne vorhandenen H und ohne Marke.
 4. `system/status` bzw. `status` der CLI prüfen (`state = ok`).
 5. `enforce` erst nach AS4 und nur stufenweise (zuerst ns2).
 
-Rückweg: `fencing_mode` entfernen (= `off`). H bleibt liegen und wird in `off` weder gelesen noch geschrieben. Eine
-etwaige Fehlermarke sperrt dagegen auch in `off` alle Schreibvorgänge (E97) und muss nach Abschnitt 4 aufgehoben werden.
+Rückweg: `fencing_mode` entfernen (= `off`). Die H-Datei bleibt liegen. In `off` lesen und schreiben die drei
+schreibenden Endpunkte (`zone_sync`, `conf_sync`, `zone_cleanup`) H nicht; `system/status` liest H auch in `off`, aber
+nur zur diagnostischen Anzeige, wenn eine Fehlermarke gemeldet wird (ARCHITECTURE_HISTORY §5e, E97). Unabhängig vom
+Modus bleibt die Fehlermarke wirksam: Eine vorhandene oder nicht prüfbare Marke sperrt auch in `off` alle drei
+schreibenden Endpunkte (E97, E99) und muss nach Abschnitt 4 aufgehoben werden; ebenso sperrt eine fehlende
+PHP-Erweiterung `posix` in jedem Modus (E100, Abschnitt 1).
 
 ## 4. Fehlermarke aufheben
 
