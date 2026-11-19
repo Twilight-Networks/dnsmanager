@@ -30,11 +30,30 @@ $uptimeSeconds = @file_get_contents('/proc/uptime');
 $uptime = $uptimeSeconds ? (int)explode(' ', $uptimeSeconds)[0] : null;
 $load = sys_getloadavg();
 
-// AS2a (E117): in observe/enforce laufen alle externen Prozesse dieses Endpunkts über den Prozess-Runner mit absoluter
-// Frist (keine hängende Anfrage bei blockiertem rndc-Steuerkanal oder DNS); im Modus off unverändert (E95, E101)
-// Ohne PHP-Erweiterung posix (E100: Schreibvorgänge ohnehin gesperrt, fencing.state = requirement_missing) bleibt es beim
-// bisherigen Ablauf, weil Prozessgruppen ohne posix nicht beendet werden können.
-$as2 = in_array(fenceMode($config), ['observe', 'enforce'], true) && agentPosixAvailable();
+// AS2a (E117): Nur der ausdrücklich konfigurierte Modus off (bzw. fehlendes fencing_mode) verwendet den bisherigen Ablauf
+// (E95, E101). In observe/enforce laufen alle externen Prozesse dieses Endpunkts über den Prozess-Runner mit absoluter
+// Frist. Fail-closed ohne externen Prozess (Review AS2a): fehlende PHP-Erweiterung posix (Prozessgruppen wären nicht
+// beendbar; E100) ⇒ 503 agent_requirement_missing; unbekannter fencing_mode ⇒ 503 fence_misconfigured.
+$mode = fenceMode($config);
+if ($mode !== 'off') {
+    if (!agentPosixAvailable()) {
+        sendJsonResponse(503, [
+            'status'  => 'error',
+            'message' => 'Agent-Voraussetzung fehlt: PHP-Erweiterung posix – Statusprüfung nicht ausgeführt',
+            'code'    => 'agent_requirement_missing',
+            'fencing' => agentFenceStatus($config),
+        ]);
+    }
+    if ($mode === 'invalid') {
+        sendJsonResponse(503, [
+            'status'  => 'error',
+            'message' => 'Fencing: unbekannter fencing_mode in der Agent-Konfiguration – Statusprüfung nicht ausgeführt',
+            'code'    => 'fence_misconfigured',
+            'fencing' => agentFenceStatus($config),
+        ]);
+    }
+}
+$as2 = $mode !== 'off';
 $timeouts = [];
 $rndcBinary = $config['bind_rndc'] ?? '/usr/sbin/rndc';
 
