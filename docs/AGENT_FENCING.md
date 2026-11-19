@@ -1,6 +1,6 @@
 # Agent-Fencing: Betrieb (Meilenstein AS)
 
-Stand: 19.11.2026 · AS1 (Agent). Architektur und Entscheidungen: [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md),
+Stand: 19.11.2026 · AS1 (Agent), AS2a (Zustandsprüfung, Abschnitt 8). Architektur und Entscheidungen: [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md),
 Abschnitte 11 und 5e. Der Core sendet das Fencing-Token erst ab AS4; bis dahin sind auf installierten Agenten nur die
 Modi `off` und `observe` zulässig.
 
@@ -156,3 +156,54 @@ Ein zurückgespieltes Backup kann die Lauf-ID-Folge unter H senken; die Agenten 
 (fail-closed). Abhilfe ab AS4 per Core-Abgleich (H aller Agenten lesen, `publish_runs.AUTO_INCREMENT` darüber setzen).
 Bis dahin manuell: H aller Agenten per CLI `status` lesen und `ALTER TABLE publish_runs AUTO_INCREMENT = <max(H) + 1>`
 unter dem Publish-Lock. Agenten senken H nie.
+
+## 8. Zustandsprüfung vor der Übernahme (AS2a)
+
+Architektur: [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md) Abschnitt 5f (E101–E117). Nur in den Modi
+`observe` und `enforce`; im Modus `off` ist der Agent unverändert.
+
+**Voraussetzungen**
+
+| Voraussetzung | Prüfung |
+|---|---|
+| `dig` (`bind9-dnsutils`), `setsid` (`util-linux`), `sudo` unter `/usr/bin` | `command -v dig setsid sudo` |
+| 127.0.0.1 darf alle verwalteten Zonen abfragen (`allow-query`, E17) | `dig +norec @127.0.0.1 <zone> SOA` liefert `aa` |
+| Kontrollzone (`l3_control_zone`, Standard `localhost`): autoritative Zone ohne eigene `allow-query`, nicht vom DNS-Manager verwaltet (z. B. `include "/etc/bind/named.conf.default-zones";`) | `system/status` → `verification.control_zone = ok` |
+| unterstützter Konfigurationskontext: keine Views, kein `allow-new-zones`, keine Catalog-Zonen, keine DLZ, keine NZD/NZF-Dateien im `directory` bzw. `new-zones-directory` | `system/status` → `verification.config = ok` |
+
+Ist eine Voraussetzung nicht erfüllt, lehnt `zone_sync` jede Übernahme mit `served_state_unknown` (503) ab, auch für die
+erste Zone eines Servers; `system/status` nennt den Grund (`verification.config_reason`, `verification.control_zone`).
+Das ist beabsichtigt (fail-closed), keine Störung des Agenten.
+
+**Ablehnungen** (Bestand unverändert, kein Reload, `effect = none`; Rohwerte unter `serial_check`)
+
+| Code | HTTP | Bedeutung | Behebung |
+|---|---|---|---|
+| `stale_serial` | 409 | neue Serial nach RFC 1982 nicht größer als Datei bzw. ausgelieferte Serial | höhere Serial wählen (Core, E78/AS5) |
+| `serial_conflict` | 409 | gleiche Serial mit anderem Inhalt (bzw. ohne vorhandene Datei) | höhere Serial |
+| `serial_undefined` | 409 | Abstand genau 2³¹ | höhere Serial |
+| `zone_state_invalid` | 409 | vorhandene Zonendatei lesbar, aber ungültig | Reparatur über die Admin-Operation des Core (AS4) mit `repair` |
+| `repair_mismatch` | 409 | Reparaturkennzeichen passt nicht zum vorgefundenen Zustand bzw. ist nicht zulässig | Zustand neu ermitteln |
+| `zone_state_unreadable` | 503 | vorhandene Datei nicht lesbar, nicht prüfbar, Symlink oder keine reguläre Datei | lokal prüfen |
+| `served_state_unknown` | 503 | Konfiguration oder ausgelieferter Zustand nicht eindeutig (Grund in `serial_check`) | siehe unten |
+| `check_timeout`, `lock_timeout` | 503 | Frist abgelaufen vor jeder Änderung | Ursache (Last, hängender Prozess) prüfen |
+
+In `observe` werden nur `stale_serial`, `serial_conflict` und `serial_undefined` nicht abgelehnt (`would_reject`).
+
+**`served_state_unknown` beheben** (lokal, als root; der Agent darf `rndc zonestatus` nicht ausführen):
+
+1. `serial_check.config_reason` bzw. `served_reason` lesen.
+2. SERVFAIL (`configured_not_served`): `rndc zonestatus <zone>`; „zone not loaded“ ⇒ Zonendatei herstellen bzw.
+   Berechtigungen prüfen (`journalctl -u named`), oder nicht benötigte Konfiguration entfernen; danach `rndc reload`.
+3. NZD/NZF-Dateien (`nzd_present`): nur, wenn `allow-new-zones` nicht gesetzt ist und die dynamischen Zonen nicht
+   benötigt werden: named stoppen, Dateien sichern und entfernen, named starten.
+4. Zonenzahl (`zone_count_mismatch`): Konfiguration wurde ohne Reload geändert ⇒ `named-checkconf` und `rndc reload`.
+5. Pfad/Typ/Optionen (`zone_file_mismatch`, `zone_type_unsupported`, `zone_options_unsupported`): Die Zone ist nicht in der
+   vom DNS-Manager erzeugten Form konfiguriert (`type master; file "<zone_data_dir>/db.<zone>";`) ⇒ fremde Konfiguration
+   bereinigen.
+
+**Reload und Wirkung** – Antworten in `observe`/`enforce` enthalten `effect` (`none`, `unchanged`, `applied`, `partial`,
+`unknown`). Nach einem Reload-Versuch gibt es keinen Rollback: `reload_failed`/`reload_timeout` (500) bedeuten „Datei
+bzw. Konfiguration übernommen, Ladezustand unbekannt“ (`bind_state = unknown`); der nächste erfolgreiche Reload lädt den
+neueren Stand. `rollback` erscheint nur, wenn ein Rollback tatsächlich versucht wurde (`ok`/`failed`), sonst
+`not_attempted`.

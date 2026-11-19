@@ -50,6 +50,16 @@ return [
     'bind_named_checkzone' => '/usr/bin/named-checkzone',
     'bind_named_checkconf' => '/usr/bin/named-checkconf',
     'bind_rndc'            => '/usr/sbin/rndc',
+    // AS2a (nur observe/enforce): dig für die Abfrage des lokalen BIND an 127.0.0.1
+    'bind_dig'             => '/usr/bin/dig',
+
+    /** ---------------------------------------
+     *  Zustandsprüfung vor der Übernahme (AS2a, docs/ARCHITECTURE_HISTORY.md Abschnitt 5f; nur observe/enforce)
+     * --------------------------------------- */
+    // Kontrollzone (Betriebsvoraussetzung): autoritative Zone dieses BIND ohne eigene allow-query-Anweisung, nicht vom
+    // DNS-Manager verwaltet (Standard 'localhost', z. B. aus named.conf.default-zones). Ohne sie gilt eine REFUSED-Antwort
+    // für eine nicht konfigurierte Zone ohne Elternzone als nicht nachweisbar (served_state_unknown).
+    // 'l3_control_zone' => 'localhost',
 
     /** ---------------------------------------
      *  Fencing (Meilenstein AS, docs/ARCHITECTURE_HISTORY.md Abschnitt 5e)

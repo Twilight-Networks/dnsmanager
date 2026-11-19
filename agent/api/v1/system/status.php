@@ -17,6 +17,7 @@ require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/response.php';
 require_once __DIR__ . '/../../../inc/fence.php';
+require_once __DIR__ . '/../../../inc/dns_state.php';
 
 // === Konfiguration laden und Token prüfen ===
 $config = require __DIR__ . '/../../../config/api_config.php';
@@ -67,6 +68,19 @@ $fenceStatus = agentFenceStatus($config);
 if ($fenceStatus !== null) {
     $response['capabilities'] = ['fencing' => 1, 'durable_writes' => 1];
     $response['fencing'] = $fenceStatus;
+}
+
+// === AS2a: Zustandsprüfung (E103) und Betriebsvoraussetzung Kontrollzone – nur in observe/enforce; HTTP-Status und
+// BIND-Auswertung unverändert. In off bleibt die Antwort unverändert. ===
+if (in_array(fenceMode($config), ['observe', 'enforce'], true) && agentPosixAvailable()) {
+    $proof = dnsConfigProof($config);
+    $response['capabilities']['serial_rule'] = 1;
+    $response['capabilities']['state_check'] = 1;
+    $response['verification'] = [
+        'config'       => $proof['state'],
+        'config_reason' => $proof['reason'],
+        'control_zone' => dnsControlZoneState($config, $proof)['state'],
+    ];
 }
 
 // === Fehlerstatus erkennen ===

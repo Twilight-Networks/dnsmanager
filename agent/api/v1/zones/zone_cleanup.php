@@ -17,6 +17,11 @@
  * - valid_zones: Pflicht, Array nicht-leerer Strings
  * - allow_empty: Eine leere valid_zones-Liste ist nur mit allow_empty === true (JSON-Boolean) zulässig
  *
+ * AS2a (Modi observe/enforce; docs/ARCHITECTURE_HISTORY.md Abschnitt 5f): Prozessfristen (E117), Exit-Code des
+ * Reloads (E93), Ergebnis je Zone (zones: conf/file = removed|absent|kept|unknown) und aggregierte Wirkung effect nach
+ * der Vorrangregel (nachgewiesene Änderung und ein Rest ⇒ partial; nie none nach einer Änderung). Kein Rollback nach dem
+ * Löschen bzw. dem Reload-Versuch. Im Modus off ist das Verhalten unverändert (E95, E101).
+ *
  * Sicherheit:
  * - Zugriff nur mit gültigem Bearer-Token
  * - Kein Datenbankzugriff erforderlich
@@ -29,12 +34,19 @@ require_once __DIR__ . '/../../../inc/auth.php';
 require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
 require_once __DIR__ . '/../../../inc/fence.php';
+require_once __DIR__ . '/../../../inc/dns_state.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
 $config = require __DIR__ . '/../../../config/api_config.php';
 $validTokens = loadApiTokens($config['token_file']);
 requireValidToken($validTokens);
+
+// AS2a: neue Fristen und Angaben nur in observe/enforce
+$as2 = fenceMode($config) !== 'off';
+if ($as2) {
+    agentResponseAttach('effect', 'none');   // bis zur ersten nachgewiesenen Änderung
+}
 
 // === Eingabe prüfen ===
 $input = json_decode(file_get_contents('php://input'), true);
@@ -65,12 +77,24 @@ $zonesConfPath = $config['zones_conf_file'];
 // === Gemeinsamen Agent-Lock erwerben (identisch zu zone_sync.php/conf_sync.php, blockierend) ===
 // Scan, zones.conf-Ersatz, Löschungen und Reload erfolgen vollständig unter diesem Lock.
 $lockPath = agentLockPath($config);
-$lockHandle = @fopen($lockPath, 'c');
-if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
-    if (is_resource($lockHandle)) {
-        fclose($lockHandle);
+if ($as2) {
+    // AS2a (E117): nicht blockierend mit Frist; es müssen mindestens 8 s Arbeitszeit verbleiben
+    $lock = agentLockWithDeadline($lockPath, 8.0);
+    $lockHandle = $lock['handle'];
+    if ($lockHandle === null) {
+        if ($lock['reason'] === 'timeout') {
+            sendJsonResponse(503, ['status' => 'error', 'message' => 'Agent-Sperre innerhalb der Frist nicht erhalten – keine Änderung', 'code' => 'lock_timeout']);
+        }
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für den Zonen-Cleanup']);
     }
-    sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für den Zonen-Cleanup']);
+} else {
+    $lockHandle = @fopen($lockPath, 'c');
+    if ($lockHandle === false || !flock($lockHandle, LOCK_EX)) {
+        if (is_resource($lockHandle)) {
+            fclose($lockHandle);
+        }
+        sendJsonResponse(500, ['status' => 'error', 'message' => 'Fehler beim Erwerben des Sperrmechanismus für den Zonen-Cleanup']);
+    }
 }
 
 // Lock freigeben (vor jedem sendJsonResponse nach Lock-Erwerb; mehrfacher Aufruf unschädlich)
@@ -169,7 +193,7 @@ if (empty($orphanConfFiles)) {
         'removed_conf' => [],
         'removed_zone_files' => [],
         'rndc' => ''
-    ]);
+    ] + ($as2 ? ['effect' => 'unchanged', 'zones' => []] : []));
 }
 
 // === A/B: neue zones.conf ohne verwaiste Includes im Speicher erzeugen ===
@@ -188,8 +212,9 @@ if (!writeTextFileAtomic($zonesConfPath, $zonesConfContent)) {
 }
 
 // === Verbindlicher named-checkconf-Preflight – VOR dem Löschen der Orphans und vor dem Reload ===
-$preflight = checkBindConfig();
+$preflight = $as2 ? agentCheckconfTimed($config) : checkBindConfig();
 if (!$preflight['ok']) {
+    $preflightTimeout = $as2 && $preflight['status'] !== 'ok';
     // Alte zones.conf wiederherstellen (atomar) bzw. entfernen, falls sie vorher nicht existierte.
     // Es wurden noch keine Orphan-Dateien gelöscht; kein Reload.
     $restored = $zonesConfExisted
@@ -207,11 +232,11 @@ if (!$preflight['ok']) {
             'rollback' => 'failed',
             'check_output' => trim($preflight['output']),
             'exit_code' => $preflight['exit_code']
-        ]);
+        ] + ($as2 ? ['effect' => 'unknown'] : []));
     }
 
     // Diagnose: Ist der wiederhergestellte vorherige Zustand gültig? (löst keinen Reload aus)
-    $previous = checkBindConfig();
+    $previous = $as2 ? agentCheckconfTimed($config) : checkBindConfig();
     $message = 'BIND-Konfigurationsprüfung (named-checkconf) fehlgeschlagen – zones.conf wiederhergestellt, keine Orphans entfernt, kein Reload';
     $response = [
         'status' => 'error',
@@ -227,9 +252,16 @@ if (!$preflight['ok']) {
         $response['previous_check_output'] = trim($previous['output']);
     }
     $response['message'] = $message;
+    if ($as2) {
+        $response['effect'] = 'none';   // zones.conf nachweislich wiederhergestellt, nichts gelöscht, kein Reload
+        if ($preflightTimeout) {
+            $response['code'] = 'check_timeout';
+            $response['message'] = 'BIND-Konfigurationsprüfung nicht abgeschlossen (Frist) – zones.conf wiederhergestellt, keine Orphans entfernt, kein Reload';
+        }
+    }
 
     $releaseLock();
-    sendJsonResponse(422, $response);
+    sendJsonResponse($as2 && $preflightTimeout ? 503 : 422, $response);
 }
 
 // === D: erst jetzt pro Orphan zuerst die exakt gepaarte db.<zone>, danach die verwaiste .conf entfernen ===
@@ -239,29 +271,42 @@ if (!$preflight['ok']) {
 $removedConf = [];
 $removedZoneFiles = [];
 $errors = [];
+$zoneResults = [];   // AS2a: Ergebnis je Zone (conf/file: removed | absent | kept | unknown)
 foreach ($orphanConfFiles as $base => $confFile) {
     $zoneFile = "$zoneDir/db.$base";
+    $zr = ['zone' => $base, 'conf' => 'kept', 'file' => 'kept'];
     // E99: Prüffehler ⇒ .conf als Orphan-Marker behalten (Retry beim nächsten Cleanup), nie als "entfernt" werten
     $zoneFileState = pathState($zoneFile);
     if ($zoneFileState === 'error') {
         $errors[] = "Verwaiste Zonendatei nicht prüfbar: " . basename($zoneFile);
+        $zr['file'] = 'unknown';
+        $zoneResults[] = $zr;
         continue;
     }
     if ($zoneFileState === 'present') {
-        if (!@unlink($zoneFile) && pathState($zoneFile) !== 'absent') {
+        if (!@unlink($zoneFile) && ($after = pathState($zoneFile)) !== 'absent') {
             // .conf als Orphan-Marker behalten → Retry beim nächsten Cleanup
             $errors[] = "Verwaiste Zonendatei konnte nicht entfernt werden: " . basename($zoneFile);
+            $zr['file'] = $after === 'present' ? 'kept' : 'unknown';
+            $zoneResults[] = $zr;
             continue;
         }
         $removedZoneFiles[] = basename($zoneFile);
+        $zr['file'] = 'removed';
+    } else {
+        $zr['file'] = 'absent';
     }
 
-    if (!@unlink($confFile) && pathState($confFile) !== 'absent') {
+    if (!@unlink($confFile) && ($after = pathState($confFile)) !== 'absent') {
         // Bereits entfernte db-Datei wird nicht wiederhergestellt
         $errors[] = "Verwaiste Konfigurationsdatei konnte nicht entfernt werden: " . basename($confFile);
+        $zr['conf'] = $after === 'present' ? 'kept' : 'unknown';
+        $zoneResults[] = $zr;
         continue;
     }
     $removedConf[] = basename($confFile);
+    $zr['conf'] = 'removed';
+    $zoneResults[] = $zr;
 }
 
 // === AS1: Änderungen dauerhaft machen (fsync der Verzeichnisse) vor dem Reload ===
@@ -271,6 +316,41 @@ if (!syncDirectories([$confDir, $zoneDir, dirname($zonesConfPath)])) {
 }
 
 // === E: genau ein BIND-Reload (zones.conf includiert die Orphans bereits nicht mehr) ===
+if ($as2) {
+    // AS2a (E93, E117): Exit-Code und Frist. zones.conf ist hier bereits ersetzt (nachgewiesene Änderung) – die
+    // Wirkung ist daher nie none (Vorrangregel in cleanupAggregateEffect). Kein Rollback.
+    $reload = agentReloadTimed($config);
+    $releaseLock();
+    $effect = cleanupAggregateEffect(true, $zoneResults);
+    $reloadReport = ['status' => $reload['status'], 'exit_code' => $reload['exit_code']];
+    if (!empty($errors) || $reload['status'] !== 'ok') {
+        $codeMap = ['timeout' => 'reload_timeout', 'not_started' => 'reload_not_started', 'failed' => 'reload_failed'];
+        sendJsonResponse(500, [
+            'status' => 'error',
+            'message' => !empty($errors) ? 'Zonen-Cleanup unvollständig: nicht alle verwaisten Dateien konnten entfernt werden.'
+                : 'Verwaiste Zonen entfernt, BIND-Reload nicht erfolgreich – Ladezustand unbestimmt',
+            'code' => !empty($errors) ? 'cleanup_incomplete' : $codeMap[$reload['status']],
+            'errors' => $errors,
+            'removed_conf' => $removedConf,
+            'removed_zone_files' => $removedZoneFiles,
+            'rndc' => $reload['output'],
+            'effect' => $effect,
+            'rollback' => 'not_attempted',
+            'zones' => $zoneResults,
+            'reload' => $reloadReport
+        ] + ($reload['status'] !== 'ok' ? ['bind_state' => 'unknown'] : []));
+    }
+    sendJsonResponse(200, [
+        'status' => 'success',
+        'message' => 'Verwaiste Zonen entfernt, zones.conf neu geschrieben.',
+        'removed_conf' => $removedConf,
+        'removed_zone_files' => $removedZoneFiles,
+        'rndc' => $reload['output'],
+        'effect' => $effect,
+        'zones' => $zoneResults,
+        'reload' => $reloadReport
+    ]);
+}
 $rndcOutput = reloadBind();
 
 // === F: Lock freigeben ===

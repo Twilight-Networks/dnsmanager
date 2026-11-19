@@ -523,7 +523,9 @@ def group_f(box):
         box.config(mode)
         r = call(box, 'system/status.php', method='GET')
         js = r['json'] or {}
-        check(G, f'F09 status {mode}', js.get('capabilities') == {'fencing': 1, 'durable_writes': 1}
+        # AS2a: capabilities wird um serial_rule/state_check ergänzt (additiv); die AS1-Angaben bleiben unverändert
+        caps = js.get('capabilities') or {}
+        check(G, f'F09 status {mode}', {k: caps.get(k) for k in ('fencing', 'durable_writes')} == {'fencing': 1, 'durable_writes': 1}
               and js.get('fencing') == {'mode': mode, 'domain': DOMAIN, 'state': 'ok', 'high': 15, 'fault': False}, f"{js.get('fencing')}")
     with open(os.path.join(box.zones, '.dnsmanager-fence.fault'), 'w') as f:
         f.write('x\n')
@@ -705,7 +707,8 @@ def group_s(box):
                 if re.search(pat, seq[i]):
                     return i
             return -1
-        steps = [r'flock\(\d+<<B>/zones/\.dnsmanager-agent\.lock>, LOCK_EX\)',
+        # AS2a (E117): Sperre in observe/enforce nicht blockierend mit Frist (LOCK_EX|LOCK_NB)
+        steps = [r'flock\(\d+<<B>/zones/\.dnsmanager-agent\.lock>, LOCK_EX(?:\|LOCK_NB)?\)',
                  r'openat\(.*\.dnsmanager-fence\.fault", O_WRONLY\|O_CREAT\|O_EXCL',
                  r'write\(\d+<<B>/zones/\.dnsmanager-fence\.fault>',
                  r'fsync\(\d+<<B>/zones/\.dnsmanager-fence\.fault>\)',
@@ -803,7 +806,10 @@ def verify_after(box, name, t_old, r, label, G, post_crash=False, mode='enforce'
             if open(box.zonesconf).read() != box.expected_zonesconf():
                 problems.append('zones.conf bindet nicht genau die vorhandenen .conf-Dateien ein')
         else:
-            flagged = js.get('rollback') == 'failed' or (name == 'zone_cleanup' and 'rndc' in js)
+            # AS2a (E104): in observe/enforce kennzeichnet effect (applied/partial/unknown) eine eingetretene bzw. nicht
+            # ausschließbare Änderung; rollback = failed nur noch bei tatsächlich versuchtem Rollback
+            flagged = (js.get('rollback') == 'failed' or (name == 'zone_cleanup' and 'rndc' in js)
+                       or js.get('effect') in ('applied', 'partial', 'unknown'))
             if kind != 'old' and not flagged:
                 problems.append(f'Fehler {status} mit Änderung ohne Kennzeichnung')
             if kind == 'old' and box.rndc_calls() > 0 and not flagged:
