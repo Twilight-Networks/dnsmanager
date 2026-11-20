@@ -408,3 +408,83 @@ bash scripts/migrate_005_publish_journal.sh --db dnsmanager --check
   das erneut ausgeführte Skript ergänzt die fehlenden.
 - **Rückweg:** Code-Rollback auf H2c ohne Löschen der Tabellen (E27); der H2c-Code nutzt sie nicht. `DROP TABLE` nur als
   freigegebene, datenverlustbehaftete Sondermaßnahme mit Sicherung.
+
+## 006 – Serial ohne Vorzeichen und ausgelieferter Stand je Zone und Server (AS3)
+
+| Datei | Zweck |
+|---|---|
+| `006a_zone_server_verification.sql` | Schritt a: `CREATE TABLE IF NOT EXISTS zone_server_verification` (atomar) |
+| `006b_zones_soa_serial_unsigned.sql` | Schritt b: `ALTER TABLE zones MODIFY soa_serial INT UNSIGNED NOT NULL DEFAULT 2025010101, ALGORITHM=COPY, LOCK=SHARED` (atomar) |
+| `../../scripts/migrate_006_zone_serial_verification.sh` | Preflight, Sicherung, geschützte Sitzung unter dem Publish-Lock, Nachprüfung |
+
+Die SQL-Dateien werden **nur über das Skript** ausgeführt (Lock, Sitzungsparameter und Prüfungen gehören dazu).
+E79: `zones.soa_serial` wird `INT UNSIGNED` (Wertebereich 0 … 4294967295, RFC 1982). E87: neue, retentionsfeste
+Tabelle `zone_server_verification` (letzte Beobachtung und letzter positiver Nachweis je Zone und Server, ohne
+Fremdschlüssel; Datenvertrag in `docs/ARCHITECTURE_HISTORY.md`, Abschnitt 5h). Keine anderen Tabellen werden verändert.
+Voraussetzung: Migrationen 002–005 exakt wie erwartet (Reihenfolge 002 → 003 → 004 → 005 → 006).
+
+`generate_next_serial()`, Generator, Publish und Historie bleiben unverändert (Serial-Strategie AS5). Bis AS5 endet eine
+Veröffentlichung mit Serial 4294967295 mit dem Status `error` (Rollback, keine Datei, keine Serial verbraucht): Die
+nächste Serial 4294967296 weist bereits `named-checkzone` zurück, die Spalte würde sie ebenfalls ablehnen. Bisher endete
+eine Veröffentlichung bei 2147483647 ebenso mit `error` (Wertebereich der Spalte). Die Tabelle wird bis AS4 weder gelesen noch geschrieben.
+
+### Verbindliche Reihenfolge und Rollout-Voraussetzungen
+
+1. **Ruhiges Zeitfenster** wählen: keine Veröffentlichung, keine Verwaltungsänderungen, keine DynDNS-Updates erwartet.
+   Der Publish-Lock `dnsmanager_publish_all` schließt nur Publish-Läufe aus, **nicht** andere Fachtransaktionen
+   (Zonen-, Record-, Server- und DynDNS-Änderungen). Diese halten während ihrer Transaktion eine Metadatensperre auf
+   `zones`; das `ALTER` wartet darauf höchstens `lock_wait_timeout` = 10 s und bricht dann mit Exit 3 ab (Wiederanlauf
+   möglich). Während der Tabellenkopie (`LOCK=SHARED`) bleiben Lesezugriffe möglich, schreibende Zugriffe auf `zones`
+   warten, bis die Kopie abgeschlossen ist (Dauer proportional zur Zonenzahl).
+2. **Sicherung und Migration 006** (Code noch alt).
+3. **Prüfung** `--check` → Exitcode 0.
+4. **Code** ausrollen (per festem SHA).
+
+Der alte Code bleibt mit dem neuen Schema lauffähig (sein `SchemaCheck` prüft weder die neue Tabelle noch den Typ der
+Spalte; er schreibt Serials über 2147483647 korrekt; nachgewiesen in `tests/history/as3_test.php`, Gruppe K). Der neue
+Code mit altem Schema antwortet bei Login und geschützten Seiten mit 503 (`SchemaCheck`, fail-closed:
+„zones.soa_serial: Typ int(11) statt int(10) unsigned“, „zone_server_verification fehlt“).
+
+### Ablauf
+
+```bash
+bash scripts/migrate_006_zone_serial_verification.sh --db dnsmanager --check
+#    Exit 1 = Migration erforderlich, 0 = vollständig, 2 = 002–005 fehlen/abweichend, Struktur abweichend oder negative Serial
+bash scripts/migrate_006_zone_serial_verification.sh --db dnsmanager --apply --backup-dir /root/dnsmanager-backup
+bash scripts/migrate_006_zone_serial_verification.sh --db dnsmanager --check
+```
+
+- **Preflight ohne Lock:** 002–005 exakt wie erwartet; `zone_server_verification` fehlt oder entspricht exakt der
+  Erwartung (Spalten, Indizes, CHECKs mit normalisiertem Ausdruck; jede Abweichung ⇒ Exit 2); `zones.soa_serial` ist
+  `int(11) NOT NULL DEFAULT 2025010101` (alt) oder `int(10) unsigned NOT NULL DEFAULT 2025010101` (neu), sonst Exit 2;
+  keine negativen Serials (sonst Exit 2, manuell klären). Daraus der Plan: nur die fehlenden Schritte a und/oder b.
+  Vollständig migriert ⇒ „Nichts zu tun“, keine DDL, keine geschützte Sitzung.
+- **Geschützte Sitzung (eine Verbindung):** `sql_mode` strikt und `lock_wait_timeout = 10` auf genau der Verbindung,
+  die die DDL ausführt; `GET_LOCK('dnsmanager_publish_all', 0)` mit Bestätigung (Rückgabe 1 und
+  `IS_USED_LOCK() = CONNECTION_ID()`), belegter Lock ⇒ Exit 2 ohne DDL; Preflight unter dem Lock (geplanter
+  Ausgangszustand unverändert, keine negativen Werte; sonst Exit 2 ohne DDL); Kennwerte vorher (Zeilenzahl, Summe,
+  Minimum, Maximum, XOR-Prüfsumme über `id:soa_serial`); Lock-Besitz vor und nach jeder DDL bestätigt (verloren ⇒
+  Abbruch, Exit 3); Ergebnis jedes Schritts in derselben Sitzung geprüft; die SQL-Dateien werden in die Sitzung
+  eingebettet, damit jeder DDL-Fehler die Sitzung sofort beendet; Kennwerte nachher; `RELEASE_LOCK` (Rückgabe 1 geprüft). Endet die Sitzung vorzeitig, gibt der
+  Server den Lock mit dem Verbindungsende frei. Fremdschlüssel- und CHECK-Prüfungen werden nie abgeschaltet.
+- **Nachprüfung:** vollständige Struktur über `SchemaCheck`; Kennwerte vorher = nachher (sonst Exit 3).
+- **Teilzustände und Wiederanlauf:** Jede DDL-Anweisung ist atomar. Mögliche Zustände: nichts geändert; Tabelle
+  angelegt, Spalte noch mit Vorzeichen (Abbruch in Schritt b, z. B. Metadatensperre); Spalte umgestellt, Tabelle fehlt
+  (nur nach manuellem Eingriff). Das Skript meldet bei Exit 3 den vorgefundenen Zustand; erneut ausgeführt führt es
+  nur den fehlenden Schritt aus. Ein gleichzeitiges Anlegen oder Löschen einer Zone zwischen Kennwert-Erhebung und
+  `ALTER` führt zu einem vorsichtigen Exit 3 (Kennwerte ungleich) bei vollständiger Migration; `--check` zeigt dann 0.
+- **Rückweg:** Code-Rollback auf den Stand vor AS3 ohne Schemaänderung (alter Code ist mit dem neuen Schema lauffähig).
+  Ein Rückbau des Schemas ist nur bei leerer `zone_server_verification` und `MAX(soa_serial) ≤ 2147483647` möglich und
+  nur als freigegebene Sondermaßnahme mit Sicherung, Publish-Lock und ruhigem Zeitfenster:
+
+```sql
+SELECT GET_LOCK('dnsmanager_publish_all', 0);
+SELECT COUNT(*) FROM zone_server_verification;                 -- muss 0 sein
+SELECT MAX(soa_serial) FROM zones;                             -- muss ≤ 2147483647 sein
+SET SESSION sql_mode = 'STRICT_ALL_TABLES', SESSION lock_wait_timeout = 10;
+ALTER TABLE zones MODIFY soa_serial INT NOT NULL DEFAULT 2025010101, ALGORITHM=COPY, LOCK=SHARED;
+DROP TABLE zone_server_verification;
+SELECT RELEASE_LOCK('dnsmanager_publish_all');
+```
+
+  Bei größeren Serials scheitert das `ALTER` im strikten Modus ohne Änderung (nachgewiesen in Q16).
