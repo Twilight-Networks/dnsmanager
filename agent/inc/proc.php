@@ -10,6 +10,7 @@
  * - Jeder Prozess läuft in einer eigenen Prozessgruppe (setsid). Bei Fristablauf erhält die Gruppe SIGTERM (sudo leitet
  *   es an den Befehl weiter, auch mit use_pty), nach kurzer Wartezeit SIGKILL. So bleiben keine verwaisten Kindprozesse.
  * - Ein abgebrochener Prozess gilt als "timeout" – der Aufrufer entscheidet, ob die Wirkung unbestimmt ist (z. B. rndc).
+ * - AS2b (E120): Ein Abschnitt kann eine engere Frist setzen (agentWithSectionDeadline); TW bleibt die absolute Grenze.
  *
  * Nur in den Modi observe/enforce verwendet; im Modus off laufen die bisherigen Funktionen aus bind_utils.php
  * unverändert (E101, E95). Voraussetzung: PHP-Erweiterung posix (E100).
@@ -23,6 +24,8 @@ const AGENT_WORK_DEADLINE = 24.0;
 const AGENT_PROC_TERM_GRACE = 0.5;
 /** Kleinste sinnvolle Laufzeit eines externen Prozesses (Sekunden) */
 const AGENT_PROC_MIN_RUNTIME = 0.3;
+/** Längster Nachlauf nach Fristablauf (Wartezeiten nach SIGTERM und nach SIGKILL in agentKillGroup, Sekunden) */
+const AGENT_PROC_KILL_MAX = 2 * AGENT_PROC_TERM_GRACE;
 
 /** util-linux setsid (absoluter Pfad, unabhängig von PATH des Webservers) */
 const AGENT_SETSID = '/usr/bin/setsid';
@@ -49,9 +52,39 @@ function agentWorkDeadline(): float {
     return $deadline;
 }
 
-/** Restzeit bis zum Arbeitsende (Sekunden, ggf. negativ). */
+/**
+ * AS2b (E120): Frist des laufenden Abschnitts (absolute Unix-Zeit) oder null. Ein Abschnitt (Vorabnachweis im Cleanup,
+ * Nachverifikation nach dem Reload) darf nur bis zu dieser Frist arbeiten; sie liegt nie nach TW. Ohne Abschnitt
+ * (Standard, alle AS2a-Pfade) ist das Verhalten unverändert.
+ */
+function &agentSectionDeadlineRef(): ?float {
+    static $deadline = null;
+
+    return $deadline;
+}
+
+/**
+ * Führt $fn mit einer engeren Abschnittsfrist aus (AS2b, E120). agentRemaining() und damit jeder externe Prozess richten
+ * sich in dieser Zeit nach min(TW, Abschnittsfrist): Ein Prozess erhält höchstens die Restzeit des Abschnitts und wird
+ * nicht gestartet, wenn sie nicht für die Mindestlaufzeit reicht. Verschachtelte Abschnitte können die Frist nur
+ * verkürzen. Die bisherige Frist wird danach immer wiederhergestellt.
+ */
+function agentWithSectionDeadline(float $deadline, callable $fn): mixed {
+    $ref = &agentSectionDeadlineRef();
+    $previous = $ref;
+    $ref = min($deadline, $previous ?? $deadline, agentWorkDeadline());
+    try {
+        return $fn();
+    } finally {
+        $ref = $previous;
+    }
+}
+
+/** Restzeit bis zum Arbeitsende bzw. bis zum Ende des laufenden Abschnitts (Sekunden, ggf. negativ). */
 function agentRemaining(): float {
-    return agentWorkDeadline() - microtime(true);
+    $section = agentSectionDeadlineRef();
+
+    return ($section !== null ? min($section, agentWorkDeadline()) : agentWorkDeadline()) - microtime(true);
 }
 
 /**

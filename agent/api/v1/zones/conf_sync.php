@@ -14,6 +14,10 @@
  * tatsächlich versuchtem Rollback); nach dem Reload-Versuch gibt es keinen Rollback (Vorwärtsstrategie). Im Modus off ist
  * das Verhalten unverändert (E95, E101).
  *
+ * AS2b (observe/enforce; Abschnitt 5g): Nach dem Reload wird die Zone unter der Agent-Sperre nachgeprüft (Polling höchstens
+ * 10 s, nie über TW − 1 s): Feld verification mit state verified | serial_differs | unknown. HTTP-Status, message,
+ * effect und rollback bleiben unverändert (E107); nach einem gescheiterten Reload keine DNS-Abfrage (E122).
+ *
  * Sicherheit:
  * - Zugriff nur mit gültigem Bearer-Token (Header: Authorization: Bearer <token>)
  * - Kein Datenbankzugriff erforderlich
@@ -27,6 +31,7 @@ require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
 require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/dns_state.php';
+require_once __DIR__ . '/../../../inc/dns_verify.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -62,7 +67,7 @@ $zonesConfPath = $config['zones_conf_file'];
 
 // === Gemeinsamen Agent-Lock erwerben (identisch zu zone_sync.php, blockierend) ===
 // Serialisiert zone_sync und conf_sync gegenseitig: alle Änderungen an verwalteten BIND-Dateien
-// und der BIND-Reload erfolgen unter diesem Lock. Erst nach reloadBind() freigeben.
+// und der BIND-Reload erfolgen unter diesem Lock. Erst nach reloadBind() freigeben (AS2b: nach der Nachverifikation).
 $lockPath = agentLockPath($config);
 if ($as2) {
     // AS2a (E117): nicht blockierend mit Frist; es müssen mindestens 8 s Arbeitszeit verbleiben
@@ -281,6 +286,10 @@ if (!syncDirectories($syncDirs)) {
 if ($as2) {
     // AS2a (E93, E117): Exit-Code und Frist; kein Nachweis der Übernahme; kein Rollback nach dem Reload-Versuch
     $reload = agentReloadTimed($config);
+    // AS2b (E119, E121, E122): Nachverifikation unter der Agent-Sperre; ohne erfolgreichen Reload keine DNS-Abfrage
+    $verification = $reload['status'] === 'ok'
+        ? agentVerifyLoaded($config, (string)$zoneName, microtime(true))
+        : verifyLoadedNotAttempted((string)$zoneName, 'reload_' . $reload['status']);
     $releaseLock();
     $reloadReport = ['status' => $reload['status'], 'exit_code' => $reload['exit_code']];
     if ($reload['status'] !== 'ok') {
@@ -293,7 +302,8 @@ if ($as2) {
             'rollback' => 'not_attempted',
             'bind_state' => 'unknown',
             'reload' => $reloadReport,
-            'rndc' => $reload['output']
+            'rndc' => $reload['output'],
+            'verification' => $verification
         ]);
     }
     sendJsonResponse(200, [
@@ -301,7 +311,8 @@ if ($as2) {
         'message' => 'Zonen-Konfiguration übernommen, zones.conf neu geschrieben.',
         'rndc' => $reload['output'],
         'effect' => 'applied',
-        'reload' => $reloadReport
+        'reload' => $reloadReport,
+        'verification' => $verification
     ]);
 }
 $rndcOutput = reloadBind();

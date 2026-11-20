@@ -2,7 +2,8 @@
 /**
  * Datei: inc/dns_state.php
  * Zweck: Gemeinsamer technischer Zustandsbaustein des Agenten (AS2a; docs/ARCHITECTURE_HISTORY.md Abschnitt 5f).
- *        AS2b verwendet ausschließlich diese Bausteine (Polling, Nachverifikation, Cleanup-Nachweise).
+ *        AS2b (inc/dns_verify.php) verwendet ausschließlich diese Bausteine (Polling, Nachverifikation,
+ *        Cleanup-Nachweise); ergänzt ist nur der optionale Rundenspeicher der Kontrollzone in dnsServedState().
  *
  * Bausteine:
  * - DNS-Abfrage und strenger Parser (dnsQuery/dnsParseDig): dig +norec +time=1 +tries=1 +nocookie an 127.0.0.1;
@@ -467,12 +468,15 @@ function dnsControlZoneState(array $config, array $proof): array {
 /**
  * Ausgelieferter Zustand D einer Zone (eine Abfrage, ggf. eine Kontrollabfrage).
  *
- * @param array $k Ergebnis von dnsZoneConfigState()
+ * @param array      $k     Ergebnis von dnsZoneConfigState()
+ * @param array|null $round AS2b (E124): Speicher einer Polling-Runde für das Ergebnis der Kontrollzone. Wiederverwendet
+ *                          wird es nur innerhalb dieser Runde und nur für denselben Konfigurationsnachweis ($proof);
+ *                          ohne Speicher (zone_sync, AS2a) wird die Kontrollzone wie bisher je Aufruf geprüft.
  *
  * @return array{state: string, serial: ?int, reason: ?string, rcode: ?string, control: ?string}
  *         state: served | not_auth | unknown
  */
-function dnsServedState(array $config, string $zone, array $k, array $proof): array {
+function dnsServedState(array $config, string $zone, array $k, array $proof, ?array &$round = null): array {
     $out = ['state' => 'unknown', 'serial' => null, 'reason' => null, 'rcode' => null, 'control' => null];
     $r = dnsQuery($config, $zone);
     $out['rcode'] = $r['kind'] === 'response' ? $r['rcode'] : $r['kind'];
@@ -516,7 +520,16 @@ function dnsServedState(array $config, string $zone, array $k, array $proof): ar
 
     // Keine konfigurierte Elternzone: nur REFUSED mit erfolgreicher Kontrollabfrage ist ein Nachweis
     if ($r['rcode'] === 'REFUSED' && !$r['aa'] && $r['answer'] === [] && $r['authority'] === []) {
-        $c = dnsControlZoneState($config, $proof);
+        if ($round !== null && isset($round['control']) && ($round['proof'] ?? null) === $proof) {
+            $c = $round['control'];
+        } else {
+            $c = dnsControlZoneState($config, $proof);
+            if ($round !== null) {
+                $round['control'] = $c;
+                $round['proof'] = $proof;
+                $round['control_queries'] = ($round['control_queries'] ?? 0) + 1;
+            }
+        }
         $out['control'] = $c['state'];
         if ($c['state'] === 'ok') {
             return ['state' => 'not_auth', 'reason' => 'refused_control_ok'] + $out;
