@@ -37,8 +37,6 @@ const DNS_SUPPORTED_VIEW = '_default';
 const DNS_SUPPORTED_TYPES = ['master', 'primary'];
 /** Zulässige Optionen einer verwalteten Zonenanweisung (Format des Generators, writeZoneConfFile) */
 const DNS_MANAGED_ZONE_OPTIONS = ['type', 'file'];
-/** Ergebnisse von dnsControlZoneState(), denen eine DNS-Abfrage der Kontrollzone zugrunde liegt (AS2b, Zählung) */
-const DNS_CONTROL_QUERIED_STATES = ['ok', 'not_served'];
 
 /** Normalisierter Zonenname (Kleinbuchstaben, ohne abschließenden Punkt); null bei unzulässiger Form. */
 function dnsNormName(mixed $name): ?string {
@@ -150,16 +148,23 @@ function dnsParseDig(string $out, string $procStatus = 'ok'): array {
         'answer' => $sections['answer'], 'authority' => $sections['authority'], 'reason' => null];
 }
 
-/** Eine SOA-Abfrage an den lokalen BIND. */
+/**
+ * Eine SOA-Abfrage an den lokalen BIND.
+ *
+ * Zusätzlich zum Ergebnis von dnsParseDig() meldet `started`, ob der dig-Prozess tatsächlich gestartet wurde
+ * (agentRunProcess: ok oder timeout); false bei not_started (Frist) bzw. error (Prozess nicht startbar). Rein
+ * informativ (AS2b: Zählung der Kontrollabfragen); die Auswertung der Antwort ist davon unabhängig.
+ */
 function dnsQuery(array $config, string $name): array {
     $dig = (string)($config['bind_dig'] ?? '/usr/bin/dig');
     $p = agentRunProcess([$dig, '+norec', '+time=1', '+tries=1', '+nocookie', '+noall', '+comments', '+answer',
         '+authority', '@' . DNS_QUERY_ADDRESS, $name === '' ? '.' : $name, 'SOA'], AGENT_CAP_DIG);
     if ($p['status'] === 'not_started' || $p['status'] === 'error') {
-        return ['kind' => 'error', 'rcode' => null, 'aa' => false, 'answer' => [], 'authority' => [], 'reason' => 'dig_' . $p['status']];
+        return ['kind' => 'error', 'rcode' => null, 'aa' => false, 'answer' => [], 'authority' => [], 'reason' => 'dig_' . $p['status'],
+            'started' => false];
     }
 
-    return dnsParseDig($p['output'], $p['status']);
+    return dnsParseDig($p['output'], $p['status']) + ['started' => true];
 }
 
 /** SOA-Serial aus den rdata-Feldern (mname rname serial refresh retry expire minimum) oder null. */
@@ -439,32 +444,35 @@ function dnsZoneConfigState(array $config, string $zone, array $proof): array {
 /**
  * Prüft die Kontrollzone (Betriebsvoraussetzung, E116).
  *
- * @return array{state: string, zone: ?string}  state: ok | missing | own_acl | managed | not_served | unverifiable
+ * @return array{state: string, zone: ?string, queried: bool}
+ *         state: ok | missing | own_acl | managed | not_served | unverifiable
+ *         queried (AS2b): dig-Prozess der Kontrollabfrage tatsächlich gestartet (dnsQuery()['started']); false bei allen
+ *         Ergebnissen ohne Abfrage und bei nicht gestartetem bzw. nicht startbarem Prozess. state bleibt davon unberührt.
  */
 function dnsControlZoneState(array $config, array $proof): array {
     $zone = dnsNormName($config['l3_control_zone'] ?? 'localhost');
     if ($zone === null) {
-        return ['state' => 'missing', 'zone' => null];
+        return ['state' => 'missing', 'zone' => null, 'queried' => false];
     }
     if ($proof['state'] !== 'ok') {
-        return ['state' => 'unverifiable', 'zone' => $zone];
+        return ['state' => 'unverifiable', 'zone' => $zone, 'queried' => false];
     }
     $entries = array_values(array_filter($proof['list'], static fn (array $e): bool => $e[0] === $zone));
     $stmts = array_values(array_filter($proof['zones'], static fn (array $z): bool => $z[0] === $zone && $z[1] === 'IN'));
     if (count($entries) !== 1 || $entries[0][1] !== 'IN' || !in_array($entries[0][3], DNS_SUPPORTED_TYPES, true) || count($stmts) !== 1) {
-        return ['state' => 'missing', 'zone' => $zone];
+        return ['state' => 'missing', 'zone' => $zone, 'queried' => false];
     }
     if (isset($stmts[0][2]['allow-query']) || isset($stmts[0][2]['allow-query-on'])) {
-        return ['state' => 'own_acl', 'zone' => $zone];
+        return ['state' => 'own_acl', 'zone' => $zone, 'queried' => false];
     }
     $confState = pathState(rtrim((string)$config['zone_conf_dir'], '/') . '/' . safeZoneName($zone) . '.conf');
     $file = dnsResolveConfPath((string)($stmts[0][2]['file'][0] ?? ''), $proof['directory']);
     if ($confState !== 'absent' || $file === null || $file === dnsManagedZonePath($config, $zone)) {
-        return ['state' => 'managed', 'zone' => $zone];
+        return ['state' => 'managed', 'zone' => $zone, 'queried' => false];
     }
     $r = dnsQuery($config, $zone);
 
-    return ['state' => dnsAuthoritativeSoa($r, $zone) !== null ? 'ok' : 'not_served', 'zone' => $zone];
+    return ['state' => dnsAuthoritativeSoa($r, $zone) !== null ? 'ok' : 'not_served', 'zone' => $zone, 'queried' => $r['started'] === true];
 }
 
 /**
@@ -529,10 +537,10 @@ function dnsServedState(array $config, string $zone, array $k, array $proof, ?ar
             if ($round !== null) {
                 $round['control'] = $c;
                 $round['proof'] = $proof;
-                // gezählt wird nur eine tatsächlich ausgeführte DNS-Abfrage der Kontrollzone: dnsControlZoneState() fragt
-                // nur, wenn die Konfiguration sie zulässt (Ergebnis ok bzw. not_served); missing, own_acl, managed und
-                // unverifiable entstehen ohne Abfrage
-                if (in_array($c['state'], DNS_CONTROL_QUERIED_STATES, true)) {
+                // gezählt wird nur ein tatsächlich gestarteter dig-Prozess der Kontrollabfrage (auch mit Timeout oder
+                // fehlerhafter Antwort); ohne Abfrage (missing, own_acl, managed, unverifiable) bzw. nicht gestartet oder
+                // nicht startbar (dig_not_started, dig_error) wird nicht gezählt
+                if ($c['queried'] === true) {
                     $round['control_queries'] = ($round['control_queries'] ?? 0) + 1;
                 }
             }

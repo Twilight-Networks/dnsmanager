@@ -226,7 +226,7 @@ unverändert, und der Core wertet sie erst ab AS4 aus.
 | `zone_cleanup` | `zones[].served` | `absent` | Reload im selben Aufruf erfolgreich, Zone nicht mehr konfiguriert (K = nein) und nachweislich nicht mehr autoritativ (`served_reason`: `parent_negative`, `parent_referral` oder `refused_control_ok`) |
 | | | `still_served` | BIND liefert die Zone am Ende der Prüfung weiter autoritativ aus (z. B. Reload gescheitert oder Zone anderweitig konfiguriert) |
 | | | `unknown` | kein Nachweis (z. B. `zone_name_unresolved`, `control_zone_missing`, `last_round_unknown:…`, `budget_exhausted`) |
-| `zone_cleanup` | `verification` | `rounds`, `elapsed_ms`, `window_ms`, `control_queries`, `name_proof` | Ablaufangaben; `control_queries` = tatsächlich ausgeführte DNS-Abfragen der Kontrollzone; `name_proof.state` = `ok`, `skipped` (weniger als 20 s Restzeit), `undeterminable` oder `discarded` |
+| `zone_cleanup` | `verification` | `rounds`, `elapsed_ms`, `window_ms`, `control_queries`, `name_proof` | Ablaufangaben; `control_queries` = tatsächlich gestartete DNS-Abfragen der Kontrollzone (auch mit Timeout); `name_proof.state` = `ok`, `skipped` (weniger als 20 s Restzeit), `undeterminable` oder `discarded` |
 
 Betriebshinweise:
 - Die Zonennamen verwaister Dateien stammen ausschließlich aus der BIND-Konfiguration vor dem Cleanup (verwaltete Datei

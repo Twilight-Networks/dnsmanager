@@ -239,6 +239,7 @@ l=$(sed -n "${i}p" "$f")
 hdr() { printf ';; Got answer:\n;; ->>HEADER<<- opcode: QUERY, status: %s, id: 4711\n;; flags: %s; QUERY: 1, ANSWER: %s, AUTHORITY: %s, ADDITIONAL: 1\n\n' "$1" "$2" "$3" "$4"; }
 case "$l" in
   refused) hdr REFUSED qr 0 0 ;;
+  slowrefused) sleep 0.25; hdr REFUSED qr 0 0 ;;
   servfail) hdr SERVFAIL qr 0 0 ;;
   timeout) sleep 5 ;;
   soa:*) s=${l#soa:}; hdr NOERROR "qr aa" 1 0; printf ';; ANSWER SECTION:\n%s.\t300\tIN\tSOA\tns.%s. h.%s. %s 3600 900 604800 300\n\n' "$n" "$n" "$n" "$s" ;;
@@ -378,12 +379,39 @@ if (run('C') && $linux) {
     $before = $count('dig');
     $c = dnsControlZoneState($fcfg, ['state' => 'undeterminable', 'reason' => 'views_present'] + $p);
     t('C09 Konfiguration nicht prüfbar ⇒ unverifiable ohne Abfrage', $c['state'] === 'unverifiable' && $count('dig') === $before
-        && !in_array('unverifiable', DNS_CONTROL_QUERIED_STATES, true), json_encode($c));
+        && $c['queried'] === false, json_encode($c));
     $round = [];
     dnsServedState($fcfg, 'z1.solo', $k1, $p, $round);
     dnsServedState($fcfg, 'z2.solo', $k2, $p, $round);
     t('C10 erfolgreiche Abfrage, zwei Zonen derselben Runde ⇒ genau eine gezählte Abfrage', ($round['control_queries'] ?? 0) === 1
-        && ($round['control']['state'] ?? null) === 'ok' && $count('dig', 'ctl.test') === 1, 'ctl=' . $count('dig', 'ctl.test'));
+        && ($round['control']['state'] ?? null) === 'ok' && ($round['control']['queried'] ?? null) === true
+        && $count('dig', 'ctl.test') === 1, 'ctl=' . $count('dig', 'ctl.test'));
+    // Review R2 (Nachtrag): gezählt wird nur ein tatsächlich gestarteter dig-Prozess der Kontrollabfrage
+    $scene([], ['z1.solo' => ['slowrefused']]);
+    $p = dnsConfigProof($fcfg, true);
+    $round = [];
+    // Abschnitt 0,45 s: die Abfrage der Zone startet (≈ 0,25 s), danach reicht die Restzeit nicht für die Kontrollabfrage
+    $d = agentWithSectionDeadline(microtime(true) + 0.45, static function () use ($fcfg, $k1, $p, &$round): array {
+        return dnsServedState($fcfg, 'z1.solo', $k1, $p, $round);
+    });
+    t('C11 Kontrollabfrage nicht gestartet (dig_not_started) ⇒ nicht gezählt, Zustand unverändert not_served/unknown',
+        ($round['control_queries'] ?? 0) === 0 && ($round['control']['queried'] ?? null) === false
+        && ($round['control']['state'] ?? null) === 'not_served' && $d['state'] === 'unknown' && $d['reason'] === 'control_zone_not_served'
+        && $count('dig', 'z1.solo') === 1 && $count('dig', 'ctl.test') === 0,
+        json_encode(['d' => $d['reason'], 'control' => $round['control'] ?? null, 'queries' => $round['control_queries'] ?? 0, 'ctl' => $count('dig', 'ctl.test')]));
+    $scene([], ['z1.solo' => ['refused'], 'ctl.test' => ['timeout']]);
+    $p = dnsConfigProof($fcfg, true);
+    $round = [];
+    $t0 = microtime(true);
+    $d = dnsServedState($fcfg, 'z1.solo', $k1, $p, $round);
+    $dt = microtime(true) - $t0;
+    t('C12 Kontrollabfrage gestartet, Zeitüberschreitung ⇒ gezählt, not_served/unknown', ($round['control_queries'] ?? 0) === 1
+        && ($round['control']['queried'] ?? null) === true && ($round['control']['state'] ?? null) === 'not_served'
+        && $d['state'] === 'unknown' && $count('dig', 'ctl.test') === 1 && $dt > 1.4, sprintf('dt=%.2f %s', $dt, json_encode($round['control'] ?? null)));
+    $q = dnsQuery($fcfg, 'z1.solo');
+    $qn = agentWithSectionDeadline(microtime(true) + 0.1, static fn (): array => dnsQuery($fcfg, 'z1.solo'));
+    t('C13 dnsQuery: started nur bei gestartetem Prozess', $q['started'] === true && $qn['started'] === false && $qn['reason'] === 'dig_not_started',
+        json_encode([$q['started'], $qn['started'], $qn['reason']]));
 }
 
 // ---------------------------------------------------------------- S: Abschnittsfrist

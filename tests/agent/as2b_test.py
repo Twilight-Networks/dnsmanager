@@ -478,8 +478,11 @@ MUTATIONS = [
     ('MV17 still_served sofort endgültig (R1)', DV, "        return $r(!$reloadOk, true, 'still_served', $why);",
      "        return $r($settled, true, 'still_served', $why);", None, 'DRF'),
     # Review R2: Kontrollabfrage auch ohne DNS-Abfrage gezählt (wie vor der Korrektur)
-    ('MV18 Kontrollabfrage ohne DNS-Abfrage gezählt (R2)', DS, "                if (in_array($c['state'], DNS_CONTROL_QUERIED_STATES, true)) {",
+    ('MV18 Kontrollabfrage ohne DNS-Abfrage gezählt (R2)', DS, "                if ($c['queried'] === true) {",
      "                if (true) {", 'mv_control', 'C'),
+    # Review R2 (Nachtrag): nicht gestarteter dig-Prozess als Abfrage gewertet (Zählung über den abgeleiteten Zustand)
+    ('MV19 nicht gestartete Kontrollabfrage gezählt (R2)', DS, "'queried' => $r['started'] === true];",
+     "'queried' => true];", None, 'C'),
 ]
 
 
