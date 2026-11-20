@@ -424,8 +424,9 @@ Fremdschlüssel; Datenvertrag in `docs/ARCHITECTURE_HISTORY.md`, Abschnitt 5h). 
 Voraussetzung: Migrationen 002–005 exakt wie erwartet (Reihenfolge 002 → 003 → 004 → 005 → 006).
 
 `generate_next_serial()`, Generator, Publish und Historie bleiben unverändert (Serial-Strategie AS5). Bis AS5 endet eine
-Veröffentlichung mit Serial 4294967295 wie bisher bei 2147483647 mit dem Status `error` (Wertebereich der Spalte;
-Rollback, keine Datei, keine Serial verbraucht). Die Tabelle wird bis AS4 weder gelesen noch geschrieben.
+Veröffentlichung mit Serial 4294967295 mit dem Status `error` (Rollback, keine Datei, keine Serial verbraucht): Die
+nächste Serial 4294967296 weist bereits `named-checkzone` zurück, die Spalte würde sie ebenfalls ablehnen. Bisher endete
+eine Veröffentlichung bei 2147483647 ebenso mit `error` (Wertebereich der Spalte). Die Tabelle wird bis AS4 weder gelesen noch geschrieben.
 
 ### Verbindliche Reihenfolge und Rollout-Voraussetzungen
 

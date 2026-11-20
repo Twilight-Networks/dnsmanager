@@ -1008,8 +1008,9 @@ Einzelheiten `tests/agent/README.md`.
 Unverändert: `generate_next_serial()` und die Serial-Strategie (AS5), Generator, Publish-Ablauf und -Journal, Historie
 (Snapshots enthalten keine Serial, Heads und Revisionen ändern sich durch Serial-Änderungen nicht), Agent,
 Core-Verifikation (AS4), Web-Adapter und Oberfläche. Die neue Tabelle wird bis AS4 weder gelesen noch geschrieben.
-Grenze bis AS5: Eine Veröffentlichung mit Serial 4294967295 endet wie bisher bei 2147483647 mit `error` (Rollback, keine
-Datei, keine Serial verbraucht).
+Grenze bis AS5: Eine Veröffentlichung mit Serial 4294967295 endet mit `error` (Rollback, keine Datei, keine Serial
+verbraucht; die nächste Serial 4294967296 weist bereits `named-checkzone` zurück, die Spalte würde sie ebenfalls
+ablehnen); bisher galt dasselbe bei 2147483647 (Wertebereich der Spalte).
 
 **Spalte (E79)** – `soa_serial INT UNSIGNED NOT NULL DEFAULT 2025010101`; `SchemaCheck` erwartet
 `int(10) unsigned`/`NO`/`2025010101`. PDO liefert Werte über 2³¹−1 unverfälscht (PHP mit 64-Bit-Ganzzahlen).
