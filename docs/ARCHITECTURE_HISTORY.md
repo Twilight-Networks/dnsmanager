@@ -1,6 +1,6 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 19.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt
+Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt, AS2b (Nachverifikation, Nachweis der Entfernung) umgesetzt
 
 ## 0. Status und Geltung
 
@@ -13,9 +13,10 @@ Stand: 19.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meile
   `PublishLedger`, Hash-Verträge, strukturierte Zielergebnisse) sowie aus Meilenstein AS das Arbeitspaket **AS1**
   (Abschnitt 5e: Agent-Fencing mit Höchststand, Write-ahead-Fehlermarke, Fencing-Domäne, Modi off/observe/enforce,
   lokale CLI, dauerhafte Dateioperationen) und **AS2a** (Abschnitt 5f: RFC-1982-Serial-Regel, Konfigurations- und
-  DNS-Zustandsprüfung vor der Übernahme, Fristen, Wirkungsangabe `effect`, Klassifizierung im Core). Alle übrigen hier
-  beschriebenen Tabellen, Klassen, Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere sendet der
-  Core noch kein Fencing-Token (AS4), und es gibt noch keine Nachverifikation nach dem Laden (L3-Polling, AS2b).
+  DNS-Zustandsprüfung vor der Übernahme, Fristen, Wirkungsangabe `effect`, Klassifizierung im Core) und **AS2b**
+  (Abschnitt 5g: Nachverifikation nach dem Reload in `conf_sync`, Nachweis der Entfernung im Cleanup, Polling mit
+  Zeitbudget). Alle übrigen hier beschriebenen Tabellen, Klassen, Agent-Erweiterungen und Abläufe existieren im Code noch
+  nicht; insbesondere sendet der Core noch kein Fencing-Token und wertet die Nachverifikation noch nicht aus (AS4).
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -885,6 +886,121 @@ Einzelheiten `tests/agent/README.md`. Die AS1-Regression läuft unverändert; da
 hat, ersetzt sie ausschließlich `agentPreTransferGate()` in ihrer Sandbox-Kopie des Agenten (`tests/agent/as2a_as1_regression.sh`);
 der Produktionscode enthält keinen Schalter, der die Prüfung abschaltet.
 
+## 5g. Festlegungen AS2b (umgesetzt)
+
+**Umfang (E111)** – Polling und Nachverifikation nach dem Reload in `conf_sync`, Nachweis der Entfernung im Cleanup
+(E92), rundenbezogener Speicher der Kontrollzone, zusätzliche Antwortfelder. Ausschließlich mit den AS2a-Bausteinen
+(`dnsQuery`/strenger Parser, `dnsConfigProof`/`dnsZoneConfigState`, `dnsServedState`, `dnsZoneFileState`, Prozessfristen);
+neuer Baustein `agent/inc/dns_verify.php`. Unverändert: `zone_sync` (E108), `system/status`, Core, `web/`, Schema, Modus
+`off` (E101). E109 (`zone_verify`) und E110 (RFC-1982-Klasse im Core) bleiben zurückgestellt.
+
+**Messung M1 (20.11.2026, ns2, installierter `named` 9.20.24)** – 240 Läufe (Hinzufügen/Entfernen ohne und mit
+Elternzone, Zone mit 300 000 RR, Reload ohne Änderung; je zwei Messmodi): `rndc reload` kehrt nach 32–40 ms zurück; die
+Zonenzahl aus `rndc status` war in allen Läufen bei der ersten Beobachtung korrekt, K nach dem Reload nie unbestimmbar;
+kleine Zonen sind in der ersten Runde ausgeliefert bzw. entfernt (D nach ≈ 0,05–0,12 s), eine Zone mit 300 000 RR nach
+1,53–1,70 s (davor SERVFAIL bzw. DNS-Timeout); während des Ladens blockiert `rndc status` bis 1,59 s und Abfragen an
+unbeteiligte Zonen fielen vereinzelt aus (Befund **B-M1-1**). Keine Rückfälle, Rückbau nachgewiesen. Rohdaten unter
+`/root/as2b-m1-20261120-135113` auf ns2.
+
+**Polling und Zeitbudget (E106, E119, E120)** – unter der Agent-Sperre (die Sperre wird erst nach der Nachverifikation
+freigegeben). Erste Runde unmittelbar nach dem Reload, danach Wartezeiten 50, 100, 200, 400 ms, dann 500 ms; Fensterende
+min(Reload-Ende + 10 s, TW − 1 s); keine Runde beginnt und keine Wartezeit endet nach dem Fensterende. Die Verifikation
+läuft mit dieser Abschnittsfrist (`agentWithSectionDeadline()` in `proc.php`): Jeder externe Prozess erhält höchstens
+die Restzeit des Abschnitts und wird nicht gestartet, wenn sie nicht für die Mindestlaufzeit reicht; TW bleibt die
+absolute Grenze, ohne Abschnitt ist `proc.php` unverändert. **Vorabnachweis im Cleanup** (für E123): nur mit mindestens
+20 s Restzeit; er läuft mit der Abschnittsfrist TW − 10 s (Preflight 3 s + Reload 5 s + Antwortreserve 1 s + Nachlauf
+eines abgebrochenen Prozesses 1 s), sodass die AS2a-Schritte danach ihr Budget behalten; nach dem Nachweis wird die
+Restzeit erneut geprüft (mindestens 9 s, sonst Ergebnis verworfen). Reicht die Zeit nicht: `unknown`/`budget_exhausted`,
+kein Ersatznachweis. Mit den heutigen Obergrenzen (9 s für den Nachweis) begrenzt bereits die Eintrittsschwelle; die
+Abschnittsfrist ist eine zweite, unabhängige Sicherung (rein getestet, Gruppe S).
+
+**Prüfsequenz und Endergebnis (R1–R4)** – R1: Ein Ergebnis entsteht nur aus einem Tupel derselben Runde (Reload dieses
+Aufrufs, K aus einem nach dem Reload erzeugten Nachweis, Datei F einmal unter der Sperre, D nach K dieser Runde). R2: Keine
+DNS-Beobachtung und kein Kontrollzonen-Ergebnis wird in eine spätere Runde übernommen; K und F werden nur bei
+vorübergehendem Grund erneut ermittelt (`zone_count_mismatch`, `rndc_status_unparsable`, `*_timeout`, `*_not_started`,
+`*_error` bzw. abgebrochenes `named-checkzone`). R3: `verified` und `absent` beenden die Prüfung der Zone (Konfiguration
+und Datei bleiben unter der Sperre unverändert; `system/control reload` nutzt dieselbe Sperre). R4: `serial_differs` und
+`still_served` nur aus der letzten vollständigen Runde; ist sie unbekannt ⇒ `unknown` (`last_round_unknown`); eine
+unvollständige Runde (Schritt wegen der Frist nicht gestartet) ersetzt die letzte vollständige nicht; ohne vollständige
+Runde ⇒ `unknown` (`budget_exhausted`).
+
+**`conf_sync` (E107, E121)** – Zone = `zone_name` der Anfrage (normalisiert); geprüft wird ausschließlich diese Zone.
+
+| F (verwaltete Datei) | K | D | Ergebnis |
+|---|---|---|---|
+| Prüfung abgebrochen | – | – | Runde unvollständig |
+| fehlt / ungültig / unlesbar | – | – | `unknown` (`file_*`), fest |
+| gültig (f) | vorübergehend unbestimmbar | – | weiter |
+| gültig | strukturell unbestimmbar / nein | – | `unknown` (`config_*`), fest |
+| gültig | ja | served(s), s = f | **`verified`**, fest |
+| gültig | ja | served(s), s ≠ f | weiter; letzte Runde ⇒ `serial_differs` |
+| gültig | ja | SERVFAIL, Timeout, sonst | weiter; letzte Runde ⇒ `unknown` |
+
+Nach gescheitertem Reload keine DNS-Abfrage (`unknown`, `reload_<status>`, E122). Geprüft wird gegen die verwaltete
+Datei, nicht gegen den Publish-Versuch (auch nach abgelehntem `zone_sync`); `file_sha256` erlaubt dem Core ab AS4 die
+Zuordnung. Antwortfeld `verification`: `state`, `reason` (ggf. `last_reason`), `zone`, `file_serial`, `file_sha256`,
+`served_serial`, `served_rcode`, `served_reason`, `config_state`, `config_reason`, `rounds`, `elapsed_ms`, `window_ms`,
+`observations` (vollständige Runden, Anzahl `serial_differs`/`unknown`, zuletzt ausgelieferte Serial). Kein Feld
+`cmp`/`serialCompare` (Freigabe AS2b).
+
+**Cleanup (E92, E122–E124)** – Zonennamen nur aus dem Vorabnachweis: Kandidat ist jede Zone mit K = ja, deren
+verwaltete Datei genau `<zone_data_dir>/db.<base>` ist; nur bei genau einem Kandidaten (sonst `zone_name_unresolved`
+bzw. `zone_name_ambiguous`, keine Ableitung aus dem Dateinamen). Geprüft werden alle Verwaisten (auch mit verbliebener
+Datei, da `zones.conf` sie nicht mehr einbindet).
+
+| Reload | K (nach Reload) | D (gleiche Runde) | Ergebnis |
+|---|---|---|---|
+| ≠ ok | – | autoritative SOA (eine Runde, nur SOA-Abfrage) | `still_served` |
+| ≠ ok | – | sonst | `unknown`, nie `absent` |
+| ok | nein | not_auth (Elternzone bzw. REFUSED mit Kontrollzone `ok` derselben Runde) | **`absent`**, fest |
+| ok | ja / strukturell unbestimmbar | served | weiter; letzte Runde ⇒ `still_served` (R4) |
+| ok | ja / strukturell unbestimmbar | sonst | `unknown`, fest (`absent` in diesem Aufruf ausgeschlossen) |
+| ok | nein | `control_zone_missing`/`own_acl`/`managed`, `refused_with_parent` | `unknown`, fest |
+| ok | nein / vorübergehend | served | weiter; letzte Runde ⇒ `still_served` |
+| ok | nein / vorübergehend | sonst | weiter; letzte Runde ⇒ `unknown` |
+
+Fest werden damit nur `absent` (R3) und `unknown`; `still_served` entsteht – außer nach gescheitertem Reload (E122, genau
+eine Runde) – ausschließlich aus der letzten vollständigen Runde (R4, Review PR #105, Befund R1).
+Zusätzlich je Zone `zones[].name`, `served`, `served_reason`; `verification` mit `rounds`, `elapsed_ms`, `window_ms`,
+`control_queries` (tatsächlich gestartete dig-Prozesse der Kontrollabfrage, auch mit Timeout oder fehlerhafter Antwort;
+Grundlage ist `dnsQuery()['started']` aus dem Prozessstatus, im Abfragepfad durchgereicht als
+`dnsControlZoneState()['queried']`, die übrigen Rückgaben von `dnsControlZoneState()` bleiben unverändert; nicht
+gezählt werden `missing`, `own_acl`, `managed` und `unverifiable` ohne Abfrage sowie nicht gestartete bzw. nicht startbare
+Prozesse `dig_not_started`/`dig_error` – Review PR #105, Befund R2) und `name_proof` (`state`, `reason`, `ms`,
+`remaining_ms`). **Kontrollzonen-Speicher (E124):**
+wiederverwendet nur innerhalb derselben Runde, nur für denselben Konfigurationsnachweis (Vergleich in
+`dnsServedState()`), nur auf dem Pfad „keine Elternzone, REFUSED ohne `aa`, leere Abschnitte“ und unter der Agent-Sperre;
+ohne Speicher (`zone_sync`) unverändert je Aufruf.
+
+**Antwortvertrag (E125)** – nur zusätzliche Felder; HTTP-Status, `status`, `message`, `effect`, `rollback`, `code` und
+die Klassifizierung im Core (E113) bleiben unverändert. PHP-Log `[verify]` nur ohne positiven Nachweis.
+
+**Grenzen** – `verified` belegt Serial-, nicht Inhaltsgleichheit (E107). Die Herkunft einer Zonenanweisung ist aus
+`named-checkconf -px` keiner Datei zuzuordnen: Steht dieselbe Zone mit der verwalteten Datei auch anderswo in der
+Konfiguration, kann `verified` dennoch zutreffen (Fakt über die verwaltete Datei). Zonennamen mit Großbuchstaben oder
+abschließendem Punkt sind in AS2a/AS2b nicht verifizierbar (`unknown`; Folgepaket E128). Ende-zu-Ende-Reserve: Der Agent
+startet nach TW keinen Prozess mehr; ob Verbindungsaufbau, TLS und Upload zusammen mit 24 s Arbeitszeit sicher unter dem
+cURL-Timeout des Core (30 s) bleiben, ist nicht garantiert und wird im Stufentest gemessen (Risiko, keine Änderung).
+
+**Stufentest über den installierten Core (20.11.2026, ns2 auf `ceef51f` in `observe`, Core ns1 auf `6bb229d`)** –
+Werkzeug `tests/agent/as2b_stage.php` (PublishService wie die Web-Adapter; Einzelaufrufe mit den cURL-Einstellungen des
+Core und Teilzeiten). Direktes `conf_sync`: 218–220 ms gesamt (Verbindung 0,4 ms, TLS ≈ 11 ms), `verified` in Runde 1
+(143 ms); bisheriger Agent (`off`): 65–98 ms. Cleanup einer fremden Zone: `absent` in Runde 1, eine Kontrollabfrage,
+230 ms. Publish Zone 0,73 s; Publish All mit Full Rebuild (6 Zonen) 4,38 s (bisher in `off` 2,69 s; die Differenz
+enthält auch die AS2a-Prüfungen in `observe`). Nahe am Timeout (Agent-Sperre 15,3 s gehalten, DNS blockiert): 22,6 s
+gesamt, Fenster auf 7,9 s gekürzt, 7,4 s Reserve zum cURL-Timeout, Einordnung `ok`. Publish All mit blockiertem DNS auf
+ns2: 69,4 s (je Zone `zone_sync` fail-closed abgelehnt nach AS2a und `conf_sync` mit 10,16 s Nachverifikation ⇒ alle
+Zonen `partial`, `bind_dirty = 1`); ein gleichzeitiger Publish Zone mit 5 s Sperr-Wartezeit (DynDNS-Pfad) endete nach
+5,0 s mit `locked`, die Zone blieb ausstehend; der nächste reguläre Lauf (4,39 s) stellte den konsistenten Zustand her.
+Rückbau: ns2 auf `6bb229d`, Konfiguration byte-gleich (`0640 root:www-data`, `off`), H entfernt; einzige Abweichung
+unter `/etc/bind` sind die regulär fortgeschriebenen Serials (Datenbank = Datei = DNS auf ns1 und ns2).
+
+**Tests (AS2b)** – `tests/agent/as2b_pure_test.php` (B Rundenfolge, W Fensterende, P Polling-Steuerung mit simulierter
+Uhr, DL/DR Entscheidungsmatrizen, F R3/R4, N Zonennamen; mit Ersatzprogrammen statt BIND: C Kontrollzonen-Speicher, S
+Abschnittsfrist, L Abläufe mit Antwortfolgen, BU Eintrittsschwelle und größter Verbrauch des Vorabnachweises),
+`tests/agent/as2b_test.py` gegen die installierte BIND-Instanz (V, N, R, B, M, Z) und `tests/agent/as2b_as1_regression.sh`.
+Einzelheiten `tests/agent/README.md`.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -1030,7 +1146,7 @@ erkennbar); Abhilfe durch Anheben des `AUTO_INCREMENT`.
 
 **Einführung:** (1) Agent zeichnet nur auf, (2) Web sendet Token und Hashes, (3) Erzwingen, zuerst ns2.
 
-**Umsetzung:** AS2a (Serial-Regel I-A1, Zustandsprüfung, Fristen, `effect`) siehe Abschnitt 5f. AS1 (Agent) siehe Abschnitt 5e und [`AGENT_FENCING.md`](AGENT_FENCING.md); Präzisierungen der Freigabe:
+**Umsetzung:** AS2a (Serial-Regel I-A1, Zustandsprüfung, Fristen, `effect`) siehe Abschnitt 5f; AS2b (L3 nach dem Reload: Nachverifikation und Nachweis der Entfernung im Agenten, E17/E76) siehe Abschnitt 5g. AS1 (Agent) siehe Abschnitt 5e und [`AGENT_FENCING.md`](AGENT_FENCING.md); Präzisierungen der Freigabe:
 Write-ahead-Fehlermarke (E90), Timeout ⇒ `unknown` (E77), Domänenprüfung im Agenten mit dokumentierter Schutzgrenze
 gegenüber vollständigen Installationsklonen (E74).
 
@@ -1261,7 +1377,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E73 | Laufeigene Advisory-Sperre als Identitätsnachweis (Neustart, Verbindungs-ID-Wiederverwendung); Testumgebung isoliert (Q1) | umgesetzt (H2d, Präzisierungen 1 und 3) – zur Bestätigung im Review |
 | E74 | Eigene Fencing-Domäne je Installation; der Agent prüft Anfrage- und gespeicherte Domäne gegen seine lokal konfigurierte Domäne; Core-Prüfung DB ↔ Web-Konfiguration zusätzlich (AS4); Schutzgrenze: vollständiger Installationsklon nicht erkennbar (Abschnitt 5e) | entschieden; Agent-Teil umgesetzt (AS1) |
 | E75 | `system/control reload` ohne Fencing, unter demselben `flock` | entschieden (AS1) |
-| E76 | L3 im Agenten nach dem Reload mit begrenztem Polling, zusätzlich periodisch im Monitoring | entschieden; Polling in AS2b (nur `conf_sync` und `zone_cleanup`, Fenster 10 s, gemeinsames Budget je Cleanup), Monitoring in AS4 |
+| E76 | L3 im Agenten nach dem Reload mit begrenztem Polling, zusätzlich periodisch im Monitoring | entschieden; Polling umgesetzt (AS2b: nur `conf_sync` und `zone_cleanup`, Fenster 10 s, gemeinsames Budget je Cleanup), Monitoring in AS4 |
 | E77 | Reload-Fehler oder `not_loaded` ⇒ Ziel nicht veröffentlicht, Zone bleibt ausstehend; **Timeout ⇒ immer `unknown`** (nie `not_loaded`/`rejected`), Zone unbestätigt und ausstehend bis zur tatsächlichen Verifikation | entschieden, Umsetzung AS2/AS4 |
 | E78 | Serial-Wahl nach RFC 1982 vollständig (Abstand 2³¹ undefiniert ⇒ nicht größer), Referenzmenge aus DB-Serial, bestätigten, zuletzt verifizierten und gemeldeten Serials je Zone und Server; keine numerische Sortierung; sonst Sperre `serial_unresolvable` | entschieden (= E15), Umsetzung AS5 |
 | E79 | `zones.soa_serial` → `INT UNSIGNED` | entschieden (= E16), Umsetzung AS3 |
@@ -1277,7 +1393,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E89 | Verzeichnis-`fsync` nativ in PHP (`fopen($dir, 'r')`), kein `sync`-Ersatz | entschieden (AS0); umgesetzt (AS1) |
 | E90 | Write-ahead-Fehlermarke: dauerhaft vor jeder Änderung von H, Entfernen erst nach vollständiger Persistenz; Aufheben nur lokal per CLI | entschieden (Präzisierung AS1); umgesetzt |
 | E91 | L3-Auswertung über Status, `aa` und Owner, nie über den Exit-Code von `dig` | umgesetzt (AS2a, E105) |
-| E92 | Nachweis der Entfernung (AS2b): `still_served` ⇔ autoritative SOA der Zone; `absent` ⇔ Reload im selben Aufruf mit Exit-Code 0, K = nein (E115) und D = not_auth (E105: Antwort aus der konfigurierten Elternzone bzw. REFUSED mit erfolgreicher Kontrollabfrage, E116); sonst `unknown`. REFUSED allein ist kein Nachweis (gemessen: `allow-query` einer geladenen Zone liefert REFUSED wie eine entfernte) | entschieden (Fassung AS2), Umsetzung AS2b |
+| E92 | Nachweis der Entfernung (AS2b): `still_served` ⇔ autoritative SOA der Zone; `absent` ⇔ Reload im selben Aufruf mit Exit-Code 0, K = nein (E115) und D = not_auth (E105: Antwort aus der konfigurierten Elternzone bzw. REFUSED mit erfolgreicher Kontrollabfrage, E116); sonst `unknown`. REFUSED allein ist kein Nachweis (gemessen: `allow-query` einer geladenen Zone liefert REFUSED wie eine entfernte) | umgesetzt (AS2b, Abschnitt 5g) |
 | E93 | Globales `rndc reload`; dessen Exit-Code nur für Befehlskanal und Konfiguration | entschieden (AS0) |
 | E94 | `named-checkzone` mit Exit-Code; Existenz und Lesbarkeit vorher in PHP | umgesetzt (AS2a, `observe`/`enforce`; `off` unverändert) |
 | E95 | `fsync` in allen Modi. Ausdrücklich `off` (seit E118; vorher auch ein fehlender Schlüssel) ist im Normalbetrieb und in allen bisherigen Fehlerpfaden beobachtbar identisch zum bisherigen Agenten (Golden G01); abweichend ausschließlich in Fehler- bzw. Inkonsistenzfällen, und zwar abschließend: gescheitertes `fsync` (E95), Lesefehler des Konfigurationsverzeichnisses (E96), vorhandene oder nicht prüfbare Fehlermarke (E97, E99), unvollständige Auflistung, verkürzt gelesene `zones.conf` und verwaiste Include-Zeile (E98), nicht prüfbare Existenz einer Sicherungs- oder Bestandsdatei (E99), fehlende PHP-Erweiterung `posix` (E100) | umgesetzt (AS1) – akzeptiert |
@@ -1291,9 +1407,9 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E103 | Vorher-Prüfung in `zone_sync` nach der Matrix in Abschnitt 5f (Datei × K × D), Reparaturkennzeichen nur für ungültige lesbare Dateien (Zeilen 8, 11), nie über SERVFAIL | umgesetzt (AS2a) |
 | E104 | `effect` = nachgewiesene lokale Wirkung; `rollback` nur bei versuchtem Rollback; Vorwärtsstrategie ohne Rollback nach einem Reload-Versuch; Cleanup-Ergebnis je Zone mit Vorrangregel | umgesetzt (AS2a) |
 | E105 | Ausgelieferter Zustand über `dig` mit strengem Parser; served / not_auth (Elternzone bzw. REFUSED mit Kontrollabfrage) / unknown (SERVFAIL, Timeout, Widerspruch zu K) | umgesetzt (AS2a) |
-| E106 | Polling nur in `conf_sync` (10 s) und `zone_cleanup` (10 s gemeinsam), nacheinander, höchstens eine Kontrollabfrage je Runde | entschieden, Umsetzung AS2b |
-| E107 | `verified` = autoritative SOA mit der Serial der verwalteten Datei bei K = ja; belegt Serial-Übereinstimmung, nicht Inhaltsgleichheit; ändert nie den HTTP-Status | entschieden, Umsetzung AS2b |
-| E108 | `zone_sync` ohne Polling; Nachverifikation einer neuen Zone über `conf_sync` | entschieden, Umsetzung AS2b |
+| E106 | Polling nur in `conf_sync` (10 s) und `zone_cleanup` (10 s gemeinsam), nacheinander, höchstens eine Kontrollabfrage je Runde | umgesetzt (AS2b) |
+| E107 | `verified` = autoritative SOA mit der Serial der verwalteten Datei bei K = ja; belegt Serial-Übereinstimmung, nicht Inhaltsgleichheit; ändert nie den HTTP-Status | umgesetzt (AS2b) |
+| E108 | `zone_sync` ohne Polling; Nachverifikation einer neuen Zone über `conf_sync` | umgesetzt (AS2b) |
 | E109 | Lesender Endpunkt `zone_verify` | verschoben nach AS4 |
 | E110 | RFC-1982-Klasse im Core | verschoben nach AS5 (muss die Vektoren aus E102 bestehen) |
 | E111 | Aufteilung AS2a (Grundlage, Schutz) / AS2b (Polling, Nachverifikation, E92); AS2b nur mit AS2a-Bausteinen | entschieden |
@@ -1304,6 +1420,17 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E116 | Kontrollzone (`l3_control_zone`, Standard `localhost`) als Betriebsvoraussetzung, Anzeige in `system/status` | umgesetzt (AS2a) |
 | E117 | Absolute Frist je Agent-Aufruf (TW = Beginn + 24 s), Obergrenzen je Prozess, eigene Prozessgruppe, SIGTERM/SIGKILL ohne verwaiste Prozesse, Sperre mit Frist (Reserve vor jedem Sperrversuch geprüft); gilt in `observe`/`enforce` für `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` (`status_timeout`) | umgesetzt (AS2a, Review-Korrektur) |
 | E118 | `fencing_mode` ist Pflichtangabe: nur ein ausdrücklich gesetztes `off` erlaubt den bisherigen Ablauf; ein fehlender Schlüssel oder ein unbekannter Wert ⇒ `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status` brechen früh mit 503 `fence_misconfigured` ab (Vorrang wie bisher: `agent_requirement_missing`, `fence_fault`), ohne externen Prozess und ohne Änderung; kein stiller Rückfall. Ändert E82 und E95. Upgrade: bestehende Installationen setzen **vor** dem Update `'fencing_mode' => 'off'` (README, `AGENT_FENCING.md` Abschnitt 9) | entschieden (Maintainer, Option B), umgesetzt (AS2a) |
+| E119 | Polling und Nachverifikation unter der Agent-Sperre; Freigabe erst danach | umgesetzt (AS2b) |
+| E120 | Fenster min(Reload-Ende + 10 s, TW − 1 s); Runden sofort, dann 50 ms verdoppelt bis 500 ms; Abschnittsfrist für jeden Prozess der Verifikation; Vorabnachweis im Cleanup nur ab 20 s Restzeit mit Abschnittsfrist TW − 10 s und erneuter Prüfung (≥ 9 s) danach, sonst `budget_exhausted`; Sperrreserve (8 s) und Prozessobergrenzen unverändert; Ende-zu-Ende-Reserve zum cURL-Timeout als Risiko dokumentiert | umgesetzt (AS2b; 20 s nach Freigabe statt vorgeschlagener 18 s) |
+| E121 | `conf_sync`: Matrix Abschnitt 5g mit R1–R4; K und F nur bei vorübergehendem Grund erneut (M1: Zonenzahl nach dem Reload sofort korrekt); `file_sha256` und Rohwerte; kein Feld `cmp` | umgesetzt (AS2b) |
+| E122 | Gescheiterter Reload: `conf_sync` ohne DNS-Abfrage; Cleanup eine Runde nur mit SOA-Abfrage (`still_served` möglich, `absent` nie, keine Kontrollabfrage) | umgesetzt (AS2b) |
+| E123 | Zonennamen im Cleanup nur aus eindeutigem Konfigurationsnachweis vor der Änderung; keine Ableitung aus dem Dateinamen | umgesetzt (AS2b) |
+| E124 | Cleanup-Matrix Abschnitt 5g; `absent` endgültig (R3); Kontrollzonen-Speicher nur in derselben Runde und für denselben Nachweis | umgesetzt (AS2b) |
+| E125 | Antwortvertrag nur additiv; HTTP-Status, `message`, `effect`, Klassifizierung unverändert; Core wertet erst ab AS4 aus | umgesetzt (AS2b) |
+| E126 | Tests: rein, Ersatzprogramme ohne BIND, Live gegen den installierten `named` auf ns2, Mutationsproben, AS1-/AS2a-Regression, `off`-Vergleich, Stufentest über den installierten Core | umgesetzt (AS2b) |
+| E127 | Messung M1 (Verzögerung von Zonenzahl, K und D nach dem Reload) vor der Implementierung | durchgeführt 20.11.2026 (Abschnitt 5g) |
+| E128 | Folgepaket: AS2a-`zone_sync` (und AS2b) lehnen Zonennamen mit Großbuchstaben bzw. abschließendem Punkt fail-closed ab bzw. verifizieren sie nicht (normalisierter Name ↔ verwalteter Pfad) | offen, eigenes Paket vor AS6; nicht Teil von AS2b |
+| B-M1-1 | Befund: Während BIND eine große Zone lädt, können Abfragen an unbeteiligte Zonen ausbleiben; AS2a-`zone_sync` kann dann nach E103 Zeile 3 mit `served_state_unknown` ablehnen (fail-closed, Teilverteilung) | dokumentiert; bei der Planung von AS4 ausdrücklich zu berücksichtigen, sonst vor AS6 gesondert beheben |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
 Einbeziehung `system/control reload` in das Fencing; Aufteilung des
@@ -1313,6 +1440,9 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 20.11.2026 | Review PR #105, Nachtrag R2: `control_queries` zählt nur tatsächlich gestartete dig-Prozesse der Kontrollabfrage (`dnsQuery()['started']`, `dnsControlZoneState()['queried']`), nicht `dig_not_started`/`dig_error`; Zustände und Nachweislogik unverändert; Tests C09–C13, Mutation MV19 |
+| 20.11.2026 | Review PR #105: R1 – Cleanup meldet `still_served` auch bei K = ja bzw. strukturell unbestimmbarem K nur aus der letzten vollständigen Runde (Abschnitt 5g an R4 und die freigegebene Matrix angeglichen); R2 – `control_queries` zählt nur tatsächlich ausgeführte DNS-Abfragen der Kontrollzone; Tests F08/F09, DR04–DR04c, C06–C10, Mutationen MV17/MV18 |
+| 20.11.2026 | AS2b umgesetzt: Abschnitt 5g (Polling unter der Agent-Sperre, Nachverifikation in `conf_sync`, Nachweis der Entfernung im Cleanup, Vorabnachweis der Zonennamen, Zeitbudget mit Abschnittsfrist, Kontrollzonen-Speicher je Runde, R1–R4), Messung M1, E92/E106–E108 umgesetzt, E119–E127, Folgepaket E128, Befund B-M1-1 |
 | 19.11.2026 | E118 (Option B): `fencing_mode` ist Pflichtangabe; fehlender Schlüssel ⇒ `fence_misconfigured` in `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status`; E82 und E95 entsprechend geändert; Upgrade-Hinweis |
 | 19.11.2026 | Review AS2a (letzte Korrektur): `system/status` fail-closed ohne externen Prozess bei fehlendem `posix` in `observe`/`enforce` (`agent_requirement_missing`) und bei unbekanntem `fencing_mode` (`fence_misconfigured`); nur `off` verwendet den bisherigen Ablauf |
 | 19.11.2026 | Review AS2a: `system/status` mit Prozessfristen in `observe`/`enforce` (`status_timeout`, DNS-Testabfrage über Exit-Code und Antwortzeile), Reserveprüfung vor jedem Sperrversuch; Befund außerhalb des Umfangs (unbeschränkte Aufrufe in `system/control`, `conf_check`, `zone_check` und im Modus `off`) dokumentiert |

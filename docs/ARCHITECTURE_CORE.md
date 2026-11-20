@@ -319,6 +319,8 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 
 **Fencing (AS1, 19.11.2026):** Die drei schreibenden Endpunkte prüfen nach dem Agent-`flock` ein Fencing-Token gegen einen dauerhaft gespeicherten Höchststand (Modi `off`/`observe`/`enforce`, Fencing-Domäne, Write-ahead-Fehlermarke, lokale CLI `scripts/agent_fence-cli.php`); `system/status` meldet in `observe`/`enforce` Fähigkeiten und Fencing-Zustand. Alle fachlichen Fencing-Entscheidungen des Core (Token-Vergabe, Domäne, Abgleich, Abbruch bei Lock-Verlust) folgen mit AS4 im Core-Service `PublishService`/`PublishLedger`. Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5e, und `AGENT_FENCING.md`.
 
+**Nachverifikation (AS2b, 20.11.2026):** In `observe`/`enforce` prüft der Agent nach dem Reload unter seiner Sperre den tatsächlich ausgelieferten Stand (`conf_sync`: `verification`; `zone_cleanup`: `zones[].served`). Er liefert nur technische Fakten; HTTP-Status, `effect` und die Einordnung im Core (`PublishTargetClassifier`) sind unverändert. Die fachliche Auswertung (Journal, Zustände L3/L4) folgt mit AS4 im Core. Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5g.
+
 ### 3.8 Paket 6 – Abschlussprüfung (erledigt, PR #64, `main` `2a077a2`)
 
 **Vorgehen (prüfbar wiederholbar):**

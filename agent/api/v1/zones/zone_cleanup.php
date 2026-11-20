@@ -22,6 +22,12 @@
  * der Vorrangregel (nachgewiesene Änderung und ein Rest ⇒ partial; nie none nach einer Änderung). Kein Rollback nach dem
  * Löschen bzw. dem Reload-Versuch. Im Modus off ist das Verhalten unverändert (E95, E101).
  *
+ * AS2b (observe/enforce; Abschnitt 5g): Vor der Änderung werden die Zonennamen der verwaisten Dateien aus dem
+ * Konfigurationsnachweis bestimmt (nur bei eindeutiger Zuordnung und ausreichender Restzeit, E120/E123); nach dem Reload
+ * wird unter der Agent-Sperre je Zone der Nachweis der Entfernung geführt (zones[].served = absent | still_served |
+ * unknown, E92/E124; nach gescheitertem Reload nur still_served oder unknown, E122) und verification ergänzt.
+ * HTTP-Status, message, effect und die übrigen Felder bleiben unverändert.
+ *
  * Sicherheit:
  * - Zugriff nur mit gültigem Bearer-Token
  * - Kein Datenbankzugriff erforderlich
@@ -35,6 +41,7 @@ require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
 require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/dns_state.php';
+require_once __DIR__ . '/../../../inc/dns_verify.php';
 require_once __DIR__ . '/../../../inc/response.php';
 
 // === Konfiguration laden und Token prüfen ===
@@ -207,6 +214,10 @@ foreach ($keepPaths as $real) {
 $zonesConfContent = implode("\n", $includes) . "\n";
 // Die Sicherung der bisherigen zones.conf (für Rollback) liegt bereits vollständig gelesen vor (E98, oben).
 
+// === AS2b (E120, E123): Zonennamen der verwaisten Dateien aus dem Konfigurationsnachweis VOR der Änderung ===
+// Nur mit ausreichender Restzeit und mit eigener Abschnittsfrist; Preflight, Reload und Antwort behalten ihr Budget.
+$verifyNames = $as2 ? agentCleanupNames($config, array_map('strval', array_keys($orphanConfFiles))) : null;
+
 // === C: zones.conf atomar ersetzen (Temp-Datei im selben Verzeichnis + rename) ===
 // Bei Fehler bleibt die bisherige zones.conf unverändert (kein Rollback nötig).
 if (!writeTextFileAtomic($zonesConfPath, $zonesConfContent)) {
@@ -323,7 +334,17 @@ if ($as2) {
     // AS2a (E93, E117): Exit-Code und Frist. zones.conf ist hier bereits ersetzt (nachgewiesene Änderung) – die
     // Wirkung ist daher nie none (Vorrangregel in cleanupAggregateEffect). Kein Rollback.
     $reload = agentReloadTimed($config);
+    // AS2b (E92, E119, E122, E124): Nachweis der Entfernung unter der Agent-Sperre
+    $removal = agentVerifyRemoved($config, $verifyNames['names'], $reload['status'], microtime(true));
     $releaseLock();
+    foreach ($zoneResults as &$zr) {
+        $vr = $removal['zones'][$zr['zone']] ?? ['name' => null, 'served' => 'unknown', 'served_reason' => 'zone_name_unresolved'];
+        $zr['name'] = $vr['name'];
+        $zr['served'] = $vr['served'];
+        $zr['served_reason'] = $vr['served_reason'];
+    }
+    unset($zr);
+    $verificationMeta = $removal['meta'] + ['name_proof' => $verifyNames['proof']];
     $effect = cleanupAggregateEffect(true, $zoneResults);
     $reloadReport = ['status' => $reload['status'], 'exit_code' => $reload['exit_code']];
     if (!empty($errors) || $reload['status'] !== 'ok') {
@@ -341,7 +362,7 @@ if ($as2) {
             'rollback' => 'not_attempted',
             'zones' => $zoneResults,
             'reload' => $reloadReport
-        ] + ($reload['status'] !== 'ok' ? ['bind_state' => 'unknown'] : []));
+        ] + ($reload['status'] !== 'ok' ? ['bind_state' => 'unknown'] : []) + ['verification' => $verificationMeta]);
     }
     sendJsonResponse(200, [
         'status' => 'success',
@@ -351,7 +372,8 @@ if ($as2) {
         'rndc' => $reload['output'],
         'effect' => $effect,
         'zones' => $zoneResults,
-        'reload' => $reloadReport
+        'reload' => $reloadReport,
+        'verification' => $verificationMeta
     ]);
 }
 $rndcOutput = reloadBind();

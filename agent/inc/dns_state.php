@@ -2,7 +2,8 @@
 /**
  * Datei: inc/dns_state.php
  * Zweck: Gemeinsamer technischer Zustandsbaustein des Agenten (AS2a; docs/ARCHITECTURE_HISTORY.md Abschnitt 5f).
- *        AS2b verwendet ausschließlich diese Bausteine (Polling, Nachverifikation, Cleanup-Nachweise).
+ *        AS2b (inc/dns_verify.php) verwendet ausschließlich diese Bausteine (Polling, Nachverifikation,
+ *        Cleanup-Nachweise); ergänzt ist nur der optionale Rundenspeicher der Kontrollzone in dnsServedState().
  *
  * Bausteine:
  * - DNS-Abfrage und strenger Parser (dnsQuery/dnsParseDig): dig +norec +time=1 +tries=1 +nocookie an 127.0.0.1;
@@ -147,16 +148,23 @@ function dnsParseDig(string $out, string $procStatus = 'ok'): array {
         'answer' => $sections['answer'], 'authority' => $sections['authority'], 'reason' => null];
 }
 
-/** Eine SOA-Abfrage an den lokalen BIND. */
+/**
+ * Eine SOA-Abfrage an den lokalen BIND.
+ *
+ * Zusätzlich zum Ergebnis von dnsParseDig() meldet `started`, ob der dig-Prozess tatsächlich gestartet wurde
+ * (agentRunProcess: ok oder timeout); false bei not_started (Frist) bzw. error (Prozess nicht startbar). Rein
+ * informativ (AS2b: Zählung der Kontrollabfragen); die Auswertung der Antwort ist davon unabhängig.
+ */
 function dnsQuery(array $config, string $name): array {
     $dig = (string)($config['bind_dig'] ?? '/usr/bin/dig');
     $p = agentRunProcess([$dig, '+norec', '+time=1', '+tries=1', '+nocookie', '+noall', '+comments', '+answer',
         '+authority', '@' . DNS_QUERY_ADDRESS, $name === '' ? '.' : $name, 'SOA'], AGENT_CAP_DIG);
     if ($p['status'] === 'not_started' || $p['status'] === 'error') {
-        return ['kind' => 'error', 'rcode' => null, 'aa' => false, 'answer' => [], 'authority' => [], 'reason' => 'dig_' . $p['status']];
+        return ['kind' => 'error', 'rcode' => null, 'aa' => false, 'answer' => [], 'authority' => [], 'reason' => 'dig_' . $p['status'],
+            'started' => false];
     }
 
-    return dnsParseDig($p['output'], $p['status']);
+    return dnsParseDig($p['output'], $p['status']) + ['started' => true];
 }
 
 /** SOA-Serial aus den rdata-Feldern (mname rname serial refresh retry expire minimum) oder null. */
@@ -436,7 +444,11 @@ function dnsZoneConfigState(array $config, string $zone, array $proof): array {
 /**
  * Prüft die Kontrollzone (Betriebsvoraussetzung, E116).
  *
- * @return array{state: string, zone: ?string}  state: ok | missing | own_acl | managed | not_served | unverifiable
+ * @return array{state: string, zone: ?string, queried?: bool}
+ *         state: ok | missing | own_acl | managed | not_served | unverifiable
+ *         queried (AS2b, nur im Abfragepfad gesetzt): dig-Prozess der Kontrollabfrage tatsächlich gestartet
+ *         (dnsQuery()['started']). Fehlt das Feld (Ergebnisse ohne Abfrage) oder ist es false (Prozess nicht gestartet bzw.
+ *         nicht startbar), wurde keine Abfrage ausgeführt. state bleibt davon unberührt.
  */
 function dnsControlZoneState(array $config, array $proof): array {
     $zone = dnsNormName($config['l3_control_zone'] ?? 'localhost');
@@ -461,18 +473,21 @@ function dnsControlZoneState(array $config, array $proof): array {
     }
     $r = dnsQuery($config, $zone);
 
-    return ['state' => dnsAuthoritativeSoa($r, $zone) !== null ? 'ok' : 'not_served', 'zone' => $zone];
+    return ['state' => dnsAuthoritativeSoa($r, $zone) !== null ? 'ok' : 'not_served', 'zone' => $zone, 'queried' => $r['started'] === true];
 }
 
 /**
  * Ausgelieferter Zustand D einer Zone (eine Abfrage, ggf. eine Kontrollabfrage).
  *
- * @param array $k Ergebnis von dnsZoneConfigState()
+ * @param array      $k     Ergebnis von dnsZoneConfigState()
+ * @param array|null $round AS2b (E124): Speicher einer Polling-Runde für das Ergebnis der Kontrollzone. Wiederverwendet
+ *                          wird es nur innerhalb dieser Runde und nur für denselben Konfigurationsnachweis ($proof);
+ *                          ohne Speicher (zone_sync, AS2a) wird die Kontrollzone wie bisher je Aufruf geprüft.
  *
  * @return array{state: string, serial: ?int, reason: ?string, rcode: ?string, control: ?string}
  *         state: served | not_auth | unknown
  */
-function dnsServedState(array $config, string $zone, array $k, array $proof): array {
+function dnsServedState(array $config, string $zone, array $k, array $proof, ?array &$round = null): array {
     $out = ['state' => 'unknown', 'serial' => null, 'reason' => null, 'rcode' => null, 'control' => null];
     $r = dnsQuery($config, $zone);
     $out['rcode'] = $r['kind'] === 'response' ? $r['rcode'] : $r['kind'];
@@ -516,7 +531,21 @@ function dnsServedState(array $config, string $zone, array $k, array $proof): ar
 
     // Keine konfigurierte Elternzone: nur REFUSED mit erfolgreicher Kontrollabfrage ist ein Nachweis
     if ($r['rcode'] === 'REFUSED' && !$r['aa'] && $r['answer'] === [] && $r['authority'] === []) {
-        $c = dnsControlZoneState($config, $proof);
+        if ($round !== null && isset($round['control']) && ($round['proof'] ?? null) === $proof) {
+            $c = $round['control'];
+        } else {
+            $c = dnsControlZoneState($config, $proof);
+            if ($round !== null) {
+                $round['control'] = $c;
+                $round['proof'] = $proof;
+                // gezählt wird nur ein tatsächlich gestarteter dig-Prozess der Kontrollabfrage (auch mit Timeout oder
+                // fehlerhafter Antwort); ohne Abfrage (missing, own_acl, managed, unverifiable) bzw. nicht gestartet oder
+                // nicht startbar (dig_not_started, dig_error) wird nicht gezählt
+                if (($c['queried'] ?? false) === true) {
+                    $round['control_queries'] = ($round['control_queries'] ?? 0) + 1;
+                }
+            }
+        }
         $out['control'] = $c['state'];
         if ($c['state'] === 'ok') {
             return ['state' => 'not_auth', 'reason' => 'refused_control_ok'] + $out;

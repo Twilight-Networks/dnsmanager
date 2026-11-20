@@ -86,3 +86,62 @@ neutralisiert, weil die Datei-Sandbox keinen passenden BIND hat):
 ```bash
 bash tests/agent/as2a_as1_regression.sh <Prüfstand> <Referenz-Checkout Basis> <Ergebnisse> [FSICLXGM]
 ```
+
+## AS2b – `as2b_pure_test.php`, `as2b_test.py`, `as2b_as1_regression.sh`
+
+Abnahme der Nachverifikation nach dem Reload und des Nachweises der Entfernung (`docs/ARCHITECTURE_HISTORY.md`,
+Abschnitt 5g).
+
+**Reine Tests** (ohne BIND; die Gruppen C, S, L und BU verwenden kleine Ersatzprogramme für `dig`, `named-checkconf`,
+`named-checkzone` und `rndc` in einem temporären Verzeichnis und brauchen Linux, root, `setsid` und `ext-posix`):
+
+```bash
+php tests/agent/as2b_pure_test.php <Checkout> [Gruppen]
+```
+
+| Gruppe | Inhalt |
+|---|---|
+| B, W, P | Rundenfolge (50 ms verdoppelt bis 500 ms), Fensterende min(Reload-Ende + 10 s, TW − 1 s), Polling-Steuerung mit simulierter Uhr (keine Runde und keine Wartezeit nach dem Fensterende) |
+| DL, DR | Entscheidungsmatrizen `conf_sync` und Cleanup (SERVFAIL, Timeout und Unbestimmtes nie positiv; `absent` nur mit Reload-Erfolg, K = nein und not_auth) |
+| F | Endergebnis nach R3/R4 (letzte vollständige Runde; unvollständige Runde ersetzt sie nicht; `still_served` bei K = ja nie aus Runde 1) |
+| N | Zonennamen aus dem Konfigurationsnachweis (eindeutig, Großbuchstaben, Punkt am Ende, fremder Pfad, unbestimmbar) |
+| C | Kontrollzonen-Speicher: eine Abfrage je Runde für mehrere Zonen, neue Runde bzw. anderer Nachweis ⇒ neue Abfrage, ohne Speicher wie bisher; `control_queries` zählt nur tatsächlich gestartete dig-Prozesse der Kontrollabfrage (Kontrollzone fehlt, eigene ACL, verwaltet bzw. nicht prüfbar ⇒ keine Abfrage, 0; Prozess wegen der Frist nicht gestartet ⇒ 0; gestartet mit Zeitüberschreitung ⇒ 1) |
+| S | Abschnittsfrist in `proc.php` (Prozessabbruch, Verschachtelung, Wiederherstellung, nie über TW) |
+| L | Abläufe `verifyLoaded()`/`verifyRemoved()` mit Antwortfolgen (mehrere Runden, R4, K vorübergehend, kein Übertrag über Runden, Reload gescheitert) |
+| BU | Vorabnachweis: Restzeit knapp unter/über 20 s, größter Verbrauch innerhalb der Obergrenzen, hängender Nachweis, späte Sperre; Restzeit danach ≥ 9 s |
+
+**Live-Suite** gegen die installierte BIND-Instanz (wie AS2a über `php -S` mit dem Agent-Code des Prüfstands; Hilfsfunktionen
+aus `as2a_test.py`; Testzonen `*.as2b.test`/`*.as2b-solo.test`; Sicherung unter `/root/as2b-test-<Zeit>/`):
+
+```bash
+python3 tests/agent/as2b_test.py --src <Checkout des Prüfstands> --out <Ergebnisse> [--groups VNRBM]
+```
+
+| Gruppe | Inhalt |
+|---|---|
+| V | `conf_sync` ⇒ `verified`: neue Zone, Änderung, Unterzone, Zone mit 300 000 RR (nach Ladeabschluss), nach abgelehntem `zone_sync` (gegen die verwaltete Datei), `observe`; Antwortvertrag und Klassifizierung unverändert |
+| N | ohne positiven Nachweis: Datei ungültig bzw. fehlt, andere Serial (`serial_differs` am Fensterende), SERVFAIL, K strukturell, DNS blockiert, Reload gescheitert (keine Abfrage), Großbuchstaben |
+| R | Cleanup: `absent` ohne/mit Elternzone (eine Runde, eine Kontrollabfrage), große Zone, Zone weiter konfiguriert, Reload gescheitert (`still_served`, nie `absent`), Kontrollzone fehlt (keine Kontrollabfrage gezählt), Großbuchstaben, DNS blockiert, 30 Zonen mit gemeinsamem Fenster |
+| B | Zeitbudget: Restzeit beim Sperrerwerb knapp unter/über 20 s (Sperre extern gehalten), größter Verbrauch des Vorabnachweises, hängender Vorabnachweis, späte Sperre mit blockiertem DNS, Sperre während der Nachverifikation gehalten; B99 jeder Aufruf < 25 s |
+| M | Mutationsproben MV01–MV19; je Mutation das zugeordnete Live-Szenario und die zugeordneten reinen Gruppen gegen die mutierte Kopie; mindestens ein Fehlschlag erforderlich |
+| Z | Rückbau wie AS2a (Z01–Z08) |
+
+**AS1-Regression** gegen den AS2b-Prüfstand: wie AS2a, zusätzlich werden die AS2b-Einstiegspunkte (`agentVerifyLoaded`,
+`agentCleanupNames`, `agentVerifyRemoved`) in der Kopie durch „unknown ohne Abfrage“ ersetzt:
+
+```bash
+bash tests/agent/as2b_as1_regression.sh <Prüfstand> <Referenz-Checkout Basis> <Ergebnisse> [FSICLXGM]
+```
+
+Die AS2a-Live-Suite läuft unverändert gegen den AS2b-Prüfstand (`--ref` = Basis-Commit für den `off`-Vergleich G). Für die
+AS1-Gruppe G (und die darüber erkannten Mutationen M15/M29) muss die Referenz ein Stand **vor** E118 sein (fehlender
+`fencing_mode` = `off`, z. B. `81ccd70`); mit einer Referenz ab E118 weicht bereits der Referenzlauf ab.
+
+**Stufentest** über den installierten Core (`as2b_stage.php`, als www-data auf dem Core-System):
+
+```bash
+php tests/agent/as2b_stage.php /usr/share/dnsmanager publish-all
+php tests/agent/as2b_stage.php /usr/share/dnsmanager publish-zone <Zone> [Sperr-Wartezeit]
+php tests/agent/as2b_stage.php /usr/share/dnsmanager conf-sync <Servername> <Zone>
+php tests/agent/as2b_stage.php /usr/share/dnsmanager cleanup <Servername>
+```
