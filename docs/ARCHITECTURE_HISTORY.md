@@ -975,6 +975,19 @@ abschließendem Punkt sind in AS2a/AS2b nicht verifizierbar (`unknown`; Folgepak
 startet nach TW keinen Prozess mehr; ob Verbindungsaufbau, TLS und Upload zusammen mit 24 s Arbeitszeit sicher unter dem
 cURL-Timeout des Core (30 s) bleiben, ist nicht garantiert und wird im Stufentest gemessen (Risiko, keine Änderung).
 
+**Stufentest über den installierten Core (20.11.2026, ns2 auf `ceef51f` in `observe`, Core ns1 auf `6bb229d`)** –
+Werkzeug `tests/agent/as2b_stage.php` (PublishService wie die Web-Adapter; Einzelaufrufe mit den cURL-Einstellungen des
+Core und Teilzeiten). Direktes `conf_sync`: 218–220 ms gesamt (Verbindung 0,4 ms, TLS ≈ 11 ms), `verified` in Runde 1
+(143 ms); bisheriger Agent (`off`): 65–98 ms. Cleanup einer fremden Zone: `absent` in Runde 1, eine Kontrollabfrage,
+230 ms. Publish Zone 0,73 s; Publish All mit Full Rebuild (6 Zonen) 4,38 s (bisher in `off` 2,69 s; die Differenz
+enthält auch die AS2a-Prüfungen in `observe`). Nahe am Timeout (Agent-Sperre 15,3 s gehalten, DNS blockiert): 22,6 s
+gesamt, Fenster auf 7,9 s gekürzt, 7,4 s Reserve zum cURL-Timeout, Einordnung `ok`. Publish All mit blockiertem DNS auf
+ns2: 69,4 s (je Zone `zone_sync` fail-closed abgelehnt nach AS2a und `conf_sync` mit 10,16 s Nachverifikation ⇒ alle
+Zonen `partial`, `bind_dirty = 1`); ein gleichzeitiger Publish Zone mit 5 s Sperr-Wartezeit (DynDNS-Pfad) endete nach
+5,0 s mit `locked`, die Zone blieb ausstehend; der nächste reguläre Lauf (4,39 s) stellte den konsistenten Zustand her.
+Rückbau: ns2 auf `6bb229d`, Konfiguration byte-gleich (`0640 root:www-data`, `off`), H entfernt; einzige Abweichung
+unter `/etc/bind` sind die regulär fortgeschriebenen Serials (Datenbank = Datei = DNS auf ns1 und ns2).
+
 **Tests (AS2b)** – `tests/agent/as2b_pure_test.php` (B Rundenfolge, W Fensterende, P Polling-Steuerung mit simulierter
 Uhr, DL/DR Entscheidungsmatrizen, F R3/R4, N Zonennamen; mit Ersatzprogrammen statt BIND: C Kontrollzonen-Speicher, S
 Abschnittsfrist, L Abläufe mit Antwortfolgen, BU Eintrittsschwelle und größter Verbrauch des Vorabnachweises),

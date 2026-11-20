@@ -133,4 +133,15 @@ python3 tests/agent/as2b_test.py --src <Checkout des Prüfstands> --out <Ergebni
 bash tests/agent/as2b_as1_regression.sh <Prüfstand> <Referenz-Checkout Basis> <Ergebnisse> [FSICLXGM]
 ```
 
-Die AS2a-Live-Suite läuft unverändert gegen den AS2b-Prüfstand (`--ref` = Basis-Commit für den `off`-Vergleich G).
+Die AS2a-Live-Suite läuft unverändert gegen den AS2b-Prüfstand (`--ref` = Basis-Commit für den `off`-Vergleich G). Für die
+AS1-Gruppe G (und die darüber erkannten Mutationen M15/M29) muss die Referenz ein Stand **vor** E118 sein (fehlender
+`fencing_mode` = `off`, z. B. `81ccd70`); mit einer Referenz ab E118 weicht bereits der Referenzlauf ab.
+
+**Stufentest** über den installierten Core (`as2b_stage.php`, als www-data auf dem Core-System):
+
+```bash
+php tests/agent/as2b_stage.php /usr/share/dnsmanager publish-all
+php tests/agent/as2b_stage.php /usr/share/dnsmanager publish-zone <Zone> [Sperr-Wartezeit]
+php tests/agent/as2b_stage.php /usr/share/dnsmanager conf-sync <Servername> <Zone>
+php tests/agent/as2b_stage.php /usr/share/dnsmanager cleanup <Servername>
+```
