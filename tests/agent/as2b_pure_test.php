@@ -129,7 +129,9 @@ if (run('DR')) {
         ['DR01 Reload ok, K nein, not_auth ⇒ absent', [true, $kN, false, $dNA], 'FC:absent:refused_control_ok'],
         ['DR02 Reload gescheitert ⇒ nie absent', [false, $kN, false, $dNA], 'FC:unknown:refused_control_ok'],
         ['DR03 K nein, ausgeliefert ⇒ still_served, weiter', [true, $kN, false, $dS(1)], '-C:still_served:'],
-        ['DR04 K ja, ausgeliefert ⇒ still_served, fest', [true, $kY, false, $dS(1)], 'FC:still_served:still_configured'],
+        ['DR04 K ja, ausgeliefert ⇒ still_served, weiter (R4: nur aus der letzten Runde)', [true, $kY, false, $dS(1)], '-C:still_served:still_configured'],
+        ['DR04b K strukturell, ausgeliefert ⇒ still_served, weiter (R4)', [true, $kU('views_present'), false, $dS(1)], '-C:still_served:config_views_present'],
+        ['DR04c Reload gescheitert, ausgeliefert ⇒ still_served, fest (E122: eine Runde)', [false, $kY, false, $dS(1)], 'FC:still_served:still_configured'],
         ['DR05 K ja, nicht ausgeliefert ⇒ unknown, fest (absent ausgeschlossen)', [true, $kY, false, $dU('configured_not_served')], 'FC:unknown:still_configured'],
         ['DR06 K vorübergehend, ausgeliefert ⇒ still_served, weiter', [true, $kU('zone_count_mismatch'), true, $dS(1)], '-C:still_served:config_zone_count_mismatch'],
         ['DR07 K vorübergehend, nicht ausgeliefert ⇒ unknown, weiter', [true, $kU('zone_count_mismatch'), true, $dU('config_undeterminable', 'REFUSED')], '-C:unknown:config_zone_count_mismatch'],
@@ -179,6 +181,13 @@ if (run('F')) {
     t('F06 still_served, danach unknown ⇒ unknown', $r['state'] === 'unknown', json_encode($r));
     $r = $seqEnd([$o(false, 'unknown', 'dns_timeout'), $o(true, 'absent', 'refused_control_ok'), $o(false, 'still_served')]);
     t('F07 absent ist endgültig (R3)', $r['state'] === 'absent', json_encode($r));
+    // R1 (Review): K = ja, zuerst ausgeliefert, später nicht mehr ⇒ nie still_served aus Runde 1
+    $kYes = ['state' => 'yes', 'reason' => null, 'ancestor' => null];
+    $rounds = [verifyRemovedDecide(true, $kYes, false, $dS(1)), verifyRemovedDecide(true, $kYes, false, $dU('configured_not_served'))];
+    $r = $seqEnd($rounds);
+    t('F08 K ja: ausgeliefert, danach nicht ⇒ unknown, nicht still_served aus Runde 1', $r['state'] === 'unknown' && $r['reason'] === 'still_configured', json_encode($r));
+    $r = $seqEnd([verifyRemovedDecide(true, $kYes, false, $dS(1)), verifyRemovedDecide(true, $kYes, false, $dS(1))]);
+    t('F09 K ja: in allen Runden ausgeliefert ⇒ still_served aus der letzten Runde', $r['state'] === 'still_served', json_encode($r));
 }
 
 // ---------------------------------------------------------------- N: Zonennamen (E123)
@@ -328,7 +337,7 @@ if (run('C') && $linux) {
         && $count('dig', 'ctl.test') === 1 && ($round['control_queries'] ?? 0) === 1, 'ctl=' . $count('dig', 'ctl.test'));
     $round2 = [];
     dnsServedState($fcfg, 'z1.solo', $k1, $p, $round2);
-    t('C02 neue Runde ⇒ neue Kontrollabfrage', $count('dig', 'ctl.test') === 2);
+    t('C02 neue Runde ⇒ neue Kontrollabfrage', $count('dig', 'ctl.test') === 2 && ($round2['control_queries'] ?? 0) === 1);
     $p3 = $p;
     $p3['list'][] = ['other.test', 'IN', '_default', 'master'];
     dnsServedState($fcfg, 'z1.solo', $k1, $p3, $round2);
@@ -340,7 +349,41 @@ if (run('C') && $linux) {
     @unlink("$fake/seq.ctl.test.ptr");
     $round3 = [];
     $d = dnsServedState($fcfg, 'z1.solo', $k1, $p, $round3);
-    t('C05 Kontrollzone nicht ausgeliefert ⇒ unknown, nie not_auth', $d['state'] === 'unknown' && $d['reason'] === 'control_zone_not_served', json_encode($d));
+    t('C05 Kontrollzone nicht ausgeliefert ⇒ unknown, nie not_auth; Abfrage gezählt', $d['state'] === 'unknown' && $d['reason'] === 'control_zone_not_served'
+        && ($round3['control_queries'] ?? 0) === 1, json_encode([$d, $round3['control_queries'] ?? null]));
+    // R2 (Review): gezählt werden nur tatsächlich ausgeführte DNS-Abfragen der Kontrollzone
+    $noQuery = static function (string $id, array $cfg, array $proof, string $exp) use ($count, $k1, $k2): void {
+        $before = $count('dig');
+        $round = [];
+        $d1 = dnsServedState($cfg, 'z1.solo', $k1, $proof, $round);
+        $d2 = dnsServedState($cfg, 'z2.solo', $k2, $proof, $round);
+        $digs = $count('dig') - $before;   // nur die beiden Abfragen der Zonen selbst
+        t($id, $d1['reason'] === "control_zone_$exp" && $d2['reason'] === "control_zone_$exp" && $d1['state'] === 'unknown'
+            && ($round['control_queries'] ?? 0) === 0 && $digs === 2 && ($round['control']['state'] ?? null) === $exp,
+            json_encode(['d1' => $d1['reason'], 'queries' => $round['control_queries'] ?? 0, 'digs' => $digs]));
+    };
+    $scene([], ['z1.solo' => ['refused'], 'z2.solo' => ['refused']]);
+    $p = dnsConfigProof($fcfg, true);
+    $noQuery('C06 Kontrollzone fehlt ⇒ keine Abfrage, nicht gezählt, für beide Zonen derselben Runde', ['l3_control_zone' => 'fehlt.test'] + $fcfg, $p, 'missing');
+    $pAcl = $p;
+    foreach ($pAcl['zones'] as $i => $z) {
+        if ($z[0] === 'ctl.test') {
+            $pAcl['zones'][$i][2]['allow-query'] = ['any'];
+        }
+    }
+    $noQuery('C07 Kontrollzone mit eigener ACL ⇒ keine Abfrage, nicht gezählt', $fcfg, $pAcl, 'own_acl');
+    file_put_contents("$tmp/zones/conf/ctl.test.conf", "zone \"ctl.test\" { type master; file \"x\"; };\n");
+    $noQuery('C08 Kontrollzone vom DNS-Manager verwaltet ⇒ keine Abfrage, nicht gezählt', $fcfg, $p, 'managed');
+    unlink("$tmp/zones/conf/ctl.test.conf");
+    $before = $count('dig');
+    $c = dnsControlZoneState($fcfg, ['state' => 'undeterminable', 'reason' => 'views_present'] + $p);
+    t('C09 Konfiguration nicht prüfbar ⇒ unverifiable ohne Abfrage', $c['state'] === 'unverifiable' && $count('dig') === $before
+        && !in_array('unverifiable', DNS_CONTROL_QUERIED_STATES, true), json_encode($c));
+    $round = [];
+    dnsServedState($fcfg, 'z1.solo', $k1, $p, $round);
+    dnsServedState($fcfg, 'z2.solo', $k2, $p, $round);
+    t('C10 erfolgreiche Abfrage, zwei Zonen derselben Runde ⇒ genau eine gezählte Abfrage', ($round['control_queries'] ?? 0) === 1
+        && ($round['control']['state'] ?? null) === 'ok' && $count('dig', 'ctl.test') === 1, 'ctl=' . $count('dig', 'ctl.test'));
 }
 
 // ---------------------------------------------------------------- S: Abschnittsfrist

@@ -37,6 +37,8 @@ const DNS_SUPPORTED_VIEW = '_default';
 const DNS_SUPPORTED_TYPES = ['master', 'primary'];
 /** Zulässige Optionen einer verwalteten Zonenanweisung (Format des Generators, writeZoneConfFile) */
 const DNS_MANAGED_ZONE_OPTIONS = ['type', 'file'];
+/** Ergebnisse von dnsControlZoneState(), denen eine DNS-Abfrage der Kontrollzone zugrunde liegt (AS2b, Zählung) */
+const DNS_CONTROL_QUERIED_STATES = ['ok', 'not_served'];
 
 /** Normalisierter Zonenname (Kleinbuchstaben, ohne abschließenden Punkt); null bei unzulässiger Form. */
 function dnsNormName(mixed $name): ?string {
@@ -527,7 +529,12 @@ function dnsServedState(array $config, string $zone, array $k, array $proof, ?ar
             if ($round !== null) {
                 $round['control'] = $c;
                 $round['proof'] = $proof;
-                $round['control_queries'] = ($round['control_queries'] ?? 0) + 1;
+                // gezählt wird nur eine tatsächlich ausgeführte DNS-Abfrage der Kontrollzone: dnsControlZoneState() fragt
+                // nur, wenn die Konfiguration sie zulässt (Ergebnis ok bzw. not_served); missing, own_acl, managed und
+                // unverifiable entstehen ohne Abfrage
+                if (in_array($c['state'], DNS_CONTROL_QUERIED_STATES, true)) {
+                    $round['control_queries'] = ($round['control_queries'] ?? 0) + 1;
+                }
             }
         }
         $out['control'] = $c['state'];

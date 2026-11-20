@@ -103,9 +103,9 @@ php tests/agent/as2b_pure_test.php <Checkout> [Gruppen]
 |---|---|
 | B, W, P | Rundenfolge (50 ms verdoppelt bis 500 ms), Fensterende min(Reload-Ende + 10 s, TW − 1 s), Polling-Steuerung mit simulierter Uhr (keine Runde und keine Wartezeit nach dem Fensterende) |
 | DL, DR | Entscheidungsmatrizen `conf_sync` und Cleanup (SERVFAIL, Timeout und Unbestimmtes nie positiv; `absent` nur mit Reload-Erfolg, K = nein und not_auth) |
-| F | Endergebnis nach R3/R4 (letzte vollständige Runde; unvollständige Runde ersetzt sie nicht) |
+| F | Endergebnis nach R3/R4 (letzte vollständige Runde; unvollständige Runde ersetzt sie nicht; `still_served` bei K = ja nie aus Runde 1) |
 | N | Zonennamen aus dem Konfigurationsnachweis (eindeutig, Großbuchstaben, Punkt am Ende, fremder Pfad, unbestimmbar) |
-| C | Kontrollzonen-Speicher: eine Abfrage je Runde, neue Runde bzw. anderer Nachweis ⇒ neue Abfrage, ohne Speicher wie bisher |
+| C | Kontrollzonen-Speicher: eine Abfrage je Runde für mehrere Zonen, neue Runde bzw. anderer Nachweis ⇒ neue Abfrage, ohne Speicher wie bisher; `control_queries` zählt nur tatsächlich ausgeführte DNS-Abfragen (Kontrollzone fehlt, eigene ACL, verwaltet bzw. nicht prüfbar ⇒ keine Abfrage, 0) |
 | S | Abschnittsfrist in `proc.php` (Prozessabbruch, Verschachtelung, Wiederherstellung, nie über TW) |
 | L | Abläufe `verifyLoaded()`/`verifyRemoved()` mit Antwortfolgen (mehrere Runden, R4, K vorübergehend, kein Übertrag über Runden, Reload gescheitert) |
 | BU | Vorabnachweis: Restzeit knapp unter/über 20 s, größter Verbrauch innerhalb der Obergrenzen, hängender Nachweis, späte Sperre; Restzeit danach ≥ 9 s |
@@ -119,11 +119,11 @@ python3 tests/agent/as2b_test.py --src <Checkout des Prüfstands> --out <Ergebni
 
 | Gruppe | Inhalt |
 |---|---|
-| V | `conf_sync` ⇒ `verified`: neue Zone, Änderung, Unterzone, Zone mit 300 000 RR (mehrere Runden), nach abgelehntem `zone_sync` (gegen die verwaltete Datei), `observe`; Antwortvertrag und Klassifizierung unverändert |
+| V | `conf_sync` ⇒ `verified`: neue Zone, Änderung, Unterzone, Zone mit 300 000 RR (nach Ladeabschluss), nach abgelehntem `zone_sync` (gegen die verwaltete Datei), `observe`; Antwortvertrag und Klassifizierung unverändert |
 | N | ohne positiven Nachweis: Datei ungültig bzw. fehlt, andere Serial (`serial_differs` am Fensterende), SERVFAIL, K strukturell, DNS blockiert, Reload gescheitert (keine Abfrage), Großbuchstaben |
-| R | Cleanup: `absent` ohne/mit Elternzone (eine Runde, eine Kontrollabfrage), große Zone, Zone weiter konfiguriert, Reload gescheitert (`still_served`, nie `absent`), Kontrollzone fehlt, Großbuchstaben, DNS blockiert, 30 Zonen mit gemeinsamem Fenster |
+| R | Cleanup: `absent` ohne/mit Elternzone (eine Runde, eine Kontrollabfrage), große Zone, Zone weiter konfiguriert, Reload gescheitert (`still_served`, nie `absent`), Kontrollzone fehlt (keine Kontrollabfrage gezählt), Großbuchstaben, DNS blockiert, 30 Zonen mit gemeinsamem Fenster |
 | B | Zeitbudget: Restzeit beim Sperrerwerb knapp unter/über 20 s (Sperre extern gehalten), größter Verbrauch des Vorabnachweises, hängender Vorabnachweis, späte Sperre mit blockiertem DNS, Sperre während der Nachverifikation gehalten; B99 jeder Aufruf < 25 s |
-| M | Mutationsproben MV01–MV16; je Mutation das zugeordnete Live-Szenario und die zugeordneten reinen Gruppen gegen die mutierte Kopie; mindestens ein Fehlschlag erforderlich |
+| M | Mutationsproben MV01–MV18; je Mutation das zugeordnete Live-Szenario und die zugeordneten reinen Gruppen gegen die mutierte Kopie; mindestens ein Fehlschlag erforderlich |
 | Z | Rückbau wie AS2a (Z01–Z08) |
 
 **AS1-Regression** gegen den AS2b-Prüfstand: wie AS2a, zusätzlich werden die AS2b-Einstiegspunkte (`agentVerifyLoaded`,

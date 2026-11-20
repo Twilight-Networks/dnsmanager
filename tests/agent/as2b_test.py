@@ -320,8 +320,9 @@ def group_r(a, state):
     a.config('enforce', l3_control_zone='fehlt.as2b-solo.test')
     r = a.cl(keep_list(state, [r5]))
     a.config('enforce')
-    check(G, 'R05 Kontrollzone fehlt ⇒ unknown (kein absent aus REFUSED allein)', zr(r).get(r5, {}).get('served') == 'unknown'
-          and zr(r)[r5]['served_reason'] == 'control_zone_missing' and v(r).get('rounds') == 1, json.dumps([zr(r), v(r)]))
+    check(G, 'R05 Kontrollzone fehlt ⇒ unknown (kein absent aus REFUSED allein), keine Kontrollabfrage gezählt', zr(r).get(r5, {}).get('served') == 'unknown'
+          and zr(r)[r5]['served_reason'] == 'control_zone_missing' and v(r).get('rounds') == 1 and v(r).get('control_queries') == 0,
+          json.dumps([zr(r), v(r)]))
     # Großbuchstaben ⇒ Name nicht eindeutig ⇒ unknown (keine Ableitung aus dem Dateinamen)
     up = 'Up.as2b-solo.test'
     if not os.path.exists(f'{CONFDIR}/{up}.conf'):
@@ -473,6 +474,12 @@ MUTATIONS = [
      "    if ($d['rcode'] === 'SERVFAIL') {\n        return $r(true, true, 'verified', null);\n    }\n    if ($d['state'] === 'served' && is_int($d['serial']) && is_int($f['serial'])) {", 'mv_servfail', 'DL'),
     ('MV16 still_served ohne letzte Runde (R4)', DV, "    if (in_array($lastComplete['state'], ['serial_differs', 'still_served'], true)) {",
      "    if (true) {", None, 'FL'),
+    # Review R1: still_served bei K = ja bzw. strukturell sofort endgültig (wie vor der Korrektur)
+    ('MV17 still_served sofort endgültig (R1)', DV, "        return $r(!$reloadOk, true, 'still_served', $why);",
+     "        return $r($settled, true, 'still_served', $why);", None, 'DRF'),
+    # Review R2: Kontrollabfrage auch ohne DNS-Abfrage gezählt (wie vor der Korrektur)
+    ('MV18 Kontrollabfrage ohne DNS-Abfrage gezählt (R2)', DS, "                if (in_array($c['state'], DNS_CONTROL_QUERIED_STATES, true)) {",
+     "                if (true) {", 'mv_control', 'C'),
 ]
 
 
@@ -508,7 +515,7 @@ def mut_scenarios(a, state, name):
         install(a, n, 1)
         a.config('enforce', l3_control_zone='fehlt.as2b-solo.test')
         r = a.cl(keep_list(state, [n]))
-        check(G, 'control', zr(r).get(n, {}).get('served') == 'unknown', json.dumps(zr(r)))
+        check(G, 'control', zr(r).get(n, {}).get('served') == 'unknown' and v(r).get('control_queries') == 0, json.dumps([zr(r), v(r)]))
     elif name == 'mv_absent':
         zs = ['ma1.as2b-solo.test', 'ma2.as2b-solo.test']
         for n in zs:

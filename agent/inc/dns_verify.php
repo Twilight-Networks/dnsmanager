@@ -162,7 +162,9 @@ function verifyRemovedDecide(bool $reloadOk, array $k, bool $kTransient, array $
     $settled = !$reloadOk || $k['state'] === 'yes' || ($k['state'] === 'undeterminable' && !$kTransient);
     $why = $k['state'] === 'yes' ? 'still_configured' : ($k['state'] === 'undeterminable' ? 'config_' . $k['reason'] : null);
     if ($d['state'] === 'served') {
-        return $r($settled, true, 'still_served', $why);
+        // R4: still_served nur aus der letzten vollständigen Runde – auch bei K = ja bzw. strukturell unbestimmbar weiter
+        // prüfen. Fest nur ohne erfolgreichen Reload (E122: genau eine Runde nur mit SOA-Abfrage).
+        return $r(!$reloadOk, true, 'still_served', $why);
     }
     if ($settled) {
         return $r(true, true, 'unknown', $why ?? ($d['reason'] ?? 'served_unknown'));

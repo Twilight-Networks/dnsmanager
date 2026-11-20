@@ -953,14 +953,18 @@ Datei, da `zones.conf` sie nicht mehr einbindet).
 | ≠ ok | – | autoritative SOA (eine Runde, nur SOA-Abfrage) | `still_served` |
 | ≠ ok | – | sonst | `unknown`, nie `absent` |
 | ok | nein | not_auth (Elternzone bzw. REFUSED mit Kontrollzone `ok` derselben Runde) | **`absent`**, fest |
-| ok | ja / strukturell unbestimmbar | served | `still_served`, fest |
-| ok | ja / strukturell unbestimmbar | sonst | `unknown`, fest |
+| ok | ja / strukturell unbestimmbar | served | weiter; letzte Runde ⇒ `still_served` (R4) |
+| ok | ja / strukturell unbestimmbar | sonst | `unknown`, fest (`absent` in diesem Aufruf ausgeschlossen) |
 | ok | nein | `control_zone_missing`/`own_acl`/`managed`, `refused_with_parent` | `unknown`, fest |
 | ok | nein / vorübergehend | served | weiter; letzte Runde ⇒ `still_served` |
 | ok | nein / vorübergehend | sonst | weiter; letzte Runde ⇒ `unknown` |
 
+Fest werden damit nur `absent` (R3) und `unknown`; `still_served` entsteht – außer nach gescheitertem Reload (E122, genau
+eine Runde) – ausschließlich aus der letzten vollständigen Runde (R4, Review PR #105, Befund R1).
 Zusätzlich je Zone `zones[].name`, `served`, `served_reason`; `verification` mit `rounds`, `elapsed_ms`, `window_ms`,
-`control_queries` und `name_proof` (`state`, `reason`, `ms`, `remaining_ms`). **Kontrollzonen-Speicher (E124):**
+`control_queries` (nur tatsächlich ausgeführte DNS-Abfragen der Kontrollzone; `missing`, `own_acl`, `managed` und
+`unverifiable` entstehen ohne Abfrage und werden nicht gezählt – Review PR #105, Befund R2) und `name_proof` (`state`,
+`reason`, `ms`, `remaining_ms`). **Kontrollzonen-Speicher (E124):**
 wiederverwendet nur innerhalb derselben Runde, nur für denselben Konfigurationsnachweis (Vergleich in
 `dnsServedState()`), nur auf dem Pfad „keine Elternzone, REFUSED ohne `aa`, leere Abschnitte“ und unter der Agent-Sperre;
 ohne Speicher (`zone_sync`) unverändert je Aufruf.
@@ -1433,6 +1437,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 20.11.2026 | Review PR #105: R1 – Cleanup meldet `still_served` auch bei K = ja bzw. strukturell unbestimmbarem K nur aus der letzten vollständigen Runde (Abschnitt 5g an R4 und die freigegebene Matrix angeglichen); R2 – `control_queries` zählt nur tatsächlich ausgeführte DNS-Abfragen der Kontrollzone; Tests F08/F09, DR04–DR04c, C06–C10, Mutationen MV17/MV18 |
 | 20.11.2026 | AS2b umgesetzt: Abschnitt 5g (Polling unter der Agent-Sperre, Nachverifikation in `conf_sync`, Nachweis der Entfernung im Cleanup, Vorabnachweis der Zonennamen, Zeitbudget mit Abschnittsfrist, Kontrollzonen-Speicher je Runde, R1–R4), Messung M1, E92/E106–E108 umgesetzt, E119–E127, Folgepaket E128, Befund B-M1-1 |
 | 19.11.2026 | E118 (Option B): `fencing_mode` ist Pflichtangabe; fehlender Schlüssel ⇒ `fence_misconfigured` in `zone_sync`, `conf_sync`, `zone_cleanup` und `system/status`; E82 und E95 entsprechend geändert; Upgrade-Hinweis |
 | 19.11.2026 | Review AS2a (letzte Korrektur): `system/status` fail-closed ohne externen Prozess bei fehlendem `posix` in `observe`/`enforce` (`agent_requirement_missing`) und bei unbekanntem `fencing_mode` (`fence_misconfigured`); nur `off` verwendet den bisherigen Ablauf |
