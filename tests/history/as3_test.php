@@ -168,8 +168,16 @@ array_map('unlink', glob("$dir/*") ?: []);
 $r = $gen($pdo, 2147483647);
 t('O01 altes Schema: 2147483647 → Abbruch (Wertebereich), Serial unverändert, keine Datei', $r['status'] === 'error' && $r['serial'] === 2147483647 && $r['files'] === []
     && str_contains($r['output'], 'Out of range'), substr($r['output'], 0, 120));
-$probe = H2b::pdo();
-t('O02 neuer Code auf altem Schema: SchemaCheck-Befund (Login fail-closed)', in_array('zones.soa_serial: Typ int(11) statt int(10) unsigned', SchemaCheck::problems($probe), true));
+// SchemaCheck speichert das Ergebnis je Prozess zwischen (eine Prüfung je Anfrage) ⇒ Prüfung in einem eigenen Prozess
+$freshProblems = static function (string $appDir): ?array {
+    $code = 'require ' . var_export("$appDir/web/inc/app/SchemaCheck.php", true) . ';'
+        . '$p = new PDO("mysql:unix_socket=' . H2b::SOCK . ';dbname=' . H2b::$db . ';charset=utf8mb4", "root", "", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);'
+        . 'echo json_encode(SchemaCheck::problems($p));';
+    $r = json_decode((string)shell_exec('php -r ' . escapeshellarg($code) . ' 2>&1'), true);
+    return is_array($r) ? $r : null;
+};
+$pr = $freshProblems($app);
+t('O02 neuer Code auf altem Schema: SchemaCheck-Befund (Login fail-closed)', $pr === ['zones.soa_serial: Typ int(11) statt int(10) unsigned'], json_encode($pr));
 $pdo->exec("UPDATE zones SET soa_serial = 2026112001 WHERE id = $zoneId");
 $pdo->exec('ALTER TABLE zones MODIFY soa_serial INT UNSIGNED NOT NULL DEFAULT 2025010101');
 
@@ -184,7 +192,8 @@ $code = 'require ' . var_export("$baseApp/web/inc/app/SchemaCheck.php", true) . 
 $out = json_decode((string)shell_exec('php -r ' . escapeshellarg($code) . ' 2>&1'), true);
 t('K01 alter Code auf neuem Schema: SchemaCheck ohne Befund', is_array($out) && $out['problems'] === [], json_encode($out));
 t('K02 alter Code auf neuem Schema: Generator schreibt 2147483648', is_array($out) && $out['status'] === 'ok' && $out['serial'] === 2147483648, json_encode($out));
-t('K03 neuer Code auf neuem Schema: SchemaCheck ohne Befund', SchemaCheck::problems(H2b::pdo()) === []);
+$pr = $freshProblems($app);
+t('K03 neuer Code auf neuem Schema: SchemaCheck ohne Befund', $pr === [], json_encode($pr));
 array_map('unlink', glob("$dir/*") ?: []);
 @rmdir($dir);
 
@@ -195,7 +204,7 @@ foreach (['web/inc/soa_serial.php', 'web/inc/deploy/bind_file_generator.php', 'w
     t("T01 unverändert gegenüber Basis: $f", is_file("$app/$f") && hash_file('sha256', "$app/$f") === hash_file('sha256', "$baseApp/$f"));
 }
 // Vollständig: web/ und agent/ unterscheiden sich vom Basis-Commit nur in SchemaCheck.php
-$diff = trim((string)shell_exec('diff -rq ' . escapeshellarg("$baseApp/web") . ' ' . escapeshellarg("$app/web") . ' 2>&1; diff -rq '
+$diff = trim((string)shell_exec('LC_ALL=C diff -rq ' . escapeshellarg("$baseApp/web") . ' ' . escapeshellarg("$app/web") . ' 2>&1; LC_ALL=C diff -rq '
     . escapeshellarg("$baseApp/agent") . ' ' . escapeshellarg("$app/agent") . ' 2>&1'));
 t('T03 web/ und agent/ gegenüber Basis nur in SchemaCheck.php geändert',
     $diff === "Files $baseApp/web/inc/app/SchemaCheck.php and $app/web/inc/app/SchemaCheck.php differ", $diff);
