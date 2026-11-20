@@ -1,7 +1,7 @@
 # Agent-Fencing: Betrieb (Meilenstein AS)
 
-Stand: 19.11.2026 · AS1 (Agent), AS2a (Zustandsprüfung, Abschnitt 8). Architektur und Entscheidungen: [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md),
-Abschnitte 11 und 5e. Der Core sendet das Fencing-Token erst ab AS4; bis dahin sind auf installierten Agenten nur die
+Stand: 20.11.2026 · AS1 (Agent), AS2a (Zustandsprüfung, Abschnitt 8), AS2b (Nachverifikation, Abschnitt 8a). Architektur und
+Entscheidungen: [`ARCHITECTURE_HISTORY.md`](ARCHITECTURE_HISTORY.md), Abschnitte 11, 5e, 5f und 5g. Der Core sendet das Fencing-Token erst ab AS4; bis dahin sind auf installierten Agenten nur die
 Modi `off` und `observe` zulässig.
 
 ## 1. Dateien und Konfiguration
@@ -210,6 +210,33 @@ In `observe` werden nur `stale_serial`, `serial_conflict` und `serial_undefined`
 bzw. Konfiguration übernommen, Ladezustand unbekannt“ (`bind_state = unknown`); der nächste erfolgreiche Reload lädt den
 neueren Stand. `rollback` erscheint nur, wenn ein Rollback tatsächlich versucht wurde (`ok`/`failed`), sonst
 `not_attempted`.
+
+## 8a. Nachverifikation nach dem Reload (AS2b)
+
+In `observe`/`enforce` prüft der Agent nach einem erfolgreichen Reload unter der Agent-Sperre, was BIND tatsächlich
+ausliefert (Polling: erste Runde sofort, danach 50 ms bis höchstens 500 ms Abstand, höchstens 10 s und nie über das
+Arbeitsende − 1 s hinaus). Die Angaben sind rein informativ: HTTP-Status, `message`, `effect` und `rollback` bleiben
+unverändert, und der Core wertet sie erst ab AS4 aus.
+
+| Endpunkt | Feld | Werte | Bedeutung |
+|---|---|---|---|
+| `conf_sync` | `verification.state` | `verified` | Zone in der Form des Generators konfiguriert (K = ja), verwaltete Datei gültig, BIND liefert autoritativ die Serial dieser Datei (`file_serial` = `served_serial`, `file_sha256` der geprüften Datei). Belegt Serial-Gleichheit, nicht Inhaltsgleichheit. |
+| | | `serial_differs` | am Fensterende liefert BIND eine andere Serial als die Datei (Rohwerte `file_serial`, `served_serial`) – z. B. Datei für `named` nicht lesbar oder ungültig geladen |
+| | | `unknown` | kein Nachweis; `reason` nennt den Grund (`file_*`, `config_*`, `last_round_unknown` mit `last_reason`, `reload_*`, `budget_exhausted`) |
+| `zone_cleanup` | `zones[].served` | `absent` | Reload im selben Aufruf erfolgreich, Zone nicht mehr konfiguriert (K = nein) und nachweislich nicht mehr autoritativ (`served_reason`: `parent_negative`, `parent_referral` oder `refused_control_ok`) |
+| | | `still_served` | BIND liefert die Zone weiter autoritativ aus (z. B. Reload gescheitert oder Zone anderweitig konfiguriert) |
+| | | `unknown` | kein Nachweis (z. B. `zone_name_unresolved`, `control_zone_missing`, `last_round_unknown:…`, `budget_exhausted`) |
+| `zone_cleanup` | `verification` | `rounds`, `elapsed_ms`, `window_ms`, `control_queries`, `name_proof` | Ablaufangaben; `name_proof.state` = `ok`, `skipped` (weniger als 20 s Restzeit), `undeterminable` oder `discarded` |
+
+Betriebshinweise:
+- Die Zonennamen verwaister Dateien stammen ausschließlich aus der BIND-Konfiguration vor dem Cleanup (verwaltete Datei
+  `<zone_data_dir>/db.<name>`). Zonen mit Großbuchstaben oder abschließendem Punkt im Namen sind dort nicht eindeutig
+  zuzuordnen und bleiben `unknown` (Folgepaket E128).
+- `unknown` mit `control_zone_missing` bzw. `control_zone_own_acl`: Kontrollzone nach Abschnitt 8 einrichten.
+- Ein `unknown` ist kein Fehler des Cleanups; Dateien und `zones.conf` sind wie in `zones[].conf`/`file` angegeben
+  geändert. Der nächste Cleanup bzw. das Monitoring (AS4) prüft erneut.
+- Während BIND eine große Zone lädt (gemessen 300 000 RR ≈ 1,6 s), antwortet `rndc status` erst nach dem Laden und
+  einzelne DNS-Abfragen auch an andere Zonen können ausbleiben (Befund B-M1-1); die Nachverifikation wartet dies ab.
 
 ## 9. Upgrade: `fencing_mode` als Pflichtangabe (E118)
 

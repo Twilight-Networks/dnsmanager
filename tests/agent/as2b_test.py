@@ -114,6 +114,15 @@ def slow_lp(seconds):
     return p
 
 
+def slow_preflight(seconds):
+    """named-checkconf, das nur den Preflight (ohne -l/-p) verzögert."""
+    p = os.path.join(A.WORK, 'as2a-slow-cc-pre')
+    with open(p, 'w') as f:
+        f.write(f'#!/bin/sh\ncase "$1" in -l|-p) ;; *) sleep {seconds};; esac\nexec /usr/bin/named-checkconf "$@"\n')
+    os.chmod(p, 0o755)
+    return p
+
+
 def keep_list(state, extra=()):
     """valid_zones: Ausgangszonen und alle vorhandenen Testzonen außer den zu entfernenden."""
     present = [f[:-5] for f in os.listdir(CONFDIR) if f.endswith('.conf')]
@@ -158,7 +167,8 @@ def group_v(a, state):
     put_managed_raw(big, big_zone(big, 1))
     r = a.cs(big)
     timing('V04', r)
-    check(G, 'V04 große Zone ⇒ verified nach mehreren Runden', v(r).get('state') == 'verified' and (v(r).get('rounds') or 0) > 1
+    # named-checkzone der verwalteten Datei (≈ 1,7 s) überlappt mit dem Laden durch BIND; erste Runde danach
+    check(G, 'V04 große Zone ⇒ verified nach Ladeabschluss', v(r).get('state') == 'verified' and (v(r).get('rounds') or 0) >= 1
           and (v(r).get('elapsed_ms') or 0) > 500 and r['dt'] < 25, json.dumps({k: v(r).get(k) for k in ('state', 'rounds', 'elapsed_ms', 'reason')}))
     # conf_sync nach abgelehntem zone_sync: geprüft wird gegen die verwaltete Datei (file_sha256), nicht gegen den Versuch
     rz = a.zs(v1, 1)
@@ -283,14 +293,23 @@ def group_r(a, state):
           and zr(r).get(rk, {}).get('served') in ('still_served', 'unknown') and zr(r)[rk]['served_reason'] == 'still_configured', json.dumps(zr(r)))
     write_inc([])
     rndc_reload()
-    # Reload gescheitert ⇒ still_served bzw. unknown, nie absent; keine Kontrollabfrage
+    # Reload gescheitert ⇒ still_served bzw. unknown, nie absent; keine Kontrollabfrage. Der Steuerkanal wird erst nach dem
+    # Vorabnachweis blockiert (sobald zones.conf ersetzt ist; der Preflight wird dafür um 1 s verzögert)
     r4 = 'r4.as2b-solo.test'
     install(a, r4, 1)
-    sh('iptables -I INPUT -i lo -p tcp --dport 953 -j DROP')
+    keep = keep_list(state, [r4])
+    new_zc = ''.join(f'include "{os.path.realpath(os.path.join(CONFDIR, z + ".conf"))}";\n'
+                     for z in sorted(x for x in keep if os.path.exists(f'{CONFDIR}/{x}.conf')))
+    import hashlib
+    a.config('enforce', bind_named_checkconf=slow_preflight(1.0))
+    t = A.after_change(ZONESCONF, hashlib.sha256(new_zc.encode()).hexdigest(),
+                       lambda: sh('iptables -I INPUT -i lo -p tcp --dport 953 -j DROP'))
     try:
-        r = a.cl(keep_list(state, [r4]))
+        r = a.cl(keep)
     finally:
-        sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP')
+        t.join(timeout=20)
+        sh('iptables -D INPUT -i lo -p tcp --dport 953 -j DROP', check_rc=False)
+        a.config('enforce')
     check(G, 'R04 Reload gescheitert ⇒ still_served, nie absent', r['status'] == 500 and j(r, 'code') == 'reload_timeout'
           and zr(r).get(r4, {}).get('served') == 'still_served' and v(r).get('control_queries') == 0 and v(r).get('rounds') == 1
           and r['dt'] < 25, json.dumps([zr(r), v(r)]))
@@ -381,6 +400,7 @@ def group_b(a, state):
           and r['status'] == 200 and zr(r)[z]['conf'] == 'removed' and r['dt'] < 25 and A.orphan_count() == 0, f"name_proof={json.dumps(np_)} dt={r['dt']:.1f}")
     # späte Sperre in conf_sync ⇒ Fenster durch TW − 1 s begrenzt, Antwort < 25 s
     v1 = 'v1.as2b-solo.test'
+    install(a, v1, 1)
     hold_lock_for(15.3)
     dns_block()
     try:
@@ -389,7 +409,7 @@ def group_b(a, state):
         dns_unblock()
     timing('B05', r)
     check(G, 'B05 späte Sperre und DNS blockiert ⇒ Fenster < 10 s, Antwort < 25 s', r['status'] == 200 and (v(r).get('window_ms') or 99999) < 9000
-          and r['dt'] < 25 and v(r).get('state') == 'unknown', f"dt={r['dt']:.1f} {json.dumps(v(r))}")
+          and r['dt'] < 25 and v(r).get('state') == 'unknown' and v(r).get('reason') == 'last_round_unknown', f"dt={r['dt']:.1f} {json.dumps(v(r))}")
     # Sperre während der Nachverifikation gehalten (E119)
     held = []
 
@@ -424,12 +444,12 @@ MUTATIONS = [
     ('MV01 verified ohne K = ja', DV, [
         ("    if ($k['state'] === 'undeterminable') {", "    if (false) {"),
         ("    if ($k['state'] !== 'yes') {\n        return $r(true, true, 'unknown', 'config_not_configured');", "    if (false) {\n        return $r(true, true, 'unknown', 'config_not_configured');"),
-        ("            if ($k['state'] === 'yes') {\n                $d = dnsServedState", "            if (true) {\n                $d = dnsServedState")], 'mv_upper', 'DL'),
+        ("            if ($k['state'] === 'yes') {\n                $d = dnsServedState", "            if (true) {\n                $d = dnsServedState")], None, 'mv_upper', 'DL'),
     ('MV02 Serial-Vergleich entfernt', DV, "        return $d['serial'] === $f['serial'] ? $r(true, true, 'verified', null)",
      "        return true ? $r(true, true, 'verified', null)", 'mv_differs', 'DLL'),
     ('MV03 absent ohne erfolgreichen Reload', DV, [
         ("    if ($reloadOk && $k['state'] === 'no' && $d['state'] === 'not_auth') {", "    if ($k['state'] === 'no' && $d['state'] === 'not_auth') {"),
-        ("    if ($pending !== [] && !$reloadOk) {", "    if (false) {")], 'mv_reloadfail', 'DRL'),
+        ("    if ($pending !== [] && !$reloadOk) {", "    if (false) {")], None, 'mv_reloadfail', 'DRL'),
     ('MV04 REFUSED ohne Kontrollzone als not_auth', DS, "        if ($c['state'] === 'ok') {", "        if (true) {", 'mv_control', 'CL'),
     ('MV05 Nachweis nach dem Reload nicht erneuert', DV, "                $proof = dnsConfigProof($config, true);\n                $kTransient = $proof",
      "                $proof = dnsConfigProof($config, false);\n                $kTransient = $proof", 'mv_absent', 'L'),

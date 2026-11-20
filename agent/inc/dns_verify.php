@@ -256,7 +256,8 @@ function verifyLoaded(array $config, string $zoneName, float $reloadEnd): array 
         $v['reason'] = 'zone_name_invalid';
         return $v;
     }
-    $path = dnsManagedZonePath($config, $zone);
+    // Verwaltete Datei wie in zone_sync aus dem Namen der Anfrage (Dateiname), K aus dem normalisierten Namen
+    $path = dnsManagedZonePath($config, $zoneName);
     $f = null;
     $proof = null;
     $k = null;
