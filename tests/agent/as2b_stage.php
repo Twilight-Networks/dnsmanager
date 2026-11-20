@@ -71,10 +71,12 @@ $call = static function (array $srv, string $endpoint, array $payload): array {
     curl_setopt_array($ch, $opt);
     $body = curl_exec($ch);
     $i = curl_getinfo($ch);
+    // Zeiten in ms ab Beginn (PHP 8.5/curl 8: TLS nur als appconnect_time_us); TLS-Dauer = appconnect − connect
+    $ms = static fn (string $k): float => round(((int)($i[$k . '_us'] ?? 0)) / 1000, 1);
     $r = ['http' => (int)$i['http_code'], 'curl_errno' => curl_errno($ch), 'curl_error' => curl_error($ch),
-        'namelookup' => round($i['namelookup_time'], 3), 'connect' => round($i['connect_time'], 3),
-        'tls' => round($i['appconnect_time'], 3), 'pretransfer' => round($i['pretransfer_time'], 3),
-        'first_byte' => round($i['starttransfer_time'], 3), 'total' => round($i['total_time'], 3),
+        'connect_ms' => $ms('connect_time'), 'tls_done_ms' => $ms('appconnect_time'),
+        'tls_ms' => round($ms('appconnect_time') - $ms('connect_time'), 1), 'pretransfer_ms' => $ms('pretransfer_time'),
+        'first_byte_ms' => $ms('starttransfer_time'), 'total_ms' => $ms('total_time'),
         'upload_bytes' => (int)$i['size_upload'], 'download_bytes' => (int)$i['size_download']];
     $json = is_string($body) ? json_decode($body, true) : null;
     if (is_array($json)) {
