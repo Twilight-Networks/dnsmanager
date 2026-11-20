@@ -29,7 +29,9 @@
 #      sql_mode (strikt) und lock_wait_timeout = 10 s auf dieser Verbindung; GET_LOCK('dnsmanager_publish_all', 0) mit
 #      Bestätigung (Rückgabe 1 und IS_USED_LOCK = CONNECTION_ID(), sonst Abbruch); Preflight unter dem Lock (Spalte und
 #      Tabelle noch im geplanten Ausgangszustand, keine negativen Werte, Zeilenzahl und Serial-Kennwerte); Lock-Besitz
-#      vor und nach jeder DDL erneut bestätigt; Kennwerte danach; RELEASE_LOCK. Jede verletzte Bedingung bricht die
+#      vor und nach jeder DDL erneut bestätigt; Ergebnis jedes Schritts in der Sitzung geprüft (MIG006_STEP_FAILED);
+#      Kennwerte danach; RELEASE_LOCK. Die SQL-Dateien werden eingebettet (nicht per source: ein Fehler in einer
+#      eingebundenen Datei beendet die Sitzung des mariadb-Clients nicht). Jede verletzte Bedingung bricht die
 #      Sitzung mit SIGNAL ab; der Server gibt den Lock mit dem Verbindungsende frei.
 #   4. Nachprüfung: vollständige Struktur (SchemaCheck), Zeilenzahl und Serial-Kennwerte vor/nach gleich.
 #
@@ -193,8 +195,9 @@ LOCKED="IS_USED_LOCK('$LOCK_NAME') IS NOT NULL AND IS_USED_LOCK('$LOCK_NAME') = 
     echo "SELECT CONCAT_WS('|', 'PRE', $STATS) FROM zones;"
     if [ "$NEED_CREATE" -eq 1 ]; then
         echo "SELECT 'STEP|a';"
-        echo "source $SQL_A"
+        grep -v '^[[:space:]]*--' "$SQL_A"
         echo "DELIMITER //"
+        echo "BEGIN NOT ATOMIC IF (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '$NEW_TABLE') <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'MIG006_STEP_FAILED'; END IF; END //"
         echo "BEGIN NOT ATOMIC IF NOT ($LOCKED) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'MIG006_LOCK_LOST'; END IF; END //"
         echo "DELIMITER ;"
     fi
@@ -203,8 +206,9 @@ LOCKED="IS_USED_LOCK('$LOCK_NAME') IS NOT NULL AND IS_USED_LOCK('$LOCK_NAME') = 
         echo "BEGIN NOT ATOMIC IF NOT ($LOCKED) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'MIG006_LOCK_LOST'; END IF; END //"
         echo "DELIMITER ;"
         echo "SELECT 'STEP|b';"
-        echo "source $SQL_B"
+        grep -v '^[[:space:]]*--' "$SQL_B"
         echo "DELIMITER //"
+        echo "BEGIN NOT ATOMIC IF (SELECT CONCAT(LOWER(COLUMN_TYPE), '|', IS_NULLABLE, '|', IFNULL(TRIM(BOTH '''' FROM COLUMN_DEFAULT), '~')) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'zones' AND COLUMN_NAME = 'soa_serial') <> '$COL_NEW' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'MIG006_STEP_FAILED'; END IF; END //"
         echo "BEGIN NOT ATOMIC IF NOT ($LOCKED) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'MIG006_LOCK_LOST'; END IF; END //"
         echo "DELIMITER ;"
     fi

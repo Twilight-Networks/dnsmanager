@@ -24,7 +24,7 @@ if (!is_dir("$baseApp/web")) {
     fwrite(STDERR, "Aufruf: php as3_test.php <App-Verzeichnis> <RR|RC> <Basis-App-Verzeichnis>\n");
     exit(2);
 }
-H2bLib::init($app, $iso, 'as3');
+H2b::init($app, $iso, 'as3');
 require_once "$app/web/inc/deploy/bind_file_generator.php";
 require_once "$app/web/inc/app/SchemaCheck.php";
 
@@ -36,8 +36,8 @@ function t(string $id, bool $ok, string $detail = ''): void {
     echo ($ok ? '  ok   ' : '  FAIL ') . "[$iso] $id" . ($detail !== '' ? " – $detail" : '') . "\n";
 }
 
-$pdo = H2bLib::reset(true);
-echo "AS3-Tests ($iso) – Datenbank " . H2bLib::$db . "\n";
+$pdo = H2b::reset(true);
+echo "AS3-Tests ($iso) – Datenbank " . H2b::$db . "\n";
 
 // ---------------------------------------------------------------- C: Datenvertrag zone_server_verification
 $h1 = str_repeat('a', 64);
@@ -158,8 +158,8 @@ t('S03 4294967295 → Abbruch, Serial unverändert, keine Datei, keine offene Tr
 $ps = $pdo->query("SELECT soa_serial FROM zones WHERE id = $zoneId")->fetch(PDO::FETCH_NUM)[0];
 t('S04 PDO liefert Werte > 2³¹−1 unverfälscht', (string)$ps === '4294967295' && PHP_INT_SIZE === 8, var_export($ps, true));
 t('S05 Historie unverändert (kein Head-Wechsel, keine Revision durch Serial-Änderungen)', $head($pdo) === $h0 && $revCount($pdo) === $n0);
-t('S06 Inhalts-Hash unabhängig von soa_serial, Invarianten der Historie erfüllt', H2bLib::currentHash($pdo, $zoneId) === explode(':', $h0)[1]
-    && H2bLib::invariants($pdo) === [] && !H2bLib::hasOpenTrx($pdo), json_encode(H2bLib::invariants($pdo)));
+t('S06 Inhalts-Hash unabhängig von soa_serial, Invarianten der Historie erfüllt', H2b::currentHash($pdo, $zoneId) === explode(':', $h0)[1]
+    && H2b::invariants($pdo) === [] && !H2b::hasOpenTrx($pdo), json_encode(H2b::invariants($pdo)));
 
 // ---------------------------------------------------------------- O: altes Schema (Vorzeichen) zum Vergleich
 $pdo->exec("UPDATE zones SET soa_serial = 2026112001 WHERE id = $zoneId");
@@ -168,23 +168,23 @@ array_map('unlink', glob("$dir/*") ?: []);
 $r = $gen($pdo, 2147483647);
 t('O01 altes Schema: 2147483647 → Abbruch (Wertebereich), Serial unverändert, keine Datei', $r['status'] === 'error' && $r['serial'] === 2147483647 && $r['files'] === []
     && str_contains($r['output'], 'Out of range'), substr($r['output'], 0, 120));
-$probe = H2bLib::pdo();
+$probe = H2b::pdo();
 t('O02 neuer Code auf altem Schema: SchemaCheck-Befund (Login fail-closed)', in_array('zones.soa_serial: Typ int(11) statt int(10) unsigned', SchemaCheck::problems($probe), true));
 $pdo->exec("UPDATE zones SET soa_serial = 2026112001 WHERE id = $zoneId");
 $pdo->exec('ALTER TABLE zones MODIFY soa_serial INT UNSIGNED NOT NULL DEFAULT 2025010101');
 
 // ---------------------------------------------------------------- K: alter Code (Basis-Commit) auf neuem Schema
-$db = H2bLib::$db;
+$db = H2b::$db;
 $code = 'require ' . var_export("$baseApp/web/inc/app/SchemaCheck.php", true) . ';'
     . 'require ' . var_export("$baseApp/web/inc/deploy/bind_file_generator.php", true) . ';'
-    . '$p = new PDO("mysql:unix_socket=' . H2bLib::SOCK . ';dbname=' . $db . ';charset=utf8mb4", "root", "", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);'
+    . '$p = new PDO("mysql:unix_socket=' . H2b::SOCK . ';dbname=' . $db . ';charset=utf8mb4", "root", "", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);'
     . '$p->exec("UPDATE zones SET soa_serial = 2147483647 WHERE id = ' . $zoneId . '");'
     . '$r = generate_zone_file(' . $zoneId . ', ' . var_export($dir, true) . ', "publish", $p);'
     . 'echo json_encode(["problems" => SchemaCheck::problems($p), "status" => $r["status"], "serial" => (int)$p->query("SELECT soa_serial FROM zones WHERE id = ' . $zoneId . '")->fetchColumn()]);';
 $out = json_decode((string)shell_exec('php -r ' . escapeshellarg($code) . ' 2>&1'), true);
 t('K01 alter Code auf neuem Schema: SchemaCheck ohne Befund', is_array($out) && $out['problems'] === [], json_encode($out));
 t('K02 alter Code auf neuem Schema: Generator schreibt 2147483648', is_array($out) && $out['status'] === 'ok' && $out['serial'] === 2147483648, json_encode($out));
-t('K03 neuer Code auf neuem Schema: SchemaCheck ohne Befund', SchemaCheck::problems(H2bLib::pdo()) === []);
+t('K03 neuer Code auf neuem Schema: SchemaCheck ohne Befund', SchemaCheck::problems(H2b::pdo()) === []);
 array_map('unlink', glob("$dir/*") ?: []);
 @rmdir($dir);
 

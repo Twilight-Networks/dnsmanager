@@ -463,7 +463,8 @@ bash scripts/migrate_006_zone_serial_verification.sh --db dnsmanager --check
   `IS_USED_LOCK() = CONNECTION_ID()`), belegter Lock ⇒ Exit 2 ohne DDL; Preflight unter dem Lock (geplanter
   Ausgangszustand unverändert, keine negativen Werte; sonst Exit 2 ohne DDL); Kennwerte vorher (Zeilenzahl, Summe,
   Minimum, Maximum, XOR-Prüfsumme über `id:soa_serial`); Lock-Besitz vor und nach jeder DDL bestätigt (verloren ⇒
-  Abbruch, Exit 3); Kennwerte nachher; `RELEASE_LOCK` (Rückgabe 1 geprüft). Endet die Sitzung vorzeitig, gibt der
+  Abbruch, Exit 3); Ergebnis jedes Schritts in derselben Sitzung geprüft; die SQL-Dateien werden in die Sitzung
+  eingebettet, damit jeder DDL-Fehler die Sitzung sofort beendet; Kennwerte nachher; `RELEASE_LOCK` (Rückgabe 1 geprüft). Endet die Sitzung vorzeitig, gibt der
   Server den Lock mit dem Verbindungsende frei. Fremdschlüssel- und CHECK-Prüfungen werden nie abgeschaltet.
 - **Nachprüfung:** vollständige Struktur über `SchemaCheck`; Kennwerte vorher = nachher (sonst Exit 3).
 - **Teilzustände und Wiederanlauf:** Jede DDL-Anweisung ist atomar. Mögliche Zustände: nichts geändert; Tabelle
