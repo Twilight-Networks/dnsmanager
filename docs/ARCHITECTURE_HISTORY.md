@@ -1,6 +1,6 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt, AS2b (Nachverifikation, Nachweis der Entfernung) umgesetzt
+Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt, AS2b (Nachverifikation, Nachweis der Entfernung) umgesetzt, AS3 (Migration 006) umgesetzt
 
 ## 0. Status und Geltung
 
@@ -123,7 +123,7 @@ Grundsätze:
 | `zone_publish_attempts` | Versuche | id, run_id, zone_id, revision_no, content_hash, render_hash, file_hash, soa_serial, generated_at, outcome (NULL = offen) |
 | `zone_publish_targets` | Ergebnis je Ziel | PK(attempt_id, server_id), server_name, zone_sync / conf_sync (sending / ok / failed / rejected), conf_hash, agent_serial, agent_file_hash, reload_ok, error_code, error_detail (gekürzt, bereinigt) |
 | `publish_cleanup_results` | Cleanup je Server | run_id, server_id, status |
-| `zone_server_verification` | geladener Stand (L3, nach AS) | zone_id, server_id, observed_serial, observed_at, method |
+| `zone_server_verification` | geladener Stand (L3, nach AS) | umgesetzt mit AS3, endgültige Struktur Abschnitt 5h |
 
 `record_key` ist der Inhaltsschlüssel `(name, type, content)`, nie die Record-ID.
 
@@ -1001,6 +1001,66 @@ Abschnittsfrist, L Abläufe mit Antwortfolgen, BU Eintrittsschwelle und größte
 `tests/agent/as2b_test.py` gegen die installierte BIND-Instanz (V, N, R, B, M, Z) und `tests/agent/as2b_as1_regression.sh`.
 Einzelheiten `tests/agent/README.md`.
 
+## 5h. Festlegungen AS3 (umgesetzt)
+
+**Umfang** – reines Schema-Paket (Migration 006): `zones.soa_serial` → `INT UNSIGNED` (E79) und die Tabelle
+`zone_server_verification` (E87), dazu `SchemaCheck`, Neuinstallationsschema, Migrationsskript, Tests und Dokumentation.
+Unverändert: `generate_next_serial()` und die Serial-Strategie (AS5), Generator, Publish-Ablauf und -Journal, Historie
+(Snapshots enthalten keine Serial, Heads und Revisionen ändern sich durch Serial-Änderungen nicht), Agent,
+Core-Verifikation (AS4), Web-Adapter und Oberfläche. Die neue Tabelle wird bis AS4 weder gelesen noch geschrieben.
+Grenze bis AS5: Eine Veröffentlichung mit Serial 4294967295 endet wie bisher bei 2147483647 mit `error` (Rollback, keine
+Datei, keine Serial verbraucht).
+
+**Spalte (E79)** – `soa_serial INT UNSIGNED NOT NULL DEFAULT 2025010101`; `SchemaCheck` erwartet
+`int(10) unsigned`/`NO`/`2025010101`. PDO liefert Werte über 2³¹−1 unverfälscht (PHP mit 64-Bit-Ganzzahlen).
+
+**Tabelle `zone_server_verification` (E87)** – Primärschlüssel `(zone_id, server_id)`, je Paar höchstens eine Zeile;
+Indizes auf `zone_name` und `server_id`. **Keine Fremdschlüssel** (retentionsfest: Zeilen überdauern das Löschen von
+Zone oder Server; `zone_name` und `server_name` halten den Namen zum Zeitpunkt der Beobachtung fest). Zwei Teile:
+
+| Teil | Spalten | Bedeutung |
+|---|---|---|
+| letzte Beobachtung | `last_state` (`verified`, `serial_differs`, `still_served`, `absent`, `unknown`), `last_reason` (Grundcode `[a-z0-9_:]{1,64}` oder NULL), `last_method` (`conf_sync`, `cleanup`, `zone_verify`, `monitoring`), `last_served_serial`, `last_file_serial`, `last_file_hash`, `last_run_id`, `last_attempt_id`, `last_observed_at` | wird bei jeder Beobachtung vollständig ersetzt |
+| letzter positiver Nachweis | `verified_serial`, `verified_file_hash`, `verified_at`, `verified_run_id` | nur bei `verified` gesetzt; bleibt bei späteren negativen oder unbestimmten Beobachtungen erhalten |
+
+Serials sind `INT UNSIGNED`, Hashes `CHAR(64)` aus `[0-9a-f]`, Lauf- und Versuchsnummern `BIGINT UNSIGNED` (wie
+`publish_runs.id`/`zone_publish_attempts.id`, ohne Fremdschlüssel), Zeitpunkte `DATETIME(6)`.
+
+**CHECK-Bedingungen und NULL-Semantik** – MariaDB wertet eine CHECK-Bedingung mit Ergebnis UNKNOWN (NULL) als erfüllt.
+Jede Bedingung ist deshalb so formuliert, dass jeder Zweig mit `IS NULL`/`IS NOT NULL` abgesichert ist und für jede
+Belegung TRUE oder FALSE ergibt; Vergleiche stehen nur hinter `IS NOT NULL`-Wächtern.
+
+| CHECK | Regel |
+|---|---|
+| `chk_zsv_target` | `zone_id ≥ 1`, `server_id ≥ 1`, Namen nicht leer |
+| `chk_zsv_reason` | `last_reason` NULL oder Grundcode |
+| `chk_zsv_hashes` | beide Hashes NULL oder 64 Kleinbuchstaben-Hex |
+| `chk_zsv_last_state` | `verified`: ausgelieferte = Datei-Serial, Dateihash gesetzt; `serial_differs`: beide Serials gesetzt und verschieden; `still_served`: ausgelieferte Serial gesetzt; `absent`: keine ausgelieferte Serial; `unknown`: keine Bedingung |
+| `chk_zsv_verified_bundle` | `verified_serial`, `verified_file_hash` und `verified_at` gemeinsam gesetzt oder gemeinsam NULL; `verified_run_id` darf NULL sein (Nachweis ohne Lauf, z. B. künftiges Monitoring), ist ohne Nachweis aber NULL |
+| `chk_zsv_verified_order` | `verified_at ≤ last_observed_at` |
+| `chk_zsv_verified_current` | bei `last_state = verified` entspricht der positive Nachweis genau der letzten Beobachtung (Serial, Dateihash, Zeitpunkt) |
+
+**Datenvertrag für AS4** – Schreibregeln (Upsert, Reihenfolge, Sperren, Quelle je Methode) legt AS4 fest. Verbindlich
+aus AS3: Eine Beobachtung ersetzt nur den Teil „letzte Beobachtung“; der positive Nachweis wird nur durch eine neue
+Beobachtung `verified` ersetzt und nie unbeabsichtigt entfernt (ein teilweises Löschen weisen die CHECKs ab). `verified`
+belegt Serial-Übereinstimmung, nicht Inhaltsgleichheit (E107). Retention (Meilenstein R) muss die letzten positiven
+Nachweise erhalten.
+
+**Migration 006** – zwei atomare Schritte (a: Tabelle, b: Spalte), ausgeführt nur über
+`scripts/migrate_006_zone_serial_verification.sh` in genau einer Datenbanksitzung: strikter `sql_mode` und
+`lock_wait_timeout = 10` auf der DDL-Verbindung, `GET_LOCK('dnsmanager_publish_all', 0)` mit Besitznachweis vor und nach
+jeder DDL, Preflight unter dem Lock, nur fehlende Schritte, Zeilenzahl und Serial-Kennwerte vorher = nachher; keine
+Abschaltung von Fremdschlüssel- oder CHECK-Prüfungen. Exitcodes, Teilzustände, Wiederanlauf, Rollout-Voraussetzungen
+(ruhiges Zeitfenster; der Publish-Lock schließt andere Fachtransaktionen nicht aus, deren Metadatensperre begrenzt
+`lock_wait_timeout`) und der eingeschränkte Rückweg: `sql/migrations/README.md`, Abschnitt 006.
+
+**Tests (AS3)** – `tests/history/migration006_test.sh` (Q01–Q16: fehlende Vorgänger, Grundablauf mit Sitzungsparametern
+und Lock auf derselben Verbindung, keine DDL bei vollständigem Schema, beide Teilzustände, abweichende Spalte und
+Tabelle, negative Serial, belegter Lock, Lock-Besitz während des Wartens auf die Metadatensperre, Abbruch nach
+`lock_wait_timeout` mit Wiederanlauf, Zustandsänderung und Lock-Verlust in Mutationskopien, Neuinstallation = Migration,
+frühere Skripte, Rückweg) und `tests/history/as3_test.php` unter RR und RC (C Datenvertrag, S 32-Bit-Serials mit dem
+echten Generator, O altes Schema, K alter Code mit neuem Schema, T statische Unverändertheit).
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -1110,8 +1170,8 @@ Synchronität wird ausschließlich über Hashes und Bestätigungen bestimmt, nie
   „nicht größer“. Gleiche Serial nur bei byte-identischer Datei (idempotente Wiederholung).
 - Die nächste Serial muss nach RFC 1982 größer sein als die DB-Serial und als jede zuletzt bestätigte Serial aller
   aktuellen Ziele (auch aus Vorgängen unter demselben Zonennamen); existiert kein solcher Wert, wird gesperrt.
-  **[offen – E15/E16, Meilenstein AS]**: Umstellung von `generate_next_serial()` (heute numerischer Vergleich) und
-  Spaltentyp `zones.soa_serial` (heute `INT` mit Vorzeichen).
+  **[offen – E15/E16, Meilenstein AS]**: Umstellung von `generate_next_serial()` (heute numerischer Vergleich; AS5).
+  Der Spaltentyp `zones.soa_serial` ist seit AS3 `INT UNSIGNED` (E79, Abschnitt 5h).
 - Testumgebung: kein AXFR (`allow-transfer { none; }`), keine externen Secondaries; Serial-Regeln dienen dort dem
   Agent-Schutz.
 
@@ -1275,7 +1335,7 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` – **umgesetzt** (Abschnitt 5b, Migration 003, Tests `tests/history`) | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung – **umgesetzt** (Abschnitt 5c, Migration 004, Tests `tests/history`) | keine Geheimnisse (Suchtest); atomar mit Fachänderung; RR und RC; Web-Golden identisch |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung – **umgesetzt** (Abschnitt 5d, Migration 005, Tests `tests/history`) | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
-| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16); Arbeitspakete AS0 (Vorprüfung, geprüft), AS1 (Agent-Fencing, umgesetzt, Abschnitt 5e), AS2 (Serial-Regel, L3), AS3 (Migration 006), AS4 (Core), AS5 (Serial-Strategie), AS6 (Einführung), AS7 (Doku) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
+| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16); Arbeitspakete AS0 (Vorprüfung, geprüft), AS1 (Agent-Fencing, umgesetzt, Abschnitt 5e), AS2 (Serial-Regel, L3), AS3 (Migration 006, umgesetzt, Abschnitt 5h), AS4 (Core), AS5 (Serial-Strategie), AS6 (Einführung), AS7 (Doku) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
 | **H3** | Historienoberfläche: Core-Read-Services (`ZoneHistoryReadService`, `ZoneSyncReadService`) **und** Weboberfläche mit Historienliste, Filtern, Detailansichten, Vorher-/Nachher-Vergleich, Berechtigungen und Paginierung | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse; Oberfläche nach `docs/UI_GUIDELINES.md` und `docs/UI_ROLE_MATRIX.md`, Web-Golden für bestehende Seiten unverändert |
 | **H4** | abgeleitete Zustände, `ZoneDiscardService` | alle Sperrgründe; Race-Tests (Lock-Wait, Gegenprobe, Mutationsprobe); Discard nur aus `pending_clean` |
 | **H4b** | Gruppen-Discard | Abhängigkeitshülle, Vorschau, Berechtigung für alle Zonen |
@@ -1380,7 +1440,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E76 | L3 im Agenten nach dem Reload mit begrenztem Polling, zusätzlich periodisch im Monitoring | entschieden; Polling umgesetzt (AS2b: nur `conf_sync` und `zone_cleanup`, Fenster 10 s, gemeinsames Budget je Cleanup), Monitoring in AS4 |
 | E77 | Reload-Fehler oder `not_loaded` ⇒ Ziel nicht veröffentlicht, Zone bleibt ausstehend; **Timeout ⇒ immer `unknown`** (nie `not_loaded`/`rejected`), Zone unbestätigt und ausstehend bis zur tatsächlichen Verifikation | entschieden, Umsetzung AS2/AS4 |
 | E78 | Serial-Wahl nach RFC 1982 vollständig (Abstand 2³¹ undefiniert ⇒ nicht größer), Referenzmenge aus DB-Serial, bestätigten, zuletzt verifizierten und gemeldeten Serials je Zone und Server; keine numerische Sortierung; sonst Sperre `serial_unresolvable` | entschieden (= E15), Umsetzung AS5 |
-| E79 | `zones.soa_serial` → `INT UNSIGNED` | entschieden (= E16), Umsetzung AS3 |
+| E79 | `zones.soa_serial` → `INT UNSIGNED` | umgesetzt (AS3, Abschnitt 5h) |
 | E80 | Agent: fehlende Zonendatei ⇒ Installation unter gültigem Fencing; lesbar, aber ungültig ⇒ kontrollierter Reparaturpfad (nur mit ausdrücklichem Kennzeichen aus einer Admin-Core-Operation); nicht lesbar ⇒ fail-closed; kein Überschreiben unbekannter Zustände | umgesetzt (AS2a, präzisiert durch E103: fehlende Datei nur bei nachweislich nicht konfigurierter und nicht ausgelieferter Zone bzw. gegenüber der ausgelieferten Serial) |
 | E81 | Agent senkt H nie; kein API-Reset; lokale CLI nur `init` (ohne H) und `raise`; nach DB-Restore kontrollierter Abgleich durch den Core (AS4) | entschieden; CLI umgesetzt (AS1) |
 | E82 | Modi `off` → `observe` → `enforce`, unbekannter Wert fail-closed; Einführung zuerst auf ns2. **Geändert durch E118:** `off` nur noch ausdrücklich, kein Standardwert | entschieden; umgesetzt (AS1); geändert (AS2a, E118) |
@@ -1388,7 +1448,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E84 | `fsync` auch für Zonen- und Konfigurationsdateien | entschieden; umgesetzt (AS1) |
 | E85 | Discard unveröffentlichter Änderungen (Admin; zoneadmin nur berechtigte Zonen; ohne L3, sofern seit P kein möglicherweise verteilter Versuch existiert) und Restore veröffentlichter oder möglicherweise verteilter Revisionen (Admin alle, zoneadmin berechtigte Zonen; `partial`/`unknown` nur Admin) sind getrennte Core-Vorgänge; Restore veröffentlicht nie selbst und löst nie Publish All aus (ersetzt die Empfehlung zu E4) | entschieden, Umsetzung H4/H5 |
 | E86 | Absturztests per dm-flakey | entschieden; umgesetzt (AS1) |
-| E87 | `zone_server_verification` als retentionsfeste Tabelle des letzten Stands | entschieden, Umsetzung AS3 |
+| E87 | `zone_server_verification` als retentionsfeste Tabelle des letzten Stands | umgesetzt (AS3, Abschnitt 5h; Schreibregeln AS4) |
 | E88 | AS-PRs nacheinander | entschieden |
 | E89 | Verzeichnis-`fsync` nativ in PHP (`fopen($dir, 'r')`), kein `sync`-Ersatz | entschieden (AS0); umgesetzt (AS1) |
 | E90 | Write-ahead-Fehlermarke: dauerhaft vor jeder Änderung von H, Entfernen erst nach vollständiger Persistenz; Aufheben nur lokal per CLI | entschieden (Präzisierung AS1); umgesetzt |
@@ -1440,6 +1500,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 20.11.2026 | AS3 umgesetzt: Abschnitt 5h (Migration 006 mit `zones.soa_serial` als `INT UNSIGNED` und Tabelle `zone_server_verification`, Datenvertrag und NULL-sichere CHECKs, Migration unter dem Publish-Lock in einer Sitzung), E79 und E87 umgesetzt; Abschnitte 5 und 10 nachgeführt; Serial-Strategie, Publish, Historie, Agent und Oberfläche unverändert |
 | 20.11.2026 | Review PR #105, Nachtrag R2: `control_queries` zählt nur tatsächlich gestartete dig-Prozesse der Kontrollabfrage (`dnsQuery()['started']`, `dnsControlZoneState()['queried']`), nicht `dig_not_started`/`dig_error`; Zustände und Nachweislogik unverändert; Tests C09–C13, Mutation MV19 |
 | 20.11.2026 | Review PR #105: R1 – Cleanup meldet `still_served` auch bei K = ja bzw. strukturell unbestimmbarem K nur aus der letzten vollständigen Runde (Abschnitt 5g an R4 und die freigegebene Matrix angeglichen); R2 – `control_queries` zählt nur tatsächlich ausgeführte DNS-Abfragen der Kontrollzone; Tests F08/F09, DR04–DR04c, C06–C10, Mutationen MV17/MV18 |
 | 20.11.2026 | AS2b umgesetzt: Abschnitt 5g (Polling unter der Agent-Sperre, Nachverifikation in `conf_sync`, Nachweis der Entfernung im Cleanup, Vorabnachweis der Zonennamen, Zeitbudget mit Abschnittsfrist, Kontrollzonen-Speicher je Runde, R1–R4), Messung M1, E92/E106–E108 umgesetzt, E119–E127, Folgepaket E128, Befund B-M1-1 |

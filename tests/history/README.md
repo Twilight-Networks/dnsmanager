@@ -1,4 +1,4 @@
-# History-Tests (AP1/H2a, H2b, H2c, H2d)
+# History-Tests (AP1/H2a, H2b, H2c, H2d) und AS3
 
 Regressionstests der History-Grundlagen: Migration 002, `SchemaCheck`, kanonische Zonen-Snapshots (Vertrag `zs1`),
 Diff und Baseline-Initialisierung. Architektur: [`docs/ARCHITECTURE_HISTORY.md`](../../docs/ARCHITECTURE_HISTORY.md).
@@ -15,7 +15,8 @@ bash /root/dnsmgr-h2a-harness/tests/history/run.sh <App-SHA> <Basis-SHA> [<Gener
 
 `<Basis-SHA>` ist der Stand vor Migration 002 (dessen `sql/dnsmanager_schema.sql` ist das Ausgangsschema der
 Migrationstests). `<Generator-Basis-SHA>` (H2d, Standard `<Basis-SHA>`) ist der Stand, gegen dessen Generator die
-Zonendateien byte-gleich sein müssen (für H2d: der Stand vor H2d). `run.sh` klont selbst und prüft mit `git archive` des App-Commits. Die installierte Anwendung, ihre
+Zonendateien byte-gleich sein müssen (für H2d: der Stand vor H2d; für AS3 der Stand vor AS3, gegen den `as3_test.php` alten Code mit neuem Schema und die
+Unverändertheit von `web/` und `agent/` prüft). `run.sh` klont selbst und prüft mit `git archive` des App-Commits. Die installierte Anwendung, ihre
 Datenbank und `/etc/dnsmanager` werden nicht berührt. Der Advisory-Lock `dnsmanager_publish_all` ist serverweit; die
 Tests belegen ihn nur kurz, ein belegter Lock beim Start bricht den Lauf ab.
 
@@ -46,6 +47,8 @@ bash /root/dnsmgr-h2a-harness/tests/history/cleanup_test.sh <App-SHA> <Basis-SHA
 | `migration005_test.sh` | H2d: Migration 005 (vier Journaltabellen): ohne Migration 002 Abbruch, `--check`/`--apply` mit Sicherung, Wiederholbarkeit, Erkennung abweichender Struktur (Spalte, gleichnamiger CHECK ohne `IS NOT NULL` mit Gegenprobe, FK-Regel), Teilzustand und technischer Abbruch nach zwei Tabellen mit Wiederanlauf, abweichende Grundtabelle ⇒ Exit 2 ohne DDL, Neuinstallation = Migration 002–005, frühere Skripte konsistent |
 | `journal_pure_test.php` | H2d rein: Hash-Vertrag rh1 und `file_hash` mit eingefrorenem Vektor (zusätzlich `sha256sum` in `run.sh`), Maskierung über den vollen 32-Bit-Bereich, Einordnung der Agentenantworten je Endpunkt (Q3), Bereinigung der Fehlertexte, Lese-Regeln J5/E70, Name der Laufsperre |
 | `journal_test.php` | H2d unter RR (Snapshot-Isolation, mit Zeitüberschreitungsfall und Byte-Vergleich der Zonendateien gegen den Generator-Basis-Commit) und RC gegen eine isolierte Zweiserver-Umgebung (`journal_agent.py`: echter Agent-Code mit Sandbox-Konfiguration auf 127.0.0.4/127.0.0.5): K Constraints, P Pfade/Hash-Verträge/Akteurskontext/Zielmenge, O Ergebnis je Endpunkt und Fehlerbild, F Fehlerinjektion J1/J6/J2/J4/Cleanup mit Referenzvergleich, S fehlschlagende Backend-Bindung (Laufsperre frei, Verbindung weiter nutzbar), J Ledger-Grenzen und J4a, L Lebendigkeit (KILL, SIGKILL, Verbindungs-ID-Wiederverwendung, J6), N Nebenläufigkeit (Lock-Wait, Fachänderung während der Verteilung, zweiter Lauf, Zielmenge), R Reaktivierung (E70), X Stresslauf mit Invarianten und Geheimnissuche, B Byte-Gleichheit, Z `/etc/bind/zones` unverändert |
+| `migration006_test.sh` | AS3: Migration 006 (Q01–Q16): ohne Migrationen 002–005 Abbruch; Grundablauf mit Sicherung, SchemaCheck-Befunden des alten Schemas, `lock_wait_timeout` und strengem `sql_mode` auf derselben Verbindung wie Lock und DDL, Lock-Freigabe; vollständiges Schema ⇒ keine DDL (`CREATE_TIME`); Teilzustände (nur Schritt a bzw. b); abweichende Spalte und Tabelle (CHECK entfernt oder geändert, PK, Index, Vorzeichen, Spalte, FK) ⇒ Exit 2 ohne DDL; negative Serial; belegter Publish-Lock; Lock-Besitz der DDL-Verbindung während des Wartens auf die Metadatensperre; Abbruch nach `lock_wait_timeout` mit Teilzustand und Wiederanlauf; Mutationskopien (geänderter Zustand, Lock-Verlust); Neuinstallation = Migration 002–006; frühere Skripte; Rückweg nach README |
+| `as3_test.php` | AS3 unter RR und RC: C Datenvertrag `zone_server_verification` (gültige Zustände, Nachweis ohne Lauf, unvollständige Nachweise und widersprüchliche Zustände mit Name der verletzten Bedingung, NULL-Semantik, Nachweis bleibt bei späterer unbekannter Beobachtung), S 32-Bit-Serials mit dem echten Generator (bis 4294967295, danach Abbruch mit Rollback; Historie unverändert), O altes Schema (Abbruch bei 2147483647, SchemaCheck-Befund), K alter Code mit neuem Schema, T `web/` und `agent/` gegenüber dem Stand vor AS3 nur in `SchemaCheck.php` geändert, Tabelle ohne Leser und Schreiber |
 | `cli_test.sh` | `history_baseline-cli.php` mit einem Datenbankbenutzer nur mit DML-Rechten (wie der Anwendungsbenutzer): Exitcodes, Ausgabe, Logzeilen, Lock, fail-closed ohne Migration; `schema_history-cli.php` |
 
 Hilfsdateien: `owned.sh` (Lauf-Kennung und Eigentumsregister), `lib.php` (Prüfhilfen), `fixture.sql` (Testdaten mit

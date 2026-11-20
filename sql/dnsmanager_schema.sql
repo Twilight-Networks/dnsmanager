@@ -31,7 +31,7 @@ CREATE TABLE zones (
     soa_retry INT NOT NULL DEFAULT 1800,
     soa_expire INT NOT NULL DEFAULT 1209600,
     soa_minimum INT NOT NULL DEFAULT 86400,
-    soa_serial INT NOT NULL DEFAULT 2025010101,
+    soa_serial INT UNSIGNED NOT NULL DEFAULT 2025010101,
 
     -- Änderungs Flag
     changed TINYINT(1) NOT NULL DEFAULT 0,
@@ -438,6 +438,56 @@ CREATE TABLE IF NOT EXISTS publish_cleanup_results (
         OR (status NOT IN ('ok', 'partial') AND removed_conf_count IS NULL AND removed_zone_file_count IS NULL)
     ),
     CONSTRAINT chk_pcr_http CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Ausgelieferter Stand je Zone und Server (Migration 006, AS3, E87); retentionsfest, ohne Fremdschlüssel
+CREATE TABLE IF NOT EXISTS zone_server_verification (
+    zone_id INT NOT NULL,
+    server_id INT NOT NULL,
+    zone_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+    server_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+    last_state ENUM('verified', 'serial_differs', 'still_served', 'absent', 'unknown') CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    last_reason VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
+    last_method ENUM('conf_sync', 'cleanup', 'zone_verify', 'monitoring') CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    last_served_serial INT UNSIGNED NULL DEFAULT NULL,
+    last_file_serial INT UNSIGNED NULL DEFAULT NULL,
+    last_file_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
+    last_run_id BIGINT UNSIGNED NULL DEFAULT NULL,
+    last_attempt_id BIGINT UNSIGNED NULL DEFAULT NULL,
+    last_observed_at DATETIME(6) NOT NULL,
+    verified_serial INT UNSIGNED NULL DEFAULT NULL,
+    verified_file_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
+    verified_run_id BIGINT UNSIGNED NULL DEFAULT NULL,
+    verified_at DATETIME(6) NULL DEFAULT NULL,
+    PRIMARY KEY (zone_id, server_id),
+    KEY idx_zsv_zone_name (zone_name),
+    KEY idx_zsv_server (server_id),
+    CONSTRAINT chk_zsv_target CHECK (zone_id >= 1 AND server_id >= 1 AND CHAR_LENGTH(zone_name) >= 1 AND CHAR_LENGTH(server_name) >= 1),
+    CONSTRAINT chk_zsv_reason CHECK (last_reason IS NULL OR last_reason REGEXP '^[a-z0-9_:]{1,64}$'),
+    CONSTRAINT chk_zsv_hashes CHECK (
+        (last_file_hash IS NULL OR last_file_hash REGEXP '^[0-9a-f]{64}$')
+        AND (verified_file_hash IS NULL OR verified_file_hash REGEXP '^[0-9a-f]{64}$')
+    ),
+    CONSTRAINT chk_zsv_last_state CHECK (
+        (last_state = 'verified' AND last_served_serial IS NOT NULL AND last_file_serial IS NOT NULL
+            AND last_file_hash IS NOT NULL AND last_served_serial = last_file_serial)
+        OR (last_state = 'serial_differs' AND last_served_serial IS NOT NULL AND last_file_serial IS NOT NULL
+            AND last_served_serial <> last_file_serial)
+        OR (last_state = 'still_served' AND last_served_serial IS NOT NULL)
+        OR (last_state = 'absent' AND last_served_serial IS NULL)
+        OR last_state = 'unknown'
+    ),
+    CONSTRAINT chk_zsv_verified_bundle CHECK (
+        (verified_serial IS NULL AND verified_file_hash IS NULL AND verified_at IS NULL AND verified_run_id IS NULL)
+        OR (verified_serial IS NOT NULL AND verified_file_hash IS NOT NULL AND verified_at IS NOT NULL)
+    ),
+    CONSTRAINT chk_zsv_verified_order CHECK (verified_at IS NULL OR verified_at <= last_observed_at),
+    CONSTRAINT chk_zsv_verified_current CHECK (
+        last_state <> 'verified'
+        OR (verified_serial IS NOT NULL AND verified_file_hash IS NOT NULL AND verified_at IS NOT NULL
+            AND last_served_serial IS NOT NULL AND last_file_hash IS NOT NULL
+            AND verified_serial = last_served_serial AND verified_file_hash = last_file_hash AND verified_at = last_observed_at)
+    )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Initialstatus

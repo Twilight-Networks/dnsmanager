@@ -28,6 +28,10 @@
  * publish_runs, zone_publish_attempts, zone_publish_targets, publish_cleanup_results); das Migrationsskript 005 bewertet
  * nur diese vier Tabellen (Voraussetzung: die Grundtabellen aus 002 unverändert).
  *
+ * AS3 (E79, E87): zones.soa_serial als INT UNSIGNED (REQUIRED) und die Tabelle zone_server_verification aus Migration
+ * 006 (sql/migrations/006a_zone_server_verification.sql, 006b_zones_soa_serial_unsigned.sql); das Migrationsskript 006
+ * bewertet nur zone_server_verification und zones.soa_serial (Voraussetzung: Migrationen 002–005 unverändert).
+ *
  * Es werden niemals Schemaänderungen vorgenommen (keine automatische Migration beim Seitenaufruf).
  * Das Ergebnis wird je Prozess zwischengespeichert (eine Prüfung je Anfrage).
  */
@@ -41,6 +45,10 @@ final class SchemaCheck
         'users' => [
             'active'        => ['tinyint(1)', 'NO', '1'],
             'session_epoch' => ['bigint(20) unsigned', 'NO', '0'],
+        ],
+        // AS3 (E79): voller 32-Bit-Bereich der SOA-Serial ohne Vorzeichen
+        'zones' => [
+            'soa_serial' => ['int(10) unsigned', 'NO', '2025010101'],
         ],
     ];
 
@@ -304,6 +312,38 @@ final class SchemaCheck
             'chk|chk_pcr_http|Table|`http_status` is null or `http_status` between 100 and 599',
             "chk|chk_pcr_status|Table|`status` = 'sending' and `finished_at` is null and `http_status` is null and `error_code` is null and `error_detail` is null and `removed_conf_count` is null and `removed_zone_file_count` is null or `status` in ('ok','abandoned') and `finished_at` is not null and `error_code` is null and `error_detail` is null or `status` in ('partial','failed','rejected','unknown') and `finished_at` is not null and `error_code` is not null and `error_code` regexp '^[a-z_]{1,32}\$'",
             'chk|chk_pcr_target|Table|`server_id` >= 1 and char_length(`server_name`) >= 1',
+        ],
+        // AS3 (E87, Migration 006a): letzter ausgelieferter Zustand und letzter positiver Nachweis je Zone und Server
+        'zone_server_verification' => [
+            'table|BASE TABLE|InnoDB',
+            'col|zone_id|int(11)|NO|~||~|~',
+            'col|server_id|int(11)|NO|~||~|~',
+            'col|zone_name|varchar(255)|NO|~||utf8mb4|utf8mb4_unicode_ci',
+            'col|server_name|varchar(255)|NO|~||utf8mb4|utf8mb4_unicode_ci',
+            "col|last_state|enum('verified','serial_differs','still_served','absent','unknown')|NO|~||ascii|ascii_bin",
+            'col|last_reason|varchar(64)|YES|NULL||ascii|ascii_bin',
+            "col|last_method|enum('conf_sync','cleanup','zone_verify','monitoring')|NO|~||ascii|ascii_bin",
+            'col|last_served_serial|int(10) unsigned|YES|NULL||~|~',
+            'col|last_file_serial|int(10) unsigned|YES|NULL||~|~',
+            'col|last_file_hash|char(64)|YES|NULL||ascii|ascii_bin',
+            'col|last_run_id|bigint(20) unsigned|YES|NULL||~|~',
+            'col|last_attempt_id|bigint(20) unsigned|YES|NULL||~|~',
+            'col|last_observed_at|datetime(6)|NO|~||~|~',
+            'col|verified_serial|int(10) unsigned|YES|NULL||~|~',
+            'col|verified_file_hash|char(64)|YES|NULL||ascii|ascii_bin',
+            'col|verified_run_id|bigint(20) unsigned|YES|NULL||~|~',
+            'col|verified_at|datetime(6)|YES|NULL||~|~',
+            'idx|idx_zsv_server|1|1|server_id|~|BTREE',
+            'idx|idx_zsv_zone_name|1|1|zone_name|~|BTREE',
+            'idx|PRIMARY|0|1|zone_id|~|BTREE',
+            'idx|PRIMARY|0|2|server_id|~|BTREE',
+            "chk|chk_zsv_hashes|Table|(`last_file_hash` is null or `last_file_hash` regexp '^[0-9a-f]{64}\$') and (`verified_file_hash` is null or `verified_file_hash` regexp '^[0-9a-f]{64}\$')",
+            "chk|chk_zsv_last_state|Table|`last_state` = 'verified' and `last_served_serial` is not null and `last_file_serial` is not null and `last_file_hash` is not null and `last_served_serial` = `last_file_serial` or `last_state` = 'serial_differs' and `last_served_serial` is not null and `last_file_serial` is not null and `last_served_serial` <> `last_file_serial` or `last_state` = 'still_served' and `last_served_serial` is not null or `last_state` = 'absent' and `last_served_serial` is null or `last_state` = 'unknown'",
+            "chk|chk_zsv_reason|Table|`last_reason` is null or `last_reason` regexp '^[a-z0-9_:]{1,64}\$'",
+            'chk|chk_zsv_target|Table|`zone_id` >= 1 and `server_id` >= 1 and char_length(`zone_name`) >= 1 and char_length(`server_name`) >= 1',
+            'chk|chk_zsv_verified_bundle|Table|`verified_serial` is null and `verified_file_hash` is null and `verified_at` is null and `verified_run_id` is null or `verified_serial` is not null and `verified_file_hash` is not null and `verified_at` is not null',
+            "chk|chk_zsv_verified_current|Table|`last_state` <> 'verified' or `verified_serial` is not null and `verified_file_hash` is not null and `verified_at` is not null and `last_served_serial` is not null and `last_file_hash` is not null and `verified_serial` = `last_served_serial` and `verified_file_hash` = `last_file_hash` and `verified_at` = `last_observed_at`",
+            'chk|chk_zsv_verified_order|Table|`verified_at` is null or `verified_at` <= `last_observed_at`',
         ],
     ];
 

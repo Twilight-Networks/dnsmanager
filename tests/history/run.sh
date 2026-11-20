@@ -1,12 +1,13 @@
 #!/bin/bash
 # Datei: tests/history/run.sh
-# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c, H2d) reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
+# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c, H2d) und AS3 reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
 #
 #   bash run.sh <App-SHA> <Basis-SHA> [<Generator-Basis-SHA>]
 #     <App-SHA>   zu prüfender Commit (40 Zeichen)
 #     <Basis-SHA> Commit, dessen sql/dnsmanager_schema.sql den Stand vor Migration 002 darstellt
 #     <Generator-Basis-SHA> optional (H2d): Commit, gegen dessen Generator die Zonendateien byte-gleich sein müssen
-#                 (Standard: <Basis-SHA>; für H2d der Stand vor H2d, z. B. origin/main)
+#                 (Standard: <Basis-SHA>; für H2d der Stand vor H2d, z. B. origin/main; für AS3 der Stand vor AS3, gegen
+#                 den zusätzlich alter Code auf neuem Schema und die Unverändertheit von web/ und agent/ geprüft werden)
 #
 # Ablauf: eigener Klon ($REPO, Standard GitHub) → git archive beider Commits in ein frisches Verzeichnis unter /tmp →
 #   1. reine Tests (pure_test.php) inkl. unabhängiger Prüfung des Vertragsvektors mit sha256sum
@@ -19,6 +20,8 @@
 #      Byte-Vergleich der Zonendateien gegen den Basis-Commit und Zeitüberschreitungsfällen) und RC gegen eine isolierte
 #      Zweiserver-Umgebung mit dem echten Agent-Code (127.0.0.4/127.0.0.5, Sandbox unter /tmp); statischer Nachweis und
 #      Mutationsproben in 5. /etc/bind und die installierten Agenten werden nicht berührt (Nachweis Z01).
+#   8. AS3: Migration 006 (migration006_test.sh), Datenvertrag zone_server_verification, 32-Bit-Serials mit dem echten
+#      Generator, altes/neues Schema mit altem/neuem Code und statische Nachweise (as3_test.php, RR und RC)
 # Nur isolierte Datenbanken dnsmgr_t21_r<RUN>_* und der Benutzer h2a<RUN> (Lauf-Kennung H2A_RUN, 8 Hex-Zeichen; optional
 # vorgebbar, sonst zufällig). Eigentum nach tests/history/owned.sh: Jede Suite legt ihre Ressourcen ohne IF NOT EXISTS an
 # und trägt sie danach in das gemeinsame Register dieses Laufs ein; aufgeräumt werden ausschließlich registrierte
@@ -32,7 +35,7 @@ SHA="${1:-}"; BASE="${2:-}"; GBASE="${3:-${2:-}}"
 [ "$(id -u)" = 0 ] || { echo "als root ausführen"; exit 2; }
 REPO="${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}"
 
-echo "History-Tests H2a/H2b/H2c/H2d – $(hostname) $(date '+%F %T')"
+echo "History-Tests H2a/H2b/H2c/H2d/AS3 – $(hostname) $(date '+%F %T')"
 export H2A_RUN="${H2A_RUN:-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 [[ "$H2A_RUN" =~ ^[0-9a-f]{8}$ ]] || { echo "ABBRUCH: ungültige Lauf-Kennung H2A_RUN"; exit 2; }
 echo "Lauf-Kennung: $H2A_RUN (Datenbanken dnsmgr_t21_r${H2A_RUN}_*, Benutzer h2a${H2A_RUN})"
@@ -88,6 +91,10 @@ for kind in file render; do
 done
 php "$H/journal_test.php" "$T/app" RR "$T/base" || RC=1
 H2D_SLOW=0 php "$H/journal_test.php" "$T/app" RC "$T/base" || RC=1
+# AS3: Migration 006, Datenvertrag, 32-Bit-Serials, Code/Schema-Kombinationen, statische Nachweise (Generator-Basis = Stand vor AS3)
+bash "$H/migration006_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
+php "$H/as3_test.php" "$T/app" RR "$T/base" || RC=1
+php "$H/as3_test.php" "$T/app" RC "$T/base" || RC=1
 [ "${H2B_SKIP_MUTATION:-0}" = 1 ] && echo "Hinweis: Mutationsproben übersprungen (H2B_SKIP_MUTATION=1)" || bash "$H/mutation_test.sh" "$T/app" || RC=1
 
 echo "GESAMT: $([ $RC = 0 ] && echo 'alle Suiten bestanden' || echo 'FEHLER')"
