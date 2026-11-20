@@ -963,7 +963,8 @@ Fest werden damit nur `absent` (R3) und `unknown`; `still_served` entsteht – a
 eine Runde) – ausschließlich aus der letzten vollständigen Runde (R4, Review PR #105, Befund R1).
 Zusätzlich je Zone `zones[].name`, `served`, `served_reason`; `verification` mit `rounds`, `elapsed_ms`, `window_ms`,
 `control_queries` (tatsächlich gestartete dig-Prozesse der Kontrollabfrage, auch mit Timeout oder fehlerhafter Antwort;
-Grundlage ist `dnsQuery()['started']` aus dem Prozessstatus, durchgereicht als `dnsControlZoneState()['queried']`; nicht
+Grundlage ist `dnsQuery()['started']` aus dem Prozessstatus, im Abfragepfad durchgereicht als
+`dnsControlZoneState()['queried']`, die übrigen Rückgaben von `dnsControlZoneState()` bleiben unverändert; nicht
 gezählt werden `missing`, `own_acl`, `managed` und `unverifiable` ohne Abfrage sowie nicht gestartete bzw. nicht startbare
 Prozesse `dig_not_started`/`dig_error` – Review PR #105, Befund R2) und `name_proof` (`state`, `reason`, `ms`,
 `remaining_ms`). **Kontrollzonen-Speicher (E124):**

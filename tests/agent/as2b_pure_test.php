@@ -379,7 +379,7 @@ if (run('C') && $linux) {
     $before = $count('dig');
     $c = dnsControlZoneState($fcfg, ['state' => 'undeterminable', 'reason' => 'views_present'] + $p);
     t('C09 Konfiguration nicht prüfbar ⇒ unverifiable ohne Abfrage', $c['state'] === 'unverifiable' && $count('dig') === $before
-        && $c['queried'] === false, json_encode($c));
+        && ($c['queried'] ?? false) === false, json_encode($c));
     $round = [];
     dnsServedState($fcfg, 'z1.solo', $k1, $p, $round);
     dnsServedState($fcfg, 'z2.solo', $k2, $p, $round);
