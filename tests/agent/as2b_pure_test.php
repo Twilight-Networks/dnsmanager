@@ -15,8 +15,9 @@
  *   S  Abschnittsfrist (inc/proc.php)
  *   L  Abläufe verifyLoaded()/verifyRemoved() mit Antwortfolgen (kein Übertrag über Runden, R4, E122)
  *   BU Vorabnachweis im Cleanup: Eintrittsschwelle 20 s knapp unter-/oberhalb, maximaler Zeitverbrauch, Restzeit danach
+ *   V  AS4b: verifyLoadedOnce() (eine Runde ohne Polling für zones/zone_verify) und served_serial bei still_served im Cleanup
  *
- * Aufruf (root, Test-VM): php tests/agent/as2b_pure_test.php [<Checkout>] [<Gruppen, z. B. BWPDLDRFNCSLBU>]
+ * Aufruf (root, Test-VM): php tests/agent/as2b_pure_test.php [<Checkout>] [<Gruppen, z. B. BWPDLDRFNCSLVBU>]
  * Exit-Code 0 nur ohne Fehlschlag.
  */
 
@@ -486,6 +487,42 @@ if (run('L') && $linux) {
     $scene([], ['o1.solo' => ['soa:1', 'timeout']]);
     $r = verifyRemoved($fcfg, ['o1.solo' => $names['o1.solo']], 'ok', microtime(true) - 7.5);
     t('L11 ausgeliefert, dann Timeout ⇒ unknown (R4)', $r['zones']['o1.solo']['served'] === 'unknown', json_encode($r['zones']));
+}
+
+// ---------------------------------------------------------------- V: AS4b – eine Runde (zone_verify) und served_serial im Cleanup
+if (run('V') && $linux) {
+    $zf = "$tmp/zones/db.a.test";
+    $scene(['a.test' => $zf], ['a.test' => ['soa:5']]);
+    $v = verifyLoadedOnce($fcfg, 'a.test');
+    t('V01 eine Runde, SOA = Datei ⇒ verified mit Rohwerten', $v['state'] === 'verified' && $v['rounds'] === 1 && $v['served_serial'] === 5
+        && $v['file_serial'] === 5 && $v['file_sha256'] === hash_file('sha256', $zf) && $count('dig', 'a.test') === 1, json_encode([$v['state'], $v['rounds'], $v['reason']]));
+    $scene(['a.test' => $zf], ['a.test' => ['soa:4', 'soa:5']]);
+    $v = verifyLoadedOnce($fcfg, 'a.test');
+    t('V02 andere Serial ⇒ serial_differs, kein Polling (genau eine Abfrage)', $v['state'] === 'serial_differs' && $v['served_serial'] === 4 && $v['file_serial'] === 5
+        && $count('dig', 'a.test') === 1, json_encode([$v['state'], $v['reason'], $count('dig', 'a.test')]));
+    $scene(['a.test' => $zf], ['a.test' => ['servfail', 'soa:5']]);
+    $v = verifyLoadedOnce($fcfg, 'a.test');
+    t('V03 SERVFAIL ⇒ unknown, nie verified, keine Wiederholung', $v['state'] === 'unknown' && $count('dig', 'a.test') === 1, json_encode([$v['state'], $v['reason']]));
+    $scene(['b.test' => "$tmp/zones/db.b.test"], ['a.test' => ['soa:5']]);
+    @unlink($zf);
+    $v = verifyLoadedOnce($fcfg, 'a.test');
+    t('V04 verwaltete Datei fehlt ⇒ unknown ohne DNS-Abfrage', $v['state'] === 'unknown' && $count('dig', 'a.test') === 0, json_encode([$v['state'], $v['reason']]));
+    t('V05 ungültiger Zonenname ⇒ unknown zone_name_invalid', verifyLoadedOnce($fcfg, 'a..b')['reason'] === 'zone_name_invalid');
+    t('V06 agentVerifyOnce vorhanden (Endpunkt zones/zone_verify)', function_exists('agentVerifyOnce'));
+    $names = ['o1.solo' => ['name' => 'o1.solo', 'reason' => null], 'o2.solo' => ['name' => 'o2.solo', 'reason' => null]];
+    $scene([], ['o1.solo' => ['soa:7'], 'o2.solo' => ['refused']]);
+    $r = verifyRemoved($fcfg, $names, 'timeout', microtime(true));
+    t('V07 gescheiterter Reload (E122): still_served mit served_serial der Beobachtung, unknown ohne served_serial',
+        $r['zones']['o1.solo']['served'] === 'still_served' && ($r['zones']['o1.solo']['served_serial'] ?? null) === 7
+        && !array_key_exists('served_serial', $r['zones']['o2.solo']), json_encode($r['zones']));
+    $scene([], ['o1.solo' => ['soa:8'], 'o2.solo' => ['refused']]);
+    $r = verifyRemoved($fcfg, $names, 'ok', microtime(true) - 9.0);
+    t('V08 Polling: still_served mit served_serial aus der letzten Runde, absent ohne served_serial',
+        $r['zones']['o1.solo']['served'] === 'still_served' && ($r['zones']['o1.solo']['served_serial'] ?? null) === 8
+        && $r['zones']['o2.solo']['served'] === 'absent' && !array_key_exists('served_serial', $r['zones']['o2.solo']), json_encode($r['zones']));
+    $scene([], ['o1.solo' => ['soa:3', 'soa:9']]);
+    $r = verifyRemoved($fcfg, ['o1.solo' => $names['o1.solo']], 'ok', microtime(true) - 9.0);
+    t('V09 served_serial stammt aus der entscheidenden (letzten) Beobachtung', ($r['zones']['o1.solo']['served_serial'] ?? null) === 9, json_encode($r['zones']));
 }
 
 // ---------------------------------------------------------------- BU: Vorabnachweis (Eintrittsschwelle, Zeitverbrauch)

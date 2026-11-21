@@ -53,7 +53,8 @@ tables() { mariadb -N -B -e "SELECT IFNULL(GROUP_CONCAT(TABLE_NAME ORDER BY TABL
 # Bewertung der vier Tabellen aus Migration 002; history_dependencies (Migration 003, AP1/H2b) prüft migration003_test.sh,
 # audit_events (Migration 004, AP1/H2c) migration004_test.sh
 php_states() { php "$H/schemacheck.php" "$APP" "$1" | grep -v '^problem' | grep -v '^history_dependencies' | grep -v '^audit_events' | grep -vE '^(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results|zone_server_verification)' | cut -f2 | tr '\n' ' ' | sed 's/ $//'; }
-php_problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -vE '^problem.(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results) fehlt$' | grep -v 'history_dependencies fehlt$' | grep -v 'audit_events fehlt$' | grep -v 'zone_server_verification fehlt$' | grep -v 'zones.soa_serial: Typ int(11) statt int(10) unsigned$' | cut -f2-; }
+# AS4b: SchemaCheck::problems() ist strikt nach 007 – Befunde der späteren Migration 007 hier ausgefiltert
+php_problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -vE '^problem.(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results) fehlt$' | grep -v 'history_dependencies fehlt$' | grep -v 'audit_events fehlt$' | grep -v 'zone_server_verification fehlt$' | grep -v 'zones.soa_serial: Typ int(11) statt int(10) unsigned$' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2-; }
 
 echo "== Migration 002 – $(mariadb -N -e 'SELECT VERSION()'), PHP $(php -r 'echo PHP_VERSION;')"
 

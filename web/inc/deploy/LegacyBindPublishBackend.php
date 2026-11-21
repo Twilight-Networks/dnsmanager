@@ -23,16 +23,20 @@
  */
 
 require_once __DIR__ . '/../app/publish/PublishBackend.php';
+require_once __DIR__ . '/../app/publish/FenceStatusProvider.php';
 require_once __DIR__ . '/../app/publish/PublishHashContract.php';
 require_once __DIR__ . '/bind_file_generator.php';
 require_once __DIR__ . '/bind_file_distributor.php';
 require_once __DIR__ . '/BindAgentClient.php';
 require_once __DIR__ . '/BindWorkDir.php';
 
-final class LegacyBindPublishBackend implements PublishBackend
+final class LegacyBindPublishBackend implements PublishBackend, FenceStatusProvider
 {
+    /** AS4b (E81): Frist der system/status-Abfrage für den Restore-Abgleich (Sekunden) */
+    public const STATUS_TIMEOUT = 5;
+
     private PDO $pdo;
-    private BindAgentClient $agent;
+    private AgentClient $agent;
 
     /** @var array<string, BindWorkDir> Arbeitsverzeichnisse erzeugter, noch nicht verteilter Zonendateien (Pfad → Verzeichnis) */
     private array $pending = [];
@@ -46,7 +50,7 @@ final class LegacyBindPublishBackend implements PublishBackend
      * @param PDO $pdo Verbindung des PublishService (Advisory-Lock, Flags, Generator und Distributoren)
      * @throws LogicException wenn Konfiguration fehlt
      */
-    public function __construct(PDO $pdo, ?BindAgentClient $agent = null)
+    public function __construct(PDO $pdo, ?AgentClient $agent = null)
     {
         if (!defined('BIND_BASE_DIR')) {
             throw new LogicException('LegacyBindPublishBackend: Konfigurationskonstante BIND_BASE_DIR ist nicht definiert.');
@@ -110,7 +114,8 @@ final class LegacyBindPublishBackend implements PublishBackend
             $opts = [
                 'targets'  => $attempt['targets'],
                 'fileHash' => $attempt['fileHash'],
-                'onResult' => static fn (int $sid, array $c) => $journal->zoneResult($attemptId, $sid, $c),
+                'onResult' => static fn (int $sid, array $c, ?array $raw = null) => $journal->zoneResult($attemptId, $sid, $c, $raw),
+                'beforeCall' => static fn (int $sid): array => $journal->beforeAgentCall(),
             ];
         }
         try {
@@ -129,10 +134,10 @@ final class LegacyBindPublishBackend implements PublishBackend
         $attempt = $this->attempt;
         $journal = $this->journal;
         if ($journal !== null && $attempt !== null && (string)$attempt['zoneName'] === $zoneName) {
-            $attemptId = (int)$attempt['attemptId'];
             $opts = [
                 'targets'  => $attempt['targets'],
-                'onResult' => static fn (int $sid, array $c, ?string $h) => $journal->confResult($attemptId, $sid, $c, $h),
+                'onResult' => static fn (int $sid, array $c, ?string $h, ?array $raw = null) => $journal->confResult($attempt, $sid, $c, $h, $raw),
+                'beforeCall' => static fn (int $sid): array => $journal->beforeAgentCall(),
             ];
         }
         $work = BindWorkDir::create();
@@ -148,9 +153,31 @@ final class LegacyBindPublishBackend implements PublishBackend
         $journal = $this->journal;
         $opts = $journal === null ? null : [
             'register' => static fn (array $servers): bool => $journal->registerCleanup($servers),
-            'onResult' => static fn (int $sid, array $c, ?int $valid) => $journal->cleanupResult($sid, $c, $valid),
+            'onResult' => static fn (int $sid, array $c, ?int $valid, ?array $raw = null, string $name = '') => $journal->cleanupResult($sid, $c, $valid, $raw, $name),
+            'beforeCall' => static fn (int $sid): array => $journal->beforeAgentCall(),
         ];
 
         return distribute_zone_cleanup($this->pdo, $this->agent, $opts);
+    }
+
+    /**
+     * AS4b (E81): Fencing-Status der aktiven Agenten aus system/status (nur lesend). mode/high nur, wenn der Agent sie
+     * meldet (observe/enforce bzw. off mit gesperrten Schreibvorgängen); nicht erreichbar ⇒ reachable = false.
+     */
+    public function agentFenceStatus(): array
+    {
+        $out = [];
+        foreach ($this->pdo->query('SELECT id, name, api_ip, api_token FROM servers WHERE active = 1 ORDER BY id')->fetchAll(PDO::FETCH_ASSOC) as $srv) {
+            $r = $this->agent->get($srv['api_ip'], '/system/status.php', (string)$srv['api_token'], null, self::STATUS_TIMEOUT);
+            $json = is_string($r['body'] ?? null) ? json_decode((string)$r['body'], true) : null;
+            $reachable = ($r['curlError'] ?? '') === '' && (int)($r['httpCode'] ?? 0) === 200 && is_array($json);
+            $f = $reachable && is_array($json['fencing'] ?? null) ? $json['fencing'] : [];
+            $mode = is_string($f['mode'] ?? null) ? $f['mode'] : null;
+            $high = $f['high'] ?? null;
+            $high = is_int($high) && $high > 0 ? $high : (is_string($high) && preg_match('/^[1-9][0-9]{0,18}$/D', $high) === 1 ? (int)$high : null);
+            $out[(int)$srv['id']] = ['name' => (string)$srv['name'], 'mode' => $mode, 'high' => $high, 'reachable' => $reachable];
+        }
+
+        return $out;
     }
 }

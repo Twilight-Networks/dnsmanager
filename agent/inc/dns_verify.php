@@ -12,6 +12,8 @@
  *   höchstens 10 s nach Reload-Ende und nie über TW − 1 s hinaus (Abschnittsfrist, inc/proc.php). Je Runde höchstens eine
  *   Kontrollabfrage (Rundenspeicher in dnsServedState). Keine Beobachtung wird in eine spätere Runde übernommen.
  * - Die Nachverifikation ändert nie HTTP-Status, effect, message oder rollback (E107, E125).
+ * - AS4b (E109): verifyLoadedOnce() – genau eine Runde derselben Bausteine ohne Polling für den lesenden Endpunkt
+ *   zones/zone_verify; Cleanup meldet bei still_served zusätzlich served_serial aus der konkreten DNS-Beobachtung.
  *
  * Verwendet ausschließlich die AS2a-Bausteine aus inc/dns_state.php und inc/proc.php (DNS-Abfrage, strenger Parser,
  * Konfigurations- und Dateinachweis, Prozessfristen). Nur in den Modi observe/enforce verwendet (E101).
@@ -403,8 +405,9 @@ function verifyRemoved(array $config, array $names, string $reloadStatus, float 
                     continue;
                 }
                 $r = dnsQuery($config, $name);
-                $final[$base] = dnsAuthoritativeSoa($r, $name) !== null
-                    ? ['state' => 'still_served', 'reason' => 'reload_' . $reloadStatus]
+                $soa = dnsAuthoritativeSoa($r, $name);
+                $final[$base] = $soa !== null
+                    ? ['state' => 'still_served', 'reason' => 'reload_' . $reloadStatus, 'serial' => $soa]
                     : ['state' => 'unknown', 'reason' => verifyNotStarted($r['reason']) ? 'budget_exhausted' : 'reload_' . $reloadStatus];
             }
         });
@@ -422,6 +425,10 @@ function verifyRemoved(array $config, array $names, string $reloadStatus, float 
                 $k = dnsZoneConfigState($config, $name, $proof);
                 $d = dnsServedState($config, $name, $k, $proof, $cache);
                 $o = verifyRemovedDecide(true, $k, $kTransient, $d);
+                if ($o['state'] === 'still_served') {
+                    // AS4b: ausgelieferte Serial der konkreten DNS-Beobachtung dieser Runde
+                    $o['serial'] = is_int($d['serial'] ?? null) ? $d['serial'] : null;
+                }
                 if ($o['final']) {
                     $final[$base] = $o;
                     unset($pending[$base]);
@@ -446,6 +453,11 @@ function verifyRemoved(array $config, array $names, string $reloadStatus, float 
         $res = verifyFinalize($final[$base] ?? null, $last[$base] ?? null);
         $z['served'] = $res['state'];
         $z['served_reason'] = $res['reason'] === 'last_round_unknown' ? 'last_round_unknown:' . ($res['last_reason'] ?? '') : $res['reason'];
+        if ($res['state'] === 'still_served') {
+            // AS4b (O6, additiv): nur aus der entscheidenden Beobachtung; unbekannt bleibt null (kein erfundener Wert)
+            $src = $final[$base] ?? $last[$base] ?? null;
+            $z['served_serial'] = is_int($src['serial'] ?? null) ? $src['serial'] : null;
+        }
         if ($res['state'] !== 'absent') {
             $notAbsent++;
         }
@@ -464,6 +476,54 @@ function verifyRemoved(array $config, array $names, string $reloadStatus, float 
 // Einzige Aufrufpunkte in den Endpunkten. Die AS1-Regression ersetzt ausschließlich diese Funktionen in ihrer
 // Sandbox-Kopie des Agenten (dort gibt es keinen passenden BIND); der Produktionscode hat keinen Schalter.
 // ------------------------------------------------------------------------------------------------------------------
+
+/**
+ * AS4b (E109): genau eine Runde der Nachverifikation ohne Polling für zones/zone_verify (rein lesend, unter der
+ * gemeinsamen Agent-Sperre). Dieselben Bausteine und Entscheidungen wie verifyLoaded(); eine einzelne vollständige Runde
+ * ist die letzte vollständige Runde (R3/R4).
+ */
+function verifyLoadedOnce(array $config, string $zoneName): array {
+    $t0 = microtime(true);
+    $v = verifyLoadedNotAttempted($zoneName, 'budget_exhausted');
+    $zone = $v['zone'];
+    if ($zone === null) {
+        $v['reason'] = 'zone_name_invalid';
+        return $v;
+    }
+    $path = dnsManagedZonePath($config, $zoneName);
+    $o = agentWithSectionDeadline(agentWorkDeadline() - VERIFY_RESPONSE_RESERVE, static function () use ($config, $zone, $path): array {
+        $f = dnsZoneFileState($config, $zone, $path);
+        unset($f['bytes']);
+        $k = null;
+        $kTransient = false;
+        $d = null;
+        if (!verifyFileTransient($f) && $f['state'] === 'valid') {
+            $proof = dnsConfigProof($config, true);
+            $k = dnsZoneConfigState($config, $zone, $proof);
+            $kTransient = $k['state'] === 'undeterminable' && verifyConfigTransient($k['reason']);
+            if ($k['state'] === 'yes') {
+                $d = dnsServedState($config, $zone, $k, $proof);
+            }
+        }
+        return verifyLoadedDecide($f, $k, $kTransient, $d) + ['f' => $f, 'k' => $k, 'd' => $d];
+    });
+    $v = verifyFinalize($o['final'] ? $o : null, $o['complete'] ? $o : null) + $v;
+    $v['rounds'] = 1;
+    $v['elapsed_ms'] = (int)round((microtime(true) - $t0) * 1000);
+    $v['file_serial'] = $o['f']['serial'] ?? null;
+    $v['file_sha256'] = $o['f']['sha256'] ?? null;
+    $v['config_state'] = $o['k']['state'] ?? null;
+    $v['config_reason'] = $o['k']['reason'] ?? null;
+    $v['served_serial'] = $o['d']['serial'] ?? null;
+    $v['served_rcode'] = $o['d']['rcode'] ?? null;
+    $v['served_reason'] = $o['d']['reason'] ?? null;
+
+    return $v;
+}
+
+function agentVerifyOnce(array $config, string $zoneName): array {
+    return verifyLoadedOnce($config, $zoneName);
+}
 
 function agentVerifyLoaded(array $config, string $zoneName, float $reloadEnd): array {
     return verifyLoaded($config, $zoneName, $reloadEnd);

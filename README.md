@@ -319,6 +319,26 @@ zunächst beim bisherigen Verhalten bleiben will, ergänzt **vor** dem Update de
 Danach `php -l /etc/dnsmanager/api_config.php` und die Rechte `0640 root:www-data` prüfen. Ablauf und Kontrolle:
 `docs/AGENT_FENCING.md`, Abschnitt 9. Neue Installationen übernehmen den Eintrag aus `api_config-sample.php`.
 
+### Upgrade bestehender Installationen: Fencing-Domäne im Core (AS4b)
+
+Ab AS4b startet ein Publish-Lauf (auch DynDNS) nur, wenn die Fencing-Domäne der Installation in der Datenbank
+(`system_status.fence_domain`, Migration 007) **und** in der Weboberfläche (`FENCE_DOMAIN` in `/etc/dnsmanager/ui_config.php`)
+gesetzt und gleich ist. **Vor** dem Update des Web-Codes:
+
+1. Migration 007 ist ausgerollt (`sql/migrations/README.md`, Abschnitt 007).
+2. Eine neue UUID in Kleinbuchstaben erzeugen (z. B. `cat /proc/sys/kernel/random/uuid`) und in `ui_config.php` setzen:
+   `define('FENCE_DOMAIN', '<uuid>');` – danach `php -l` und die Rechte der Datei prüfen.
+3. Nach dem Update des Codes einmalig, als `www-data`:
+
+   ```bash
+   sudo -u www-data php /usr/share/dnsmanager/web/scripts/fence_admin-cli.php init-domain --domain=<uuid>
+   sudo -u www-data php /usr/share/dnsmanager/web/scripts/fence_admin-cli.php status
+   ```
+
+Fehlt einer der beiden Werte oder weichen sie ab, endet jeder Publish mit `exception` („Fencing: …“) ohne Änderung und
+ohne Agent-Aufruf (fail-closed). Die Agenten bleiben davon unberührt in `off`; dieselbe Domäne erhalten sie erst mit dem
+Wechsel nach `observe` (`docs/AGENT_FENCING.md`, Abschnitt 3). Rückfall: Code auf AS4a, ohne Schemarückbau.
+
 ### Upgrade bestehender Installationen: `sudo`-Rechte (Least Privilege)
 
 Ein Update des Repositorys bzw. von `/usr/share/dnsmanager` ändert **nichts** an bereits installierten Dateien unter

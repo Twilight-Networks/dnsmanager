@@ -526,6 +526,11 @@ SELECT RELEASE_LOCK('dnsmanager_publish_all');
 | 2 | Sicherung und Migration 007 (ruhiges Zeitfenster, Apache angehalten) | **nur AS4a** | Code bleibt AS4a; Teilzustand: Wiederanlauf |
 | 3 | Code AS4b (strikt nach 007), später | AS4b, AS4a | Code → AS4a, ohne Schemarückbau |
 
+Vor Phase 3: `FENCE_DOMAIN` in `ui_config.php` setzen; nach dem Code-Update einmalig
+`scripts/fence_admin-cli.php init-domain --domain=<uuid>` (README, Abschnitt „Fencing-Domäne im Core (AS4b)“). Ohne
+beides ist Publish fail-closed. Nach `init-domain` ist der Notfall-Rückbau unten nicht mehr zulässig (`fence_domain`
+gesetzt); Rückfall dann nur auf den AS4a-Code.
+
 Rollout-Voraussetzungen wie bei 006: ruhiges Zeitfenster; der Publish-Lock schließt nur Publish-Läufe aus. Andere
 Fachtransaktionen halten Metadatensperren auf den Journaltabellen bzw. `system_status`; das `ALTER` wartet höchstens
 `lock_wait_timeout` = 10 s und bricht dann mit Exit 3 ab, ein Wiederanlauf ist möglich.

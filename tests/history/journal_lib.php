@@ -156,9 +156,11 @@ final class J
 
     public static function service(PDO $p, ?PublishBackend $backend = null): PublishService
     {
+        // AS4b: Fencing-Domäne der Testinstallation in Datenbank und Konfiguration
+        $p->exec("UPDATE system_status SET fence_domain = '" . H2b::FENCE_DOMAIN . "' WHERE id = 1 AND fence_domain IS NULL");
         return new PublishService($p, $backend ?? new LegacyBindPublishBackend($p, self::client()), static function (string $level, string $msg): void {
             J::$logs[] = "$level $msg";
-        });
+        }, new FenceContext(H2b::FENCE_DOMAIN));
     }
 
     /** Ergebnisbericht (Kontext der letzten Meldung) */

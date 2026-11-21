@@ -68,7 +68,7 @@ run 2 "L08 Advisory-Lock belegt" "$DB" --apply
 ok "$(has out 'Advisory-Lock dnsmanager_publish_all belegt' && echo 1)" "L08b Meldung"
 wait $LP
 run 2 "L09 --check ohne Migration 002 (fail-closed)" "$DBO" --check
-ok "$(has out 'Schema nicht passend: zones.soa_serial: Typ int\(11\) statt int\(10\) unsigned; history_change_sets fehlt; zone_snapshots fehlt; zone_revisions fehlt; zone_history_state fehlt; history_dependencies fehlt; audit_events fehlt' && echo 1)" "L09b Befunde (inkl. Migration 003, 004 und 006)"
+ok "$(has out 'Schema nicht passend: zones.soa_serial: Typ int\(11\) statt int\(10\) unsigned; system_status.fence_domain fehlt; history_change_sets fehlt; zone_snapshots fehlt; zone_revisions fehlt; zone_history_state fehlt; history_dependencies fehlt; audit_events fehlt' && echo 1)" "L09b Befunde (inkl. Migration 003, 004, 006 und 007c, AS4b)"
 run 2 "L10 --apply ohne Migration 002 (fail-closed)" "$DBO" --apply
 ok "$([ "$(php "$W/app/web/scripts/schema_history-cli.php" sql | grep -c 'information_schema')" -ge 5 ] && echo 1)" "L11 schema_history-cli.php sql"
 printf 'x\n' | php "$W/app/web/scripts/schema_history-cli.php" evaluate > /dev/null 2>&1; ok "$([ $? = 2 ] && echo 1)" "L12 schema_history-cli.php evaluate: ungültige Eingabe ⇒ Exit 2"

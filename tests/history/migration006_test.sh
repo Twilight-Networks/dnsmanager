@@ -50,7 +50,8 @@ hastab() { mariadb -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE T
 ctime() { mariadb -N -e "SELECT IFNULL(CREATE_TIME, '-') FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME = '$2'"; }
 serials() { mariadb -N -B "$1" -e "SELECT id, soa_serial FROM zones ORDER BY id" | sha256sum | cut -c1-64; }
 state() { php "$H/schemacheck.php" "$APP" "$1" | grep "^$2"$'\t' | cut -f2; }
-problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | cut -f2- | tr '\n' ';'; }
+# AS4b: SchemaCheck::problems() ist strikt nach 007 – Befunde der späteren Migration 007 hier ausgefiltert
+problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2- | tr '\n' ';'; }
 lockfree() { mariadb -N -e "SELECT IS_FREE_LOCK('$LOCK')"; }
 OLD="int(11)|NO|2025010101"; NEW="int(10) unsigned|NO|2025010101"
 
