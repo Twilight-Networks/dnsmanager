@@ -192,15 +192,16 @@ expect_exit 3 "Q13 Lock-Verlust vor dem ALTER" bash "$W/app13/scripts/migrate_00
 ok "$(grep -q 'MIG006_LOCK_LOST' "$W/out" && [ "$(col "$D")" = "$OLD" ] && [ "$(lockfree)" = 1 ] && echo 1)" "Q13b kein ALTER, Lock frei"
 expect_exit 0 "Q13c Wiederanlauf mit unverändertem Skript" bash "$MIG6" --db "$D" --apply --no-backup
 
-# Q14 Neuinstallation = Migration 002–006
+# Q14 Neuinstallation = Migration 002–007 (das Neuinstallationsschema enthält seit AS4a auch Migration 007)
 D=$(mkdb q14 new)
 expect_exit 0 "Q14 Neuinstallation: --check ohne Migration" bash "$MIG6" --db "$D" --check
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
-ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}q2")" ] && [ "$(col "$D")" = "$(col "${H2A_PREFIX}q2")" ] && [ -z "$(problems "$D")" ] && echo 1)" "Q14b Struktursignatur und Spalte Neuinstallation = Migration (byte-gleich), SchemaCheck ohne Befund"
+bash "$APP/scripts/migrate_007_journal_agent_results.sh" --db "${H2A_PREFIX}q2" --apply --no-backup > "$W/m7.out" 2>&1 || ok 0 "Q14b Vorbereitung: Migration 007 auf q2"
+ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}q2")" ] && [ "$(col "$D")" = "$(col "${H2A_PREFIX}q2")" ] && [ -z "$(problems "$D")" ] && echo 1)" "Q14b Struktursignatur und Spalte Neuinstallation = Migration 002–007 (byte-gleich), SchemaCheck ohne Befund"
 
 # Q15 frühere Skripte bleiben nach Migration 006 konsistent
-for m in migrate_002_history_foundation migrate_003_history_dependencies migrate_004_audit_events migrate_005_publish_journal; do
-    expect_exit 0 "Q15 $m --check nach Migration 006" bash "$APP/scripts/$m.sh" --db "${H2A_PREFIX}q2" --check
+for m in migrate_002_history_foundation migrate_003_history_dependencies migrate_004_audit_events migrate_005_publish_journal migrate_006_zone_serial_verification; do
+    expect_exit 0 "Q15 $m --check nach Migration 006 und 007" bash "$APP/scripts/$m.sh" --db "${H2A_PREFIX}q2" --check
 done
 
 # Q16 Schema-Rollback nach README: nur bei MAX(soa_serial) ≤ 2147483647 und leerer Tabelle
