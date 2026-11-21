@@ -56,7 +56,8 @@ $marker = static function (string $file) use ($pdo): void {
     rename("$file.tmp", $file);
 };
 $service = static function () use ($pdo): PublishService {
-    return new PublishService($pdo, new LegacyBindPublishBackend($pdo, new BindAgentClient('/api/v1', false, 0)));
+    $pdo->exec("UPDATE system_status SET fence_domain = '" . '5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d' . "' WHERE id = 1 AND fence_domain IS NULL");   // AS4b
+    return new PublishService($pdo, new LegacyBindPublishBackend($pdo, new BindAgentClient('/api/v1', false, 0)), null, new FenceContext('5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d'));
 };
 $last = static fn (ServiceResult $r): array => $r->messages[count($r->messages) - 1]->context;
 

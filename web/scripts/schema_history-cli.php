@@ -47,7 +47,8 @@ if ($mode === 'evaluate') {
         $unescape = static fn (string $v): string => strtr($v, ['\\\\' => '\\', '\\t' => "\t", '\\n' => "\n", '\\0' => "\0"]);
         $rows[] = [$unescape($parts[0]), $unescape($parts[1])];
     }
-    foreach (SchemaCheck::evaluateHistory($rows) as $table => $result) {
+    // Migrationswerkzeug: Zwischenstand vor Migration 007 zulässig (AS4b, SchemaCheck::HISTORY_TABLES_PRE007)
+    foreach (SchemaCheck::evaluateHistory($rows, true) as $table => $result) {
         echo $table, "\t", $result['state'], "\t", str_replace(["\t", "\n"], ' ', $result['detail']), "\n";
     }
     exit(0);

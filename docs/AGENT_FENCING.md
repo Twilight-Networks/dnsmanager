@@ -154,9 +154,21 @@ Veröffentlichung und über die Vorlage); die Zone wurde in keinem Schritt entla
 ## 7. Datenbank-Restore
 
 Ein zurückgespieltes Backup kann die Lauf-ID-Folge unter H senken; die Agenten lehnen dann mit `stale_fence` ab
-(fail-closed). Abhilfe ab AS4 per Core-Abgleich (H aller Agenten lesen, `publish_runs.AUTO_INCREMENT` darüber setzen).
-Bis dahin manuell: H aller Agenten per CLI `status` lesen und `ALTER TABLE publish_runs AUTO_INCREMENT = <max(H) + 1>`
-unter dem Publish-Lock. Agenten senken H nie.
+(fail-closed). Seit AS4b prüft der Core vor jedem Lauf die von Agenten in `observe`/`enforce` gemeldeten Höchststände:
+Ist die nächste Lauf-ID ≤ H eines Agenten, startet kein Lauf (Ergebnis `exception`, „Abgleich nach Datenbank-Restore
+erforderlich“). Abgleich ausschließlich manuell über die Admin-CLI der Weboberfläche (als `www-data`; `raise-runs`
+benötigt das Recht `ALTER` auf `publish_runs`):
+
+```bash
+sudo -u www-data php /usr/share/dnsmanager/web/scripts/fence_admin-cli.php status
+sudo -u www-data php /usr/share/dnsmanager/web/scripts/fence_admin-cli.php raise-runs --above=<max(H)>
+```
+
+`raise-runs` hebt die nächste Lauf-ID nur an (nie senken) und läuft unter dem Publish-Lock. Fehlt dem
+Anwendungsbenutzer das Recht `ALTER`, endet der Befehl mit Exit 3 ohne Änderung; dann als Datenbank-Administrator
+`ALTER TABLE publish_runs AUTO_INCREMENT = <max(H) + 1>` unter dem Publish-Lock ausführen und mit `status` prüfen. Agenten in `off`, ältere
+Agenten und nicht erreichbare Agenten melden keinen Höchststand und blockieren nicht; `status` listet sie. Agenten senken
+H nie.
 
 ## 8. Zustandsprüfung vor der Übernahme (AS2a)
 
@@ -216,7 +228,8 @@ neueren Stand. `rollback` erscheint nur, wenn ein Rollback tatsächlich versucht
 In `observe`/`enforce` prüft der Agent nach einem erfolgreichen Reload unter der Agent-Sperre, was BIND tatsächlich
 ausliefert (Polling: erste Runde sofort, danach 50 ms bis höchstens 500 ms Abstand, höchstens 10 s und nie über das
 Arbeitsende − 1 s hinaus). Die Angaben sind rein informativ: HTTP-Status, `message`, `effect` und `rollback` bleiben
-unverändert, und der Core wertet sie erst ab AS4 aus.
+unverändert. Seit AS4b speichert der Core sie als Rohwerte im Journal und als Beobachtung in `zone_server_verification`
+(`docs/ARCHITECTURE_HISTORY.md`, Abschnitt 5j); die operative Einordnung ändern sie nicht.
 
 | Endpunkt | Feld | Werte | Bedeutung |
 |---|---|---|---|
@@ -224,7 +237,7 @@ unverändert, und der Core wertet sie erst ab AS4 aus.
 | | | `serial_differs` | am Fensterende liefert BIND eine andere Serial als die Datei (Rohwerte `file_serial`, `served_serial`) – z. B. Datei für `named` nicht lesbar oder ungültig geladen |
 | | | `unknown` | kein Nachweis; `reason` nennt den Grund (`file_*`, `config_*`, `last_round_unknown` mit `last_reason`, `reload_*`, `budget_exhausted`) |
 | `zone_cleanup` | `zones[].served` | `absent` | Reload im selben Aufruf erfolgreich, Zone nicht mehr konfiguriert (K = nein) und nachweislich nicht mehr autoritativ (`served_reason`: `parent_negative`, `parent_referral` oder `refused_control_ok`) |
-| | | `still_served` | BIND liefert die Zone am Ende der Prüfung weiter autoritativ aus (z. B. Reload gescheitert oder Zone anderweitig konfiguriert) |
+| | | `still_served` | BIND liefert die Zone am Ende der Prüfung weiter autoritativ aus (z. B. Reload gescheitert oder Zone anderweitig konfiguriert); seit AS4b zusätzlich `served_serial` aus der entscheidenden Beobachtung (additiv, sonst `null`) |
 | | | `unknown` | kein Nachweis (z. B. `zone_name_unresolved`, `control_zone_missing`, `last_round_unknown:…`, `budget_exhausted`) |
 | `zone_cleanup` | `verification` | `rounds`, `elapsed_ms`, `window_ms`, `control_queries`, `name_proof` | Ablaufangaben; `control_queries` = tatsächlich gestartete DNS-Abfragen der Kontrollzone (auch mit Timeout); `name_proof.state` = `ok`, `skipped` (weniger als 20 s Restzeit), `undeterminable` oder `discarded` |
 
@@ -234,9 +247,28 @@ Betriebshinweise:
   zuzuordnen und bleiben `unknown` (Folgepaket E128).
 - `unknown` mit `control_zone_missing` bzw. `control_zone_own_acl`: Kontrollzone nach Abschnitt 8 einrichten.
 - Ein `unknown` ist kein Fehler des Cleanups; Dateien und `zones.conf` sind wie in `zones[].conf`/`file` angegeben
-  geändert. Der nächste Cleanup bzw. das Monitoring (AS4) prüft erneut.
+  geändert. Der nächste Cleanup prüft erneut; das Monitoring prüft nur zugewiesene Zonen (`zone_verify`, Abschnitt 8b).
 - Während BIND eine große Zone lädt (gemessen 300 000 RR ≈ 1,6 s), antwortet `rndc status` erst nach dem Laden und
   einzelne DNS-Abfragen auch an andere Zonen können ausbleiben (Befund B-M1-1); die Nachverifikation wartet dies ab.
+
+## 8b. Lesende Beobachtung `zones/zone_verify` (AS4b, E109)
+
+Für das Monitoring des Core führt `POST /api/v1/zones/zone_verify.php` (`{"zone_name": "<zone>"}`) **genau eine Runde**
+der Nachverifikation aus Abschnitt 8a aus – dieselben Bausteine, kein Polling, kein Reload, keine Änderung an Dateien,
+Konfiguration oder H.
+
+| Lage | Antwort |
+|---|---|
+| `fencing_mode` `off` | 409 `verification_disabled` |
+| `fencing_mode` fehlt oder ist ungültig | 503 `fence_misconfigured` (E118) |
+| ohne `posix` | 503 `agent_requirement_missing` |
+| ungültiger Zonenname | 400 `zone_name_invalid` |
+| Agent-Sperre nicht innerhalb der Frist (gemeinsame Sperre `LOCK_SH`, keine Beobachtung während einer Änderung) | 503 `lock_timeout` |
+| sonst | 200, `verification` wie in `conf_sync` (`verified`/`serial_differs`/`unknown` mit Rohwerten) |
+
+`system/status` meldet in `observe`/`enforce` `capabilities.zone_verify = 1`; nur solche Agenten fragt das Monitoring ab.
+Ältere Agenten (404) und Agenten in `off` werden nicht abgefragt. Das Monitoring speichert die Beobachtungen nur, wenn
+während der Abfragen kein Publish-Lauf begonnen hat (Wasserstand, `ARCHITECTURE_HISTORY.md` Abschnitt 5j).
 
 ## 9. Upgrade: `fencing_mode` als Pflichtangabe (E118)
 

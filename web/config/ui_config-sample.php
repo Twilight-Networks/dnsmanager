@@ -163,4 +163,14 @@ define('PHP_ERR_REPORT', false); // true = Entwicklungsmodus, false = Produktivm
 // Optional: eigenes Verzeichnis für den Ratenstatus des Endpunkts (absolut; wird mit 0700 angelegt, muss dem
 // Webserver-Benutzer gehören). Ohne Eintrag: privates Unterverzeichnis im temporären Verzeichnis.
 // define('CSP_REPORT_STATE_DIR', '/var/lib/dnsmanager/csp');
+
+/** ---------------------------------------
+ *  Fencing-Domäne der Installation (AS4b, E74)
+ *  UUID in Kleinbuchstaben; muss system_status.fence_domain entsprechen. Ohne Eintrag oder bei Abweichung startet
+ *  kein Publish-Lauf (fail-closed; auch kein DynDNS-Publish). Einrichtung: Wert hier setzen (z. B. aus
+ *  cat /proc/sys/kernel/random/uuid), dann einmalig: php scripts/fence_admin-cli.php init-domain --domain=<uuid>
+ *  Dieselbe Domäne erhalten die Agenten (agent_fence-cli.php init) erst mit dem Wechsel nach observe/enforce.
+ *  Die Domäne ist kein Geheimnis, aber je Installation eindeutig (nicht aus einer anderen Installation kopieren).
+ * --------------------------------------- */
+// define('FENCE_DOMAIN', '00000000-0000-4000-8000-000000000000');
 ?>

@@ -25,6 +25,10 @@
  * "dnsmanager_run_<12 Hex der Datenbank>_<Lauf-ID>". Advisory-Sperren enden mit der Verbindung und mit jedem
  * Neustart des Datenbankservers; eine wiederverwendete Verbindungs-ID hält diese Sperre nie. Lebendig ist ein Lauf
  * nur, wenn er running ist und dieselbe Verbindung (connection_id) beide Sperren hält (PublishJournalReader).
+ *
+ * AS4b (Migration 007, J4a): Die Agent-Rohwerte je Kanal (Protokoll, effect, installierter Stand, Reload, Fencing,
+ * L3-Rohwerte bzw. Cleanup-Zähler) werden im SELBEN bedingten UPDATE wie der Endzustand geschrieben – also genau einmal,
+ * nie danach. assertRunAlive() prüft unmittelbar vor jedem Agent-Aufruf Publish-Lock und laufeigene Sperre (E83).
  */
 
 require_once __DIR__ . '/../TopologyLock.php';
@@ -32,6 +36,7 @@ require_once __DIR__ . '/../history/HistoryContext.php';
 require_once __DIR__ . '/../history/ZoneStateSnapshot.php';
 require_once __DIR__ . '/PublishRun.php';
 require_once __DIR__ . '/PublishHashContract.php';
+require_once __DIR__ . '/RunLockLost.php';
 
 final class PublishLedger
 {
@@ -41,6 +46,15 @@ final class PublishLedger
     public const TARGET_RESULTS = ['ok', 'failed', 'rejected', 'unknown'];
     public const CLEANUP_RESULTS = ['ok', 'partial', 'failed', 'rejected', 'unknown'];
     public const ATTEMPT_OUTCOMES = ['published', 'partial', 'failed'];
+
+    /** AS4b: zulässige Agent-Ergebnisfelder je Kanal (Migration 007a/007b) */
+    public const AGENT_FIELDS = [
+        'zone' => ['zone_protocol', 'zone_effect', 'zone_installed_serial', 'zone_installed_hash', 'zone_reload', 'zone_fence_decision', 'zone_fence_code'],
+        'conf' => ['conf_protocol', 'conf_effect', 'conf_reload', 'conf_fence_decision', 'conf_fence_code', 'conf_verify_state',
+            'conf_verify_reason', 'conf_verify_file_serial', 'conf_verify_file_hash', 'conf_verify_served_serial'],
+        'cleanup' => ['cleanup_protocol', 'cleanup_effect', 'fence_decision', 'fence_code', 'served_absent_count',
+            'served_still_count', 'served_unknown_count', 'unassigned_count'],
+    ];
 
     private PDO $pdo;
 
@@ -268,18 +282,19 @@ final class PublishLedger
      * @param array{status: string, httpStatus: ?int, errorCode: ?string, errorDetail: ?string} $c PublishTargetClassifier
      * @return bool true = eingetragen; false = kein offener Kanal (Endzustand bleibt unverändert, J4a)
      */
-    public function recordZoneTarget(PublishRun $run, int $attemptId, int $serverId, array $c): bool
+    public function recordZoneTarget(PublishRun $run, int $attemptId, int $serverId, array $c, array $agent = []): bool
     {
-        return $this->recordChannel($run, 'zone', $attemptId, $serverId, $c, null);
+        return $this->recordChannel($run, 'zone', $attemptId, $serverId, $c, null, $agent);
     }
 
-    public function recordConfTarget(PublishRun $run, int $attemptId, int $serverId, array $c, ?string $confHash): bool
+    /** @param array<string, mixed> $agent AS4b: Agent-Ergebnisfelder (AgentResponseParser::journalFields) */
+    public function recordConfTarget(PublishRun $run, int $attemptId, int $serverId, array $c, ?string $confHash, array $agent = []): bool
     {
         if ($confHash !== null && !PublishHashContract::isHash($confHash)) {
             throw new InvalidArgumentException('Ungültiger conf_hash');
         }
 
-        return $this->recordChannel($run, 'conf', $attemptId, $serverId, $c, $confHash);
+        return $this->recordChannel($run, 'conf', $attemptId, $serverId, $c, $confHash, $agent);
     }
 
     /** Ergebnis des Versuchs (operativer Ausgang von processZone; keine L2/L3-Bestätigung, E65) */
@@ -319,23 +334,24 @@ final class PublishLedger
     }
 
     /** @param array{status: string, httpStatus: ?int, errorCode: ?string, errorDetail: ?string, removedConf: ?int, removedZoneFiles: ?int} $c */
-    public function recordCleanup(PublishRun $run, int $serverId, array $c, ?int $validZoneCount): bool
+    public function recordCleanup(PublishRun $run, int $serverId, array $c, ?int $validZoneCount, array $agent = []): bool
     {
         $this->assertAutocommit('recordCleanup');
         $this->assertOpenRun($run);
         if (!in_array($c['status'] ?? null, self::CLEANUP_RESULTS, true)) {
             throw new InvalidArgumentException('Ungültiges Cleanup-Ergebnis');
         }
+        [$agentSet, $agentParams] = self::agentSet('cleanup', $agent, '');
         $counts = in_array($c['status'], ['ok', 'partial'], true);
         $stmt = $this->pdo->prepare(
             'UPDATE publish_cleanup_results SET status = ?, finished_at = NOW(6), valid_zone_count = ?, removed_conf_count = ?,'
-            . ' removed_zone_file_count = ?, http_status = ?, error_code = ?, error_detail = ?'
+            . ' removed_zone_file_count = ?, http_status = ?, error_code = ?, error_detail = ?' . $agentSet
             . " WHERE run_id = ? AND server_id = ? AND status = 'sending'"
         );
-        $stmt->execute([
+        $stmt->execute(array_merge([
             $c['status'], $validZoneCount, $counts ? (int)$c['removedConf'] : null, $counts ? (int)$c['removedZoneFiles'] : null,
-            $c['httpStatus'], $c['errorCode'], $c['errorDetail'], $run->id, $serverId,
-        ]);
+            $c['httpStatus'], $c['errorCode'], $c['errorDetail']], $agentParams, [$run->id, $serverId,
+        ]));
 
         return $stmt->rowCount() === 1;
     }
@@ -372,26 +388,65 @@ final class PublishLedger
 
     /* ------------------------------------------------------------------------------------------------ */
 
-    private function recordChannel(PublishRun $run, string $ch, int $attemptId, int $serverId, array $c, ?string $confHash): bool
+    private function recordChannel(PublishRun $run, string $ch, int $attemptId, int $serverId, array $c, ?string $confHash, array $agent = []): bool
     {
         $this->assertAutocommit('record' . ucfirst($ch) . 'Target');
         $this->assertOpenRun($run);
         if (!in_array($c['status'] ?? null, self::TARGET_RESULTS, true)) {
             throw new InvalidArgumentException('Ungültiges Zielergebnis');
         }
+        [$agentSet, $agentParams] = self::agentSet($ch, $agent, 't.');
         $hashSet = $ch === 'conf' ? ', t.conf_hash = ?' : '';
         $sql = "UPDATE zone_publish_targets t JOIN zone_publish_attempts a ON a.id = t.attempt_id"
-            . " SET t.{$ch}_sync = ?, t.{$ch}_sync_at = NOW(6), t.{$ch}_http_status = ?, t.{$ch}_error_code = ?, t.{$ch}_error_detail = ?$hashSet"
+            . " SET t.{$ch}_sync = ?, t.{$ch}_sync_at = NOW(6), t.{$ch}_http_status = ?, t.{$ch}_error_code = ?, t.{$ch}_error_detail = ?$hashSet$agentSet"
             . " WHERE t.attempt_id = ? AND t.server_id = ? AND a.run_id = ? AND t.{$ch}_sync = 'sending'";
         $params = [$c['status'], $c['httpStatus'], $c['errorCode'], $c['errorDetail']];
         if ($ch === 'conf') {
             $params[] = $confHash;
         }
+        array_push($params, ...$agentParams);
         array_push($params, $attemptId, $serverId, $run->id);
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
 
         return $stmt->rowCount() === 1;
+    }
+
+    /**
+     * AS4b (E83): unmittelbar vor jedem Agent-Aufruf – Publish-Lock und laufeigene Sperre auf der Verbindung des Laufs.
+     *
+     * @throws RunLockLost wenn eine Sperre nicht mehr gehalten wird oder die Prüfung selbst scheitert (fail-closed)
+     */
+    public function assertRunAlive(PublishRun $run): void
+    {
+        try {
+            $this->assertRunLocks($run);
+        } catch (Throwable $e) {
+            throw new RunLockLost("Lauf {$run->id}: Laufberechtigung verloren – kein weiterer Agent-Aufruf (" . $e->getMessage() . ')', 0, $e);
+        }
+    }
+
+    /**
+     * SET-Teil der Agent-Ergebnisfelder (nur Schlüssel aus AGENT_FIELDS; fehlende Schlüssel werden nicht geschrieben).
+     *
+     * @return array{0: string, 1: array<int, mixed>}
+     */
+    private static function agentSet(string $channel, array $agent, string $prefix): array
+    {
+        $set = '';
+        $params = [];
+        foreach ($agent as $col => $value) {
+            if (!in_array($col, self::AGENT_FIELDS[$channel], true)) {
+                throw new InvalidArgumentException("Unbekanntes Agent-Ergebnisfeld '$col'");
+            }
+            if ($value !== null && !is_int($value) && !is_string($value)) {
+                throw new InvalidArgumentException("Ungültiger Wert für '$col'");
+            }
+            $set .= ", {$prefix}{$col} = ?";
+            $params[] = $value;
+        }
+
+        return [$set, $params];
     }
 
     private function assertAutocommit(string $op): void

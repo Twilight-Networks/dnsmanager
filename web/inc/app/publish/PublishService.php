@@ -61,6 +61,13 @@
  * - changed/bind_dirty, Meldungen, Ergebnisstatus und Web-Verträge bleiben unverändert (J8); die Berichte enthalten
  *   zusätzlich 'runId' und 'journal'.
  * Das operative Ergebnis 'published' ist keine L2-/L3-Bestätigung (E65): Vor AS sind alle Bestätigungen "legacy".
+ *
+ * AS4b (E74, E81, E83, K2; docs/ARCHITECTURE_HISTORY.md Abschnitt 5j): Unter dem Publish-Lock und VOR J6/J1 prüft
+ * openJournal() die Fencing-Domäne (FenceContext: Datenbank = Web-Konfiguration) und – falls das Backend Agent-Status
+ * liefert (FenceStatusProvider) – den Restore-Abgleich der Lauf-IDs gegen gemeldete Höchststände. Scheitert eines
+ * davon, endet der Lauf mit 'exception' ohne Journal-Eintrag und ohne Seiteneffekt. Danach bildet die Lauf-ID das
+ * Fencing-Token; vor jedem Agent-Aufruf prüft das Backend über PublishJournal::beforeAgentCall() Publish-Lock und
+ * laufeigene Sperre (fail-closed, RunLockLost). changed/bind_dirty und Web-Verträge bleiben unverändert (J8).
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -71,6 +78,9 @@ require_once __DIR__ . '/../history/HistoryContext.php';
 require_once __DIR__ . '/PublishBackend.php';
 require_once __DIR__ . '/PublishLedger.php';
 require_once __DIR__ . '/PublishJournal.php';
+require_once __DIR__ . '/FenceContext.php';
+require_once __DIR__ . '/FenceStatusProvider.php';
+require_once __DIR__ . '/ServerVerificationStore.php';
 
 final class PublishService
 {
@@ -83,13 +93,15 @@ final class PublishService
     private PDO $pdo;
     private PublishBackend $backend;
     private Closure $logger;
+    private FenceContext $fence;
 
     /**
      * @param PDO            $pdo     Verbindung mit PDO::ERRMODE_EXCEPTION
      * @param PublishBackend $backend Infrastruktur (muss dieselbe Verbindung verwenden)
      * @param callable|null  $logger  callable(string $level, string $message): void
+     * @param FenceContext|null $fence AS4b: Fencing-Domäne der Web-Konfiguration (Standard: FENCE_DOMAIN)
      */
-    public function __construct(PDO $pdo, PublishBackend $backend, ?callable $logger = null)
+    public function __construct(PDO $pdo, PublishBackend $backend, ?callable $logger = null, ?FenceContext $fence = null)
     {
         if ((int)$pdo->getAttribute(PDO::ATTR_ERRMODE) !== PDO::ERRMODE_EXCEPTION) {
             throw new InvalidArgumentException('PublishService benötigt eine PDO-Verbindung mit PDO::ERRMODE_EXCEPTION.');
@@ -97,6 +109,7 @@ final class PublishService
 
         $this->pdo = $pdo;
         $this->backend = $backend;
+        $this->fence = $fence ?? FenceContext::fromConfig();
         $this->logger = $logger !== null
             ? Closure::fromCallable($logger)
             : static function (string $level, string $message): void {
@@ -813,6 +826,11 @@ final class PublishService
      */
     private function openJournal(PublishLedger $ledger, callable $describe): PublishJournal
     {
+        // AS4b (K2, E74, E81): Domänenprüfung und Restore-Abgleich vor J6/J1 – Fehler ⇒ exception ohne Journal-Eintrag
+        $domain = $this->fence->resolve($this->pdo);
+        $restore = $this->backend instanceof FenceStatusProvider
+            ? FenceContext::checkRestore($this->pdo, $this->backend->agentFenceStatus())
+            : null;
         try {
             $ledger->abandonStale();
             [$kind, $zoneId, $fullRebuild, $ctx] = $describe();
@@ -824,7 +842,7 @@ final class PublishService
         // Lauf wird deshalb hier abgeschlossen (exception) und seine laufeigene Sperre auf dieser – ggf. weiterverwendeten –
         // Verbindung freigegeben; danach Abbruch wie J1 ohne Seiteneffekt.
         try {
-            $journal = new PublishJournal($ledger, $run, $this->logger);
+            $journal = new PublishJournal($ledger, $run, $this->logger, $domain, new ServerVerificationStore($this->pdo, $this->logger), $restore);
             $this->backend->bindJournal($journal);
         } catch (Throwable $e) {
             try {

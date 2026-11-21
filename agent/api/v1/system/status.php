@@ -124,6 +124,7 @@ if (in_array(fenceMode($config), ['observe', 'enforce'], true) && agentPosixAvai
     $proof = dnsConfigProof($config);
     $response['capabilities']['serial_rule'] = 1;
     $response['capabilities']['state_check'] = 1;
+    $response['capabilities']['zone_verify'] = 1;   // AS4b (E109): lesender Endpunkt zones/zone_verify
     $response['verification'] = [
         'config'       => $proof['state'],
         'config_reason' => $proof['reason'],

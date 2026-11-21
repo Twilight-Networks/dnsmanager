@@ -15,19 +15,20 @@
 require_once __DIR__ . '/../app/monitoring/MonitoringBackend.php';
 require_once __DIR__ . '/BindAgentClient.php';
 require_once __DIR__ . '/AgentCertificateExpiryCheck.php';
+require_once __DIR__ . '/../app/monitoring/ZoneVerifyBackend.php';
 
-final class AgentMonitoringBackend implements MonitoringBackend
+final class AgentMonitoringBackend implements MonitoringBackend, ZoneVerifyBackend
 {
     /** Gesamt-Timeout je Prüfung (unverändert) */
     private const TIMEOUT = 5;
 
-    private BindAgentClient $agent;
+    private AgentClient $agent;
     private ?AgentCertificateExpiryCheck $certCheck;
 
     /**
      * @param AgentCertificateExpiryCheck|false|null $certCheck null = aus der Konfiguration, false = keine Prüfung
      */
-    public function __construct(?BindAgentClient $agent = null, AgentCertificateExpiryCheck|false|null $certCheck = null)
+    public function __construct(?AgentClient $agent = null, AgentCertificateExpiryCheck|false|null $certCheck = null)
     {
         $this->agent = $agent ?? BindAgentClient::fromConfig();
         $this->certCheck = $certCheck === null ? AgentCertificateExpiryCheck::fromConfig() : ($certCheck ?: null);
@@ -114,11 +115,28 @@ final class AgentMonitoringBackend implements MonitoringBackend
         return $result;
     }
 
-    /** Systemstatus des Agenten (Auswertung unverändert) */
+    /** @var array<int, bool> AS4b: Fähigkeit zone_verify je Server aus system/status dieses Laufs */
+    private array $zoneVerify = [];
+
+    public function supportsZoneVerify(int $serverId): bool
+    {
+        return $this->zoneVerify[$serverId] ?? false;
+    }
+
+    public function verifyZone(string $zoneName, array $server): array
+    {
+        return $this->agent->postJson($server['api_ip'], '/zones/zone_verify.php', (string)$server['api_token'], ['zone_name' => $zoneName], null, self::TIMEOUT);
+    }
+
+    /** Systemstatus des Agenten (Auswertung unverändert; AS4b merkt sich zusätzlich die Fähigkeit zone_verify) */
     private function agentServerStatus(array $server): array
     {
         $r = $this->agent->get($server['api_ip'], '/system/status.php', (string)$server['api_token'], null, self::TIMEOUT);
         $http_code = $r['httpCode'];
+        $parsed = is_string($r['body'] ?? null) ? json_decode((string)$r['body'], true) : null;
+        $this->zoneVerify[(int)($server['id'] ?? 0)] = empty($r['curlError']) && $http_code === 200 && is_array($parsed)
+            && (int)($parsed['capabilities']['zone_verify'] ?? 0) === 1
+            && in_array($parsed['fencing']['mode'] ?? null, ['observe', 'enforce'], true);
 
         if (!empty($r['curlError'])) {
             return [

@@ -15,8 +15,11 @@ Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meile
   lokale CLI, dauerhafte Dateioperationen) und **AS2a** (Abschnitt 5f: RFC-1982-Serial-Regel, Konfigurations- und
   DNS-Zustandsprüfung vor der Übernahme, Fristen, Wirkungsangabe `effect`, Klassifizierung im Core) und **AS2b**
   (Abschnitt 5g: Nachverifikation nach dem Reload in `conf_sync`, Nachweis der Entfernung im Cleanup, Polling mit
-  Zeitbudget). Alle übrigen hier beschriebenen Tabellen, Klassen, Agent-Erweiterungen und Abläufe existieren im Code noch
-  nicht; insbesondere sendet der Core noch kein Fencing-Token und wertet die Nachverifikation noch nicht aus (AS4).
+  Zeitbudget), **AS3** (Abschnitt 5h: Migration 006), **AS4a** (Abschnitt 5i: Migration 007) und **AS4b** (Abschnitt 5j:
+  Fencing-Domäne und -Token im Core, Laufprüfung vor jedem Agent-Aufruf, Restore-Abgleich, Auswertung der Agent-Antworten,
+  `zone_server_verification`, `zone_verify` im Monitoring). Alle übrigen hier beschriebenen Tabellen, Klassen,
+  Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere sind die Serial-Strategie im Core (AS5) und
+  die Einführung von `observe`/`enforce` (AS6) offen.
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -1135,6 +1138,127 @@ initialisiert). AS4b initialisiert sie per Admin-CLI und prüft sie **vor J6/J1*
 - `tests/history/as4a_test.php` unter RR und RC: G Brücke, C CHECK-Vertrag, K Code × Schema, V unveränderter
   Journalablauf vor/nach 007, S statische Nachweise.
 
+## 5j. Festlegungen AS4b (umgesetzt)
+
+**Umfang:** Core-Integration der Agent-Sicherheit und L3-Verifikation auf dem Schema nach Migration 007. Grundlage:
+AS4-Plan Abschnitt 6 mit O1–O10, K1–K3 und R1, Freigabe vom 21.11.2026. Nicht enthalten: AS5 (Serial-Strategie im
+Core, E110), AS6 (Aktivierung `enforce`), History-UI, Discard und Restore. Fencing bleibt in der Auslieferung `off`; der
+Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 008, keine neue Spalte).
+
+**Schema (E):**
+- Der Code verlangt 007 strikt: `SchemaCheck::HISTORY_TABLES` enthält für `zone_publish_targets` und
+  `publish_cleanup_results` die Signatur nach 007, `REQUIRED` zusätzlich `system_status.fence_domain`. Vor oder während
+  007 ist der Login fail-closed (genau die Befunde der offenen Schritte).
+- Die Brücke aus AS4a bleibt nur als Sicht des Migrationswerkzeugs: `HISTORY_TABLES_PRE007` mit der Signatur vor 007 und
+  `evaluateHistory($rows, acceptPre007: true)` in `schema_history-cli.php evaluate`. Die Skripte 005–007 erkennen damit
+  weiterhin beide Stände.
+- Operativer Rückfall ist der AS4a-Code (`17241fb`) auf dem Schema nach 007; der Notfall-Rückbau von 007 setzt den
+  AS4a-Code voraus (`sql/migrations/README.md`, Abschnitt 007).
+
+**Fencing im Core (A, E74, E83, F5):**
+- `FenceContext`: Vor jedem Lauf, unter dem Publish-Lock und **vor J6/J1** (K2), müssen `system_status.fence_domain` und
+  die Web-Konfiguration (`FENCE_DOMAIN` in `ui_config.php`) gesetzt, gültig (UUID in Kleinbuchstaben) und gleich sein.
+  Sonst Ergebnis `exception` mit „Fencing: …“, ohne Journal-Eintrag, ohne Agent-Aufruf, Flags unverändert. Das gilt für
+  Publish All, Publish Zone und den DynDNS-Publish.
+- Token ist die registrierte Lauf-ID (J1). `zone_sync`, `conf_sync` und `zone_cleanup` erhalten `fence_token` und
+  `fence_domain`; andere Endpunkte (`system/status`, `zone_verify`) nie. Agenten in `off` ignorieren die Felder (E95).
+- `PublishJournal::beforeAgentCall()` prüft unmittelbar vor **jedem** Agent-Aufruf Publish-Lock und laufeigene Sperre
+  (`PublishLedger::assertRunAlive`). Bei Verlust: Ziel `failed` mit lokalem Code `run_lock_lost` (sicher nicht
+  gesendet), Ausnahme `RunLockLost`, kein weiterer Request; der Lauf endet als `exception`, die Flags gehen 2 → 1.
+- **Restore-Abgleich (E81, O3):** Vor J6/J1 fragt der Core `system/status` aller aktiven Server ab
+  (`FenceStatusProvider`, Frist 5 s). Meldet ein Agent in `observe`/`enforce` einen Höchststand H ≥ nächster Lauf-ID
+  (`GREATEST(MAX(id) + 1, AUTO_INCREMENT)`), startet kein Lauf. Agenten in `off`, Legacy-Agenten und nicht erreichbare
+  Agenten blockieren nicht und stehen im Bericht. Behoben wird ein Konflikt nur über die Admin-CLI.
+- **Admin-CLI** `web/scripts/fence_admin-cli.php` (`FenceAdminService`, nur CLI):
+  - `status`: Domänen, nächste Lauf-ID, Agentenstatus, Restore-Bewertung;
+  - `init-domain --domain=<uuid>`: einmalig, nur wenn NULL und gleich `FENCE_DOMAIN`;
+  - `raise-runs --above=<n>`: nächste Lauf-ID auf n + 1 anheben, nie senken (Recht `ALTER` auf `publish_runs`).
+  - Schreibende Befehle nur unter dem Publish-Lock (Try-Lock). Kein automatischer Abgleich.
+- **Betriebsvoraussetzung** (vor dem Update auf AS4b): `FENCE_DOMAIN` in `ui_config.php` setzen und
+  `fence_admin-cli.php init-domain` ausführen. Ohne beides startet nach dem Update kein Publish (fail-closed).
+
+**Antworten und Journal (B, E113, J4a, R1):**
+- `AgentResponseParser` ist die einzige Auswertung der AS2-Felder. Die operative Einordnung bleibt beim unveränderten
+  `PublishTargetClassifier` (E113); der Parser ändert weder Status noch Flags.
+- Protokoll: ohne verwertbares JSON NULL, ohne `effect` `legacy`, mit gültigem `effect` `as2`; ein ungültiges `effect`
+  macht das Protokoll unbestimmt (keine AS2-Felder). Jedes Feld wird einzeln streng geprüft (Wertemengen, Serial
+  0…2³²−1 als Zahl oder Ziffernfolge, sha256 in Kleinbuchstaben, Gründe `[a-z0-9_:]{1,64}`); ungültige Felder werden
+  nicht gespeichert.
+- **Installierter Stand (R1):** Serial und Hash nur gemeinsam, nur bei `effect` applied/unchanged mit Reload-Bericht und
+  nur in den zwei Fällen aus `chk_zpt_zone_installed`: `ok` mit Reload `ok`, `unknown` mit Reload
+  failed/timeout/not_started. Er ist ein Rohwert und erzeugt nie einen Nachweis; das Ziel bleibt `unknown`, die Zone
+  ausstehend.
+- **Verifikation aus `conf_sync`:** `verified` nur bei Einordnung `ok`, gleichen Serials und Datei-Hash; sonst Herabstufung
+  zu `unknown` mit Grund `verification_invalid`. `serial_differs` nur mit beiden, verschiedenen Serials.
+- Die Felder werden im selben bedingten Endzustands-UPDATE wie der Kanal geschrieben (`PublishLedger::AGENT_FIELDS` als
+  Whitelist), also genau einmal (J4a). `agent_protocol` bleibt Registrierungszustand (K3).
+- Cleanup: Journal nur mit Zählern (absent, still_served, unknown, nicht zuordenbar).
+
+**Matrix E77/J8 (operativ unverändert):**
+
+| Agent-Antwort (`conf_sync`) | Journal `conf_sync` | Flags | Beobachtung `zone_server_verification` |
+|---|---|---|---|
+| nicht zugestellt | `failed` | ausstehend | keine |
+| Zeitüberschreitung | `unknown` | ausstehend | `unknown`/`agent_timeout` |
+| Ablehnung (z. B. `stale_fence`) | `rejected` | ausstehend | keine |
+| Reload gescheitert | `unknown` | ausstehend | `unknown` mit Grund |
+| Legacy bzw. AS2a ohne Verifikation | `ok` | veröffentlicht | keine |
+| `verified` | `ok` | veröffentlicht | `verified`, positiver Nachweis |
+| `serial_differs` / `unknown` | `ok` | veröffentlicht (E107: L3 ändert die operative Einordnung nicht) | `serial_differs` bzw. `unknown` |
+
+**Persistenz (C, E87, K3):**
+- `ServerVerificationStore` ist der einzige Schreiber und Leser von `zone_server_verification`.
+- Letzte Beobachtung (`last_*`) und letzter positiver Nachweis (`verified_*`) sind getrennt. `verified_*` wird nur bei
+  `verified` geschrieben (gleich dieser Beobachtung, `verified_run_id` = Lauf bzw. NULL beim Monitoring) und von
+  negativen oder unbekannten Beobachtungen nie überschrieben oder gelöscht.
+- Je Paar eine eigene kurze Transaktion: `SELECT … FOR UPDATE`, Ordnungsprüfung, `last_observed_at` monoton
+  (`GREATEST(NOW(6), bisheriger Wert)`), INSERT oder UPDATE. Bei 1020/1213 genau eine Wiederholung.
+- **Ordnungsvertrag:** Schlüssel (`last_run_id`, Quelle). Publish verwendet den Lauf R, Monitoring den Wasserstand W. Ein
+  größerer Schlüssel gewinnt. Bei gleichem Schlüssel gilt nur die ausdrückliche Rangfolge `conf_sync` → `cleanup` →
+  `monitoring` sowie `monitoring` → `monitoring`; nie die Serial.
+- Publish-Beobachtungen prüfen in ihrer Transaktion zusätzlich die Laufsperre; ohne Laufberechtigung wird nichts
+  gespeichert (stale).
+- Schreibfehler ändern weder das operative Ergebnis noch das Journal: Rollback, Logzeile „[publish] Verifikation: …“,
+  Zähler im Laufbericht (`journal.verification`).
+- **Cleanup:** Eine Beobachtung wird nur gespeichert, wenn der gemeldete Zonenname für den Server genau eine Zeile in
+  `zone_server_verification` hat und die Zone dem Server nicht mehr zugewiesen ist. Sonst zählt sie als nicht
+  zuordenbar; es entsteht keine Zeile. `still_served` ohne `served_serial` wird `unknown`/`still_served_no_serial`.
+- AS3-CHECKs unverändert.
+
+**Agent und Monitoring (D, E76, E109):**
+- Lesender Endpunkt `zones/zone_verify.php`: genau eine Runde der AS2b-Nachverifikation (`verifyLoadedOnce`, dieselben
+  Bausteine, kein Polling) unter der gemeinsamen Agent-Sperre (`LOCK_SH` mit Frist). In `off` 409
+  `verification_disabled`, ohne `posix` 503, ungültiger Zonenname 400. `system/status` meldet
+  `capabilities.zone_verify = 1` in `observe`/`enforce`.
+- Cleanup meldet bei `still_served` zusätzlich `served_serial` aus der entscheidenden DNS-Beobachtung (additiv, E125).
+- Monitoring (`MonitoringService::observeL3`) fragt nur Server mit dieser Fähigkeit; Diagnosen und Benachrichtigungen
+  bleiben unverändert. Ablauf:
+  - Publish-Lock (0 s) holen, W = `MAX(publish_runs.id)` lesen, Lock freigeben (belegt ⇒ `publish_active`, keine Abfrage);
+  - Abfragen ohne Lock;
+  - Speicherung erneut unter dem Publish-Lock, nur wenn `MAX(id)` noch W ist (sonst `discarded`).
+- Lock-Reihenfolge: `dnsmanager_monitoring` vor `dnsmanager_publish_all` (`ARCHITECTURE_CORE.md`, Abschnitt 1).
+- **Mischbetrieb:** Legacy-Agenten liefern weder AS2-Felder noch Beobachtungen; AS2a-Agenten ohne `verification`
+  liefern Journalfelder, aber keine Beobachtung. Ältere Agenten ohne `zone_verify` (404) werden im Monitoring nicht
+  abgefragt.
+
+**Tests (AS4b):**
+- `tests/history/as4b_test.php` unter RR und RC mit dem Ersatz-Agenten `as4b_fake_agent.php` (`AgentClient`, kein
+  Netzwerk, kein `named`). Gruppen:
+  - F Domäne und Token;
+  - R Restore-Abgleich und Admin-Dienst;
+  - L Lock-Verlust (RELEASE_LOCK, KILL);
+  - P Parser;
+  - J Journal und Matrix E77/J8, R1, Mischbetrieb;
+  - O Ordnungsvertrag, Nachweiserhalt, Stresslauf;
+  - C Cleanup-Zuordnung;
+  - M Monitoring-Wasserstand und Konkurrenz;
+  - E Fehlerinjektion;
+  - X Code × Schema;
+  - S statisch.
+- `tests/history/as4b_mutation_test.sh` mit 16 Mutationsproben.
+- Angepasst: Migrationstests 002–007 (strikte Befunde vor 007, Werkzeugsicht), `as3_test.php`, `as4a_test.php`,
+  `static_rh8_test.php`.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -1409,7 +1533,7 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` – **umgesetzt** (Abschnitt 5b, Migration 003, Tests `tests/history`) | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung – **umgesetzt** (Abschnitt 5c, Migration 004, Tests `tests/history`) | keine Geheimnisse (Suchtest); atomar mit Fachänderung; RR und RC; Web-Golden identisch |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung – **umgesetzt** (Abschnitt 5d, Migration 005, Tests `tests/history`) | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
-| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16); Arbeitspakete AS0 (Vorprüfung, geprüft), AS1 (Agent-Fencing, umgesetzt, Abschnitt 5e), AS2 (Serial-Regel, L3), AS3 (Migration 006, umgesetzt, Abschnitt 5h), AS4 (Core), AS5 (Serial-Strategie), AS6 (Einführung), AS7 (Doku) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
+| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16); Arbeitspakete AS0 (Vorprüfung, geprüft), AS1 (Agent-Fencing, umgesetzt, Abschnitt 5e), AS2 (Serial-Regel, L3), AS3 (Migration 006, umgesetzt, Abschnitt 5h), AS4 (AS4a Migration 007, umgesetzt, Abschnitt 5i; AS4b Core-Integration, umgesetzt, Abschnitt 5j), AS5 (Serial-Strategie), AS6 (Einführung), AS7 (Doku) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
 | **H3** | Historienoberfläche: Core-Read-Services (`ZoneHistoryReadService`, `ZoneSyncReadService`) **und** Weboberfläche mit Historienliste, Filtern, Detailansichten, Vorher-/Nachher-Vergleich, Berechtigungen und Paginierung | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse; Oberfläche nach `docs/UI_GUIDELINES.md` und `docs/UI_ROLE_MATRIX.md`, Web-Golden für bestehende Seiten unverändert |
 | **H4** | abgeleitete Zustände, `ZoneDiscardService` | alle Sperrgründe; Race-Tests (Lock-Wait, Gegenprobe, Mutationsprobe); Discard nur aus `pending_clean` |
 | **H4b** | Gruppen-Discard | Abhängigkeitshülle, Vorschau, Berechtigung für alle Zonen |
@@ -1509,20 +1633,20 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E71 | Lauf-ID als künftiger Fencing-Token, keine AS-Vorwegnahme | freigegeben (H2d) |
 | E72 | Web-Verträge unverändert; Abweichungen nur unter Fehlerinjektion | freigegeben (H2d) |
 | E73 | Laufeigene Advisory-Sperre als Identitätsnachweis (Neustart, Verbindungs-ID-Wiederverwendung); Testumgebung isoliert (Q1) | umgesetzt (H2d, Präzisierungen 1 und 3) – zur Bestätigung im Review |
-| E74 | Eigene Fencing-Domäne je Installation; der Agent prüft Anfrage- und gespeicherte Domäne gegen seine lokal konfigurierte Domäne; Core-Prüfung DB ↔ Web-Konfiguration zusätzlich (AS4); Schutzgrenze: vollständiger Installationsklon nicht erkennbar (Abschnitt 5e) | entschieden; Agent-Teil umgesetzt (AS1) |
+| E74 | Eigene Fencing-Domäne je Installation; der Agent prüft Anfrage- und gespeicherte Domäne gegen seine lokal konfigurierte Domäne; Core-Prüfung DB ↔ Web-Konfiguration zusätzlich (AS4); Schutzgrenze: vollständiger Installationsklon nicht erkennbar (Abschnitt 5e) | umgesetzt (Agent AS1; Core AS4b, Abschnitt 5j: vor J6/J1, Admin-CLI `init-domain`) |
 | E75 | `system/control reload` ohne Fencing, unter demselben `flock` | entschieden (AS1) |
-| E76 | L3 im Agenten nach dem Reload mit begrenztem Polling, zusätzlich periodisch im Monitoring | entschieden; Polling umgesetzt (AS2b: nur `conf_sync` und `zone_cleanup`, Fenster 10 s, gemeinsames Budget je Cleanup), Monitoring in AS4 |
+| E76 | L3 im Agenten nach dem Reload mit begrenztem Polling, zusätzlich periodisch im Monitoring | entschieden; Polling umgesetzt (AS2b: nur `conf_sync` und `zone_cleanup`, Fenster 10 s, gemeinsames Budget je Cleanup); Monitoring umgesetzt (AS4b, `zone_verify`, Abschnitt 5j) |
 | E77 | Reload-Fehler oder `not_loaded` ⇒ Ziel nicht veröffentlicht, Zone bleibt ausstehend; **Timeout ⇒ immer `unknown`** (nie `not_loaded`/`rejected`), Zone unbestätigt und ausstehend bis zur tatsächlichen Verifikation | entschieden, Umsetzung AS2/AS4 |
 | E78 | Serial-Wahl nach RFC 1982 vollständig (Abstand 2³¹ undefiniert ⇒ nicht größer), Referenzmenge aus DB-Serial, bestätigten, zuletzt verifizierten und gemeldeten Serials je Zone und Server; keine numerische Sortierung; sonst Sperre `serial_unresolvable` | entschieden (= E15), Umsetzung AS5 |
 | E79 | `zones.soa_serial` → `INT UNSIGNED` | umgesetzt (AS3, Abschnitt 5h) |
 | E80 | Agent: fehlende Zonendatei ⇒ Installation unter gültigem Fencing; lesbar, aber ungültig ⇒ kontrollierter Reparaturpfad (nur mit ausdrücklichem Kennzeichen aus einer Admin-Core-Operation); nicht lesbar ⇒ fail-closed; kein Überschreiben unbekannter Zustände | umgesetzt (AS2a, präzisiert durch E103: fehlende Datei nur bei nachweislich nicht konfigurierter und nicht ausgelieferter Zone bzw. gegenüber der ausgelieferten Serial) |
-| E81 | Agent senkt H nie; kein API-Reset; lokale CLI nur `init` (ohne H) und `raise`; nach DB-Restore kontrollierter Abgleich durch den Core (AS4) | entschieden; CLI umgesetzt (AS1) |
+| E81 | Agent senkt H nie; kein API-Reset; lokale CLI nur `init` (ohne H) und `raise`; nach DB-Restore kontrollierter Abgleich durch den Core (AS4) | umgesetzt (CLI AS1; Core-Abgleich vor J6/J1 und `fence_admin-cli.php raise-runs` AS4b, Abschnitt 5j) |
 | E82 | Modi `off` → `observe` → `enforce`, unbekannter Wert fail-closed; Einführung zuerst auf ns2. **Geändert durch E118:** `off` nur noch ausdrücklich, kein Standardwert | entschieden; umgesetzt (AS1); geändert (AS2a, E118) |
-| E83 | Core prüft vor jedem Agentaufruf Publish-Lock und Laufsperre, sonst Abbruch | entschieden, Umsetzung AS4 |
+| E83 | Core prüft vor jedem Agentaufruf Publish-Lock und Laufsperre, sonst Abbruch | umgesetzt (AS4b, `PublishJournal::beforeAgentCall`, Ziel `run_lock_lost`, Abschnitt 5j) |
 | E84 | `fsync` auch für Zonen- und Konfigurationsdateien | entschieden; umgesetzt (AS1) |
 | E85 | Discard unveröffentlichter Änderungen (Admin; zoneadmin nur berechtigte Zonen; ohne L3, sofern seit P kein möglicherweise verteilter Versuch existiert) und Restore veröffentlichter oder möglicherweise verteilter Revisionen (Admin alle, zoneadmin berechtigte Zonen; `partial`/`unknown` nur Admin) sind getrennte Core-Vorgänge; Restore veröffentlicht nie selbst und löst nie Publish All aus (ersetzt die Empfehlung zu E4) | entschieden, Umsetzung H4/H5 |
 | E86 | Absturztests per dm-flakey | entschieden; umgesetzt (AS1) |
-| E87 | `zone_server_verification` als retentionsfeste Tabelle des letzten Stands | umgesetzt (AS3, Abschnitt 5h; Schreibregeln AS4b, Ordnungsvertrag Abschnitt 5i) |
+| E87 | `zone_server_verification` als retentionsfeste Tabelle des letzten Stands | umgesetzt (AS3, Abschnitt 5h; Schreibregeln und Ordnungsvertrag AS4b, `ServerVerificationStore`, Abschnitte 5i/5j) |
 | E88 | AS-PRs nacheinander | entschieden |
 | E89 | Verzeichnis-`fsync` nativ in PHP (`fopen($dir, 'r')`), kein `sync`-Ersatz | entschieden (AS0); umgesetzt (AS1) |
 | E90 | Write-ahead-Fehlermarke: dauerhaft vor jeder Änderung von H, Entfernen erst nach vollständiger Persistenz; Aufheben nur lokal per CLI | entschieden (Präzisierung AS1); umgesetzt |
@@ -1544,7 +1668,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E106 | Polling nur in `conf_sync` (10 s) und `zone_cleanup` (10 s gemeinsam), nacheinander, höchstens eine Kontrollabfrage je Runde | umgesetzt (AS2b) |
 | E107 | `verified` = autoritative SOA mit der Serial der verwalteten Datei bei K = ja; belegt Serial-Übereinstimmung, nicht Inhaltsgleichheit; ändert nie den HTTP-Status | umgesetzt (AS2b) |
 | E108 | `zone_sync` ohne Polling; Nachverifikation einer neuen Zone über `conf_sync` | umgesetzt (AS2b) |
-| E109 | Lesender Endpunkt `zone_verify` | verschoben nach AS4 |
+| E109 | Lesender Endpunkt `zone_verify` | umgesetzt (AS4b: eine Runde ohne Polling unter `LOCK_SH`, nur `observe`/`enforce`, Abschnitt 5j) |
 | E110 | RFC-1982-Klasse im Core | verschoben nach AS5 (muss die Vektoren aus E102 bestehen) |
 | E111 | Aufteilung AS2a (Grundlage, Schutz) / AS2b (Polling, Nachverifikation, E92); AS2b nur mit AS2a-Bausteinen | entschieden |
 | E112 | Tests gegen die installierten BIND-Instanzen und Agenten auf ns1/ns2; keine zusätzliche BIND-Testumgebung; Fixtures ohne eigenen DNS-Server zulässig (`CLAUDE.md` §5) | entschieden |
@@ -1574,6 +1698,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 21.11.2026 | AS4b umgesetzt: Abschnitt 5j (Fencing-Domäne vor J6/J1, Lauf-ID als Token an `zone_sync`/`conf_sync`/`zone_cleanup`, Laufprüfung vor jedem Agent-Aufruf, Restore-Abgleich und Admin-CLI, `AgentResponseParser` mit R1, Journal-Ergebnisfelder, `ServerVerificationStore` mit Ordnungsvertrag und Nachweiserhalt, Cleanup-Zuordnung, `zone_verify` und Monitoring mit Wasserstand, Code verlangt 007 strikt); E74, E76, E81, E83, E87, E109 umgesetzt; Abschnitte 0 und 18 nachgeführt |
 | 21.11.2026 | Review PR #107, R1: `chk_zpt_zone_installed` erlaubt den vom Agenten gemeldeten installierten Stand auch bei `zone_sync = unknown` nach gescheitertem Reload (as2, effect applied/unchanged, Reload failed/timeout/not_started), weiterhin nur gemeinsam und nie als L2-/L3-Bestätigung; Tests C06b–d, C29b, C30–C30h |
 | 21.11.2026 | AS4a umgesetzt: Abschnitt 5i (Migration 007 mit Agent-Ergebnisfeldern in `zone_publish_targets`/`publish_cleanup_results` und `system_status.fence_domain`, NULL-sichere CHECKs K1, Kompatibilitätsbrücke `HISTORY_TABLES_007`, `agent_protocol` als Registrierungszustand K3, Reihenfolge Domänenprüfung vor J6/J1 K2, Ordnungsvertrag für AS4b); Publish, Journal-Schreibpfade, Monitoring, Agent und Oberfläche unverändert |
 | 20.11.2026 | AS3 umgesetzt: Abschnitt 5h (Migration 006 mit `zones.soa_serial` als `INT UNSIGNED` und Tabelle `zone_server_verification`, Datenvertrag und NULL-sichere CHECKs, Migration unter dem Publish-Lock in einer Sitzung), E79 und E87 umgesetzt; Abschnitte 5 und 10 nachgeführt; Serial-Strategie, Publish, Historie, Agent und Oberfläche unverändert |

@@ -9,12 +9,17 @@
  *   C  CHECK-Vertrag 007a–c: gültige Belegungen, ungültige mit Name der verletzten Bedingung, insbesondere
  *      widersprüchliche NULL-Kombinationen (z. B. zone_protocol NULL bei gesetztem zone_effect) – keine Bedingung
  *      darf durch UNKNOWN erfüllt werden
- *   K  Code × Schema (eigene Prozesse): AS3-Code (Basis) vor 007 ohne Befund, nach 007 fail-closed; Brückencode vor,
- *      nach und in Teilzuständen ohne Befund
+ *   K  Code × Schema (eigene Prozesse): AS3-Code (Basis) vor 007 ohne Befund, nach 007 fail-closed; aktueller Code
+ *      (AS4b, verlangt 007 strikt) vor 007 und in Teilzuständen fail-closed mit genau den offenen Schritten, nach 007 ohne
+ *      Befund. Der Brückencode selbst (AS4a, Rückfallstand) wird in as4b_test.php X02/X04 geprüft.
  *   V  Verhalten unverändert: derselbe Journalablauf (J1, J2 mit echtem Generator, J4, Cleanup, Abschluss) liefert vor
  *      und nach 007 dieselben Journalwerte; die neuen Spalten bleiben leer
- *   S  statisch: web/ und agent/ gegenüber der Basis nur in SchemaCheck.php geändert, HISTORY_TABLES unverändert, die
- *      neuen Spalten werden außerhalb von SchemaCheck nicht verwendet
+ *   S  statisch: HISTORY_TABLES_PRE007 = HISTORY_TABLES der Basis, REQUIRED = Basis plus fence_domain; die neuen
+ *      Spalten nur in SchemaCheck, PublishLedger (Schreiber) und AgentResponseParser (Zuordnung), fence_domain zusätzlich
+ *      in FenceContext/FenceAdminService. (S01 des AS4a-PR – web/ und agent/ nur in SchemaCheck.php geändert – entfällt
+ *      seit AS4b.)
+ * Seit AS4b bewertet G die Brücke in der Sicht des Migrationswerkzeugs (evaluateHistory(…, acceptPre007: true)); die
+ * Anwendung selbst ist strikt (G13).
  *
  * Aufruf (root, Testsystem): php as4a_test.php <App-Verzeichnis> <RR|RC> <Basis-App-Verzeichnis (Stand vor AS4a)>
  */
@@ -63,8 +68,8 @@ $problemsOf = static function (string $appDir): ?array {
     $r = json_decode((string)shell_exec('php -r ' . escapeshellarg($code) . ' 2>&1'), true);
     return is_array($r) ? $r : null;
 };
-$evalRows = static function (array $rows): array {
-    return array_map(static fn (array $x): string => $x['state'], SchemaCheck::evaluateHistory($rows));
+$evalRows = static function (array $rows, bool $tool = true): array {
+    return array_map(static fn (array $x): string => $x['state'], SchemaCheck::evaluateHistory($rows, $tool));
 };
 $rowsFor = static function (array $byTable): array {
     $rows = [];
@@ -86,11 +91,11 @@ foreach ($post as [$tb, $l]) {
     $byTable[(string)$tb][] = (string)$l;
 }
 t('G01 Neuinstallation (nach 007): alle History-Tabellen ok', array_unique(array_values($evalRows($rowsFor($byTable)))) === ['ok']);
-t('G02 Signaturen nach 007 = HISTORY_TABLES_007', $byTable[ZPT] === SchemaCheck::HISTORY_TABLES_007[ZPT] && $byTable[PCR] === SchemaCheck::HISTORY_TABLES_007[PCR]);
+t('G02 Signaturen nach 007 = HISTORY_TABLES (seit AS4b)', $byTable[ZPT] === SchemaCheck::HISTORY_TABLES[ZPT] && $byTable[PCR] === SchemaCheck::HISTORY_TABLES[PCR]);
 foreach (['pre/pre' => [false, false], 'pre/post' => [false, true], 'post/pre' => [true, false], 'post/post' => [true, true]] as $label => [$a, $b]) {
     $m = $byTable;
-    $m[ZPT] = $a ? SchemaCheck::HISTORY_TABLES_007[ZPT] : SchemaCheck::HISTORY_TABLES[ZPT];
-    $m[PCR] = $b ? SchemaCheck::HISTORY_TABLES_007[PCR] : SchemaCheck::HISTORY_TABLES[PCR];
+    $m[ZPT] = $a ? SchemaCheck::HISTORY_TABLES[ZPT] : SchemaCheck::HISTORY_TABLES_PRE007[ZPT];
+    $m[PCR] = $b ? SchemaCheck::HISTORY_TABLES[PCR] : SchemaCheck::HISTORY_TABLES_PRE007[PCR];
     $e = $evalRows($rowsFor($m));
     t("G03 Kombination $label (zone_publish_targets/publish_cleanup_results): ok", $e[ZPT] === 'ok' && $e[PCR] === 'ok' && array_unique(array_values($e)) === ['ok']);
 }
@@ -101,7 +106,7 @@ $mutations = [
     'CHECK fehlt' => [PCR, static fn (array $l): array => array_values(array_filter($l, static fn (string $x): bool => !str_starts_with($x, 'chk|chk_pcr_served|')))],
     'ENUM-Wert ergänzt' => [ZPT, static fn (array $l): array => array_map(static fn (string $x): string => str_starts_with($x, 'col|zone_protocol|') ? str_replace("'as2')", "'as2','as3')", $x) : $x, $l)],
     'NULL-Fähigkeit geändert' => [PCR, static fn (array $l): array => array_map(static fn (string $x): string => str_starts_with($x, 'col|unassigned_count|') ? str_replace('|YES|NULL|', '|NO|~|', $x) : $x, $l)],
-    'Mischform: vor 007 plus eine neue Spalte' => [ZPT, static fn (array $l): array => array_merge(array_slice(SchemaCheck::HISTORY_TABLES[ZPT], 0, 16), ['col|zone_protocol|enum(\'legacy\',\'as2\')|YES|NULL||ascii|ascii_bin'], array_slice(SchemaCheck::HISTORY_TABLES[ZPT], 16))],
+    'Mischform: vor 007 plus eine neue Spalte' => [ZPT, static fn (array $l): array => array_merge(array_slice(SchemaCheck::HISTORY_TABLES_PRE007[ZPT], 0, 16), ['col|zone_protocol|enum(\'legacy\',\'as2\')|YES|NULL||ascii|ascii_bin'], array_slice(SchemaCheck::HISTORY_TABLES_PRE007[ZPT], 16))],
     'Mischform: nach 007 ohne die neuen CHECKs' => [ZPT, static fn (array $l): array => array_values(array_filter($l, static fn (string $x): bool => !preg_match('/^chk\|chk_zpt_(zone_agent|zone_installed|zone_fence|conf_agent|conf_fence|conf_verify|conf_verify_fmt)\|/', $x)))],
     'Reihenfolge der Spalten vertauscht' => [ZPT, static function (array $l): array { $i = 16; [$l[$i], $l[$i + 1]] = [$l[$i + 1], $l[$i]]; return $l; }],
 ];
@@ -117,6 +122,10 @@ t('G11 rein: zone_server_verification bleibt strikt (keine Brücke)', $evalRows(
 $m = $byTable;
 $m['publish_runs'] = array_merge($m['publish_runs'], ['col|x|int(11)|YES|NULL||~|~']);
 t('G12 rein: übrige Journaltabellen bleiben strikt', $evalRows($rowsFor($m))['publish_runs'] === 'mismatch');
+$m = $byTable;
+$m[ZPT] = SchemaCheck::HISTORY_TABLES_PRE007[ZPT];
+$e = $evalRows($rowsFor($m), false);
+t('G13 AS4b: Anwendungssicht strikt – zone_publish_targets vor 007 ⇒ mismatch, nach 007 ok', $e[ZPT] === 'mismatch' && $evalRows($rowsFor($byTable), false)[ZPT] === 'ok');
 
 // ---------------------------------------------------------------- C: CHECK-Vertrag 007a–c (Schema nach 007)
 $pdo->exec("INSERT INTO publish_runs (kind, full_rebuild, connection_id, history_watermark, actor_type, channel, correlation_id, status, result, finished_at)"
@@ -284,7 +293,7 @@ try {
     $after = $flow($pdo);
     $newNull = (int)$pdo->query("SELECT (SELECT COUNT(*) FROM zone_publish_targets WHERE COALESCE(zone_protocol, zone_effect, zone_installed_serial, zone_installed_hash, zone_reload, zone_fence_decision, zone_fence_code, conf_protocol, conf_effect, conf_reload, conf_fence_decision, conf_fence_code, conf_verify_state, conf_verify_reason, conf_verify_file_serial, conf_verify_file_hash, conf_verify_served_serial) IS NOT NULL)"
         . " + (SELECT COUNT(*) FROM publish_cleanup_results WHERE COALESCE(cleanup_protocol, cleanup_effect, fence_decision, fence_code, served_absent_count, served_still_count, served_unknown_count, unassigned_count) IS NOT NULL)")->fetchColumn();
-    t('V01 Journalablauf auf dem Schema nach 007 (Brückencode)', $after['status'] === 'ok' && $after['attemptId'] > 0 && count($after['targets']) === 1 && count($after['cleanup']) === 2,
+    t('V01 Journalablauf auf dem Schema nach 007 (Ledger ohne Agent-Felder)', $after['status'] === 'ok' && $after['attemptId'] > 0 && count($after['targets']) === 1 && count($after['cleanup']) === 2,
         json_encode([$after['status'], $after['targets'][0]['zone_sync'] ?? null, $after['targets'][0]['conf_sync'] ?? null]));
     t('V02 neue Spalten bleiben leer', $newNull === 0, "$newNull");
     foreach (['a', 'b', 'c'] as $s) {
@@ -307,12 +316,14 @@ $pdo->exec('DELETE FROM zone_publish_targets');
 $pdo->exec('DELETE FROM publish_cleanup_results');
 $p = $problemsOf($baseApp);
 t('K01 AS3-Code auf dem Schema vor 007: ohne Befund', $p === [], json_encode($p));
-$p = $problemsOf($app);
-t('K02 Brückencode auf dem Schema vor 007: ohne Befund', $p === [], json_encode($p));
-foreach (['a' => 'nur 007a', 'b' => '007a und 007b', 'c' => '007a, 007b und 007c'] as $s => $label) {
+$short = static fn (?array $p): ?array => $p === null ? null : array_map(static fn (string $x): string => preg_replace('/^(zone_publish_targets|publish_cleanup_results): Struktur weicht ab \(erwartet col\|(zone_protocol|cleanup_protocol)\|.*$/D', '$1:vor007', $x), $p);
+$p = $short($problemsOf($app));
+t('K02 aktueller Code (AS4b) auf dem Schema vor 007: fail-closed mit genau drei Befunden', $p === ['system_status.fence_domain fehlt', 'zone_publish_targets:vor007', 'publish_cleanup_results:vor007'], json_encode($p));
+foreach (['a' => ['nur 007a', ['system_status.fence_domain fehlt', 'publish_cleanup_results:vor007']], 'b' => ['007a und 007b', ['system_status.fence_domain fehlt']],
+    'c' => ['007a, 007b und 007c', []]] as $s => [$label, $want]) {
     $applyStep($s);
-    $p = $problemsOf($app);
-    t("K03 Brückencode im Teilzustand bzw. nach 007 ($label): ohne Befund", $p === [], json_encode($p));
+    $p = $short($problemsOf($app));
+    t("K03 aktueller Code im Teilzustand bzw. nach 007 ($label): genau die offenen Schritte", $p === $want, json_encode($p));
 }
 $p = $problemsOf($baseApp);
 t('K04 AS3-Code auf dem Schema nach 007: fail-closed (beide Journaltabellen abweichend)', is_array($p) && count($p) === 2
@@ -321,7 +332,7 @@ $pdo->exec($rb['a']);
 $applyStep('a');
 $pdo->exec("ALTER TABLE zone_publish_targets DROP CONSTRAINT chk_zpt_zone_agent, ADD CONSTRAINT chk_zpt_zone_agent CHECK ((zone_protocol IS NULL AND zone_effect IS NULL AND zone_installed_serial IS NULL AND zone_installed_hash IS NULL AND zone_reload IS NULL AND zone_fence_decision IS NULL AND zone_fence_code IS NULL) OR (zone_protocol = 'legacy' AND zone_sync IN ('ok','rejected','unknown') AND zone_effect IS NULL AND zone_installed_serial IS NULL AND zone_installed_hash IS NULL AND zone_reload IS NULL AND zone_fence_decision IS NULL AND zone_fence_code IS NULL) OR (zone_protocol = 'as2' AND zone_sync IN ('ok','rejected','unknown') AND zone_effect IS NOT NULL))");
 $p = $problemsOf($app);
-t('K05 Brückencode: CHECK in NULL-unsicherer Form (K1) ⇒ Befund', is_array($p) && count($p) === 1 && str_starts_with($p[0], 'zone_publish_targets: Struktur weicht ab'), json_encode($p));
+t('K05 aktueller Code: CHECK in NULL-unsicherer Form (K1) ⇒ Befund', is_array($p) && count($p) === 1 && str_starts_with($p[0], 'zone_publish_targets: Struktur weicht ab'), json_encode($p));
 try {
     $pdo->exec("INSERT INTO zone_publish_targets (attempt_id, server_id, server_name, zone_sync, zone_sync_at, zone_effect) VALUES ($attemptId, 9, 'x', 'ok', NOW(6), 'applied')");
     t('K06 Gegenprobe: die NULL-unsichere Form akzeptiert zone_protocol NULL bei gesetztem zone_effect (deshalb verboten)', true);
@@ -330,16 +341,20 @@ try {
 }
 
 // ---------------------------------------------------------------- S: statische Nachweise
-$diff = trim((string)shell_exec('LC_ALL=C diff -rq ' . escapeshellarg("$baseApp/web") . ' ' . escapeshellarg("$app/web") . ' 2>&1; LC_ALL=C diff -rq '
-    . escapeshellarg("$baseApp/agent") . ' ' . escapeshellarg("$app/agent") . ' 2>&1'));
-t('S01 web/ und agent/ gegenüber der Basis nur in SchemaCheck.php geändert',
-    $diff === "Files $baseApp/web/inc/app/SchemaCheck.php and $app/web/inc/app/SchemaCheck.php differ", $diff);
-$hashOf = static fn (string $appDir): string => trim((string)shell_exec('php -r ' . escapeshellarg('require ' . var_export("$appDir/web/inc/app/SchemaCheck.php", true)
-    . '; echo hash("sha256", serialize([SchemaCheck::HISTORY_TABLES, SchemaCheck::REQUIRED]));')));
-t('S02 HISTORY_TABLES und REQUIRED unverändert gegenüber der Basis', $hashOf($app) === $hashOf($baseApp) && strlen($hashOf($app)) === 64);
-$cols = 'zone_protocol|zone_effect|zone_installed_|zone_reload|zone_fence_|conf_protocol|conf_effect|conf_reload|conf_fence_|conf_verify_|cleanup_protocol|cleanup_effect|served_absent|served_still|served_unknown|unassigned_count|fence_domain';
-$hits = trim((string)shell_exec('grep -rlE ' . escapeshellarg($cols) . ' ' . escapeshellarg("$app/web") . ' 2>/dev/null'));   // agent/: unverändert (S01)
-t('S03 neue Spalten in web/ außerhalb von SchemaCheck nicht verwendet (kein Leser, kein Schreiber vor AS4b)', $hits === "$app/web/inc/app/SchemaCheck.php", $hits);
+$constOf = static fn (string $appDir, string $expr): string => trim((string)shell_exec('php -r ' . escapeshellarg('require ' . var_export("$appDir/web/inc/app/SchemaCheck.php", true)
+    . '; echo hash("sha256", serialize(' . $expr . '));')));
+$pre2 = 'array_intersect_key(SchemaCheck::HISTORY_TABLES, array_flip(["zone_publish_targets", "publish_cleanup_results"]))';
+t('S02 HISTORY_TABLES_PRE007 = Signatur der zwei Journaltabellen der Basis (Stand vor 007 exakt erhalten)', $constOf($app, 'SchemaCheck::HISTORY_TABLES_PRE007') === $constOf($baseApp, $pre2)
+    && strlen($constOf($app, 'SchemaCheck::HISTORY_TABLES_PRE007')) === 64);
+t('S02c übrige History-Tabellen unverändert gegenüber der Basis', $constOf($app, 'array_diff_key(SchemaCheck::HISTORY_TABLES, SchemaCheck::HISTORY_TABLES_PRE007)')
+    === $constOf($baseApp, 'array_diff_key(SchemaCheck::HISTORY_TABLES, array_flip(["zone_publish_targets", "publish_cleanup_results"]))'));
+t('S02b REQUIRED = Basis plus system_status.fence_domain', $constOf($app, '(function () { $r = SchemaCheck::REQUIRED; unset($r["system_status"]["fence_domain"]); return array_filter($r); })()')
+    === $constOf($baseApp, 'array_filter(SchemaCheck::REQUIRED)')
+    && $constOf($app, 'SchemaCheck::REQUIRED["system_status"]["fence_domain"]') === hash('sha256', serialize(['char(36)', 'YES', 'NULL'])));
+$cols = 'zone_protocol|zone_effect|zone_installed_|zone_reload|zone_fence_|conf_protocol|conf_effect|conf_reload|conf_fence_|conf_verify_|cleanup_protocol|cleanup_effect|served_absent|served_still|served_unknown|unassigned_count';
+$hits = trim((string)shell_exec('grep -rlE ' . escapeshellarg($cols) . ' ' . escapeshellarg("$app/web") . ' 2>/dev/null | LC_ALL=C sort'));
+$want = implode("\n", ["$app/web/inc/app/SchemaCheck.php", "$app/web/inc/app/publish/AgentResponseParser.php", "$app/web/inc/app/publish/PublishLedger.php"]);
+t('S03 neue Journalspalten in web/ nur in SchemaCheck, PublishLedger (Schreiber) und AgentResponseParser (Zuordnung)', $hits === $want, $hits);
 
 echo "ERGEBNIS as4a ($iso): $pass bestanden, $fail fehlgeschlagen\n";
 exit($fail === 0 ? 0 : 1);

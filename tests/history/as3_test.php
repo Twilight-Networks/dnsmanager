@@ -199,26 +199,28 @@ $code = 'require ' . var_export("$baseApp/web/inc/app/SchemaCheck.php", true) . 
 $out = json_decode((string)shell_exec('php -r ' . escapeshellarg($code) . ' 2>&1'), true);
 t('K01 alter Code auf neuem Schema: SchemaCheck ohne Befund', is_array($out) && $out['problems'] === [], json_encode($out));
 t('K02 alter Code auf neuem Schema: Generator schreibt 2147483648', is_array($out) && $out['status'] === 'ok' && $out['serial'] === 2147483648, json_encode($out));
+// AS4b: Der aktuelle Code verlangt 007 strikt; auf dem Schemastand nach AS3 ohne 007 ist er fail-closed (genau die drei
+// 007-Befunde). Ohne Befund auf dem Schema nach 007: as4b_test.php X01.
 $pr = $freshProblems($app);
-t('K03 neuer Code auf neuem Schema: SchemaCheck ohne Befund', $pr === [], json_encode($pr));
+t('K03 aktueller Code (AS4b) auf dem Schema nach AS3 ohne 007: fail-closed mit genau den 007-Befunden', is_array($pr) && count($pr) === 3
+    && $pr[0] === 'system_status.fence_domain fehlt' && str_starts_with($pr[1], 'zone_publish_targets: Struktur weicht ab (erwartet col|zone_protocol|')
+    && str_starts_with($pr[2], 'publish_cleanup_results: Struktur weicht ab (erwartet col|cleanup_protocol|'), json_encode($pr));
 array_map('unlink', glob("$dir/*") ?: []);
 @rmdir($dir);
 
 // ---------------------------------------------------------------- T: statische Nachweise
-foreach (['web/inc/soa_serial.php', 'web/inc/deploy/bind_file_generator.php', 'web/inc/app/publish/PublishLedger.php',
-    'web/inc/app/publish/PublishService.php', 'web/inc/app/zones/ZoneService.php', 'web/inc/app/history/ZoneStateSnapshot.php',
+// AS4b: PublishLedger.php und PublishService.php sind seit AS4b geändert (Agent-Ergebnisfelder, Fencing) und entfallen hier.
+foreach (['web/inc/soa_serial.php', 'web/inc/deploy/bind_file_generator.php', 'web/inc/app/zones/ZoneService.php', 'web/inc/app/history/ZoneStateSnapshot.php',
     'web/inc/app/history/ZoneHistoryRecorder.php', 'web/inc/app/zones/ZoneReadService.php'] as $f) {
     t("T01 unverändert gegenüber Basis: $f", is_file("$app/$f") && hash_file('sha256', "$app/$f") === hash_file('sha256', "$baseApp/$f"));
 }
-// Vollständig: web/ und agent/ unterscheiden sich vom Basis-Commit nur in SchemaCheck.php
-$diff = trim((string)shell_exec('LC_ALL=C diff -rq ' . escapeshellarg("$baseApp/web") . ' ' . escapeshellarg("$app/web") . ' 2>&1; LC_ALL=C diff -rq '
-    . escapeshellarg("$baseApp/agent") . ' ' . escapeshellarg("$app/agent") . ' 2>&1'));
-t('T03 web/ und agent/ gegenüber Basis nur in SchemaCheck.php geändert',
-    $diff === "Files $baseApp/web/inc/app/SchemaCheck.php and $app/web/inc/app/SchemaCheck.php differ", $diff);
+// T03 (web/ und agent/ gegenüber dem Stand vor AS3 nur in SchemaCheck.php geändert) war ein Nachweis des AS3-PR und entfällt
+// seit AS4b (Core- und Agent-Integration); die Schreiber von zone_server_verification prüfen T02 und as4b_test.php S01.
 $hits = trim((string)shell_exec('grep -rl zone_server_verification ' . escapeshellarg("$app/web") . ' ' . escapeshellarg("$app/agent") . ' ' . escapeshellarg("$app/scripts") . ' 2>/dev/null'));
-$allowed = ["$app/web/inc/app/SchemaCheck.php", "$app/scripts/migrate_006_zone_serial_verification.sh", "$app/scripts/migrate_007_journal_agent_results.sh"];   // 007: nur Strukturprüfung (AS4a)
+$allowed = ["$app/web/inc/app/SchemaCheck.php", "$app/scripts/migrate_006_zone_serial_verification.sh", "$app/scripts/migrate_007_journal_agent_results.sh",   // 007: nur Strukturprüfung (AS4a)
+    "$app/web/inc/app/publish/ServerVerificationStore.php"];   // AS4b: einziger Schreiber und Leser
 $extra = array_diff(array_filter(explode("\n", $hits)), $allowed);
-t('T02 zone_server_verification nur in SchemaCheck und Migrationsskript (kein Schreiber, kein Leser vor AS4)', $extra === [], implode(', ', $extra));
+t('T02 zone_server_verification nur in SchemaCheck, Migrationsskripten und ServerVerificationStore (AS4b)', $extra === [], implode(', ', $extra));
 
 echo "ERGEBNIS as3 ($iso): $pass bestanden, $fail fehlgeschlagen\n";
 exit($fail === 0 ? 0 : 1);

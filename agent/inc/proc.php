@@ -197,7 +197,7 @@ function agentKillGroup(int $pgid, $proc): void {
  *
  * @return array{handle: mixed, reason: ?string}
  */
-function agentLockWithDeadline(string $lockPath, float $reserve): array {
+function agentLockWithDeadline(string $lockPath, float $reserve, int $mode = LOCK_EX): array {
     $h = @fopen($lockPath, 'c');
     if ($h === false) {
         return ['handle' => null, 'reason' => 'open'];
@@ -210,7 +210,8 @@ function agentLockWithDeadline(string $lockPath, float $reserve): array {
             return ['handle' => null, 'reason' => 'timeout'];
         }
         $wouldBlock = 0;
-        if (@flock($h, LOCK_EX | LOCK_NB, $wouldBlock)) {
+        // AS4b: LOCK_SH für den lesenden Endpunkt zone_verify (schließt gleichzeitige Änderungen aus)
+        if (@flock($h, $mode | LOCK_NB, $wouldBlock)) {
             return ['handle' => $h, 'reason' => null];
         }
         if (!$wouldBlock) {

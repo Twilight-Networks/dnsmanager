@@ -59,7 +59,7 @@ function snap(): array
         $sel = [];
         foreach ($cols as [$c, $type]) {
             if (in_array($type, ['timestamp', 'datetime'], true)) { continue; }
-            if (in_array($c, ['password_hash', 'api_token', 'soa_serial'], true)) {
+            if (in_array($c, ['password_hash', 'api_token', 'soa_serial', 'fence_domain'], true)) {   // fence_domain: AS4b
                 $sel[] = "IF(a.`$c` <=> f.`$c`, 'wie-Fixture', 'neu') AS `$c`";
             } else {
                 $sel[] = "a.`$c`";

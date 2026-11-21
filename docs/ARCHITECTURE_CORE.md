@@ -147,6 +147,11 @@ Keine neuen Core-Baustellen; als Nächstes folgt die UI-Modernisierung.
   - Audit (AP1/H2c): `audit_events`-INSERTs zuletzt vor dem Commit (nach den Historien-INSERTs); bis dahin nur
     sperrendes Lesen des Akteursnamens. Serveränderungen prüfen DNS-Relevanz und `active` auf dem gesperrten Stand
     (Abbruch `topology_locked`). Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5c.
+  - Agent-Sicherheit (AS4b): Publish-Lock → Fencing-Domäne und Restore-Abgleich (lesend, vor J6/J1) → J6/J1 → je
+    Agent-Aufruf zuerst Laufprüfung (Publish-Lock und laufeigene Sperre). Beobachtungen in `zone_server_verification`
+    nur über `ServerVerificationStore`, je Paar eigene kurze Transaktion mit `FOR UPDATE`, nie in einer Fachtransaktion.
+    Monitoring: `dnsmanager_monitoring` → `dnsmanager_publish_all` (nur Try-Lock 0 s für Wasserstand und Speicherung;
+    die Agent-Abfragen laufen ohne Publish-Lock). Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5j.
 - **Ziel:** Web-UI und ein späterer MCP-Adapter rufen dieselben Services auf, ohne Geschäftslogik zu duplizieren.
 
 ## 2. Stand je Fachbereich

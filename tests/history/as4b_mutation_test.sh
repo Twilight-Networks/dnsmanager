@@ -1,0 +1,74 @@
+#!/bin/bash
+# Datei: tests/history/as4b_mutation_test.sh
+# Zweck: Mutationsproben für AS4b. Jede Mutation entfernt oder verfälscht genau eine Schutzregel in einer Kopie der
+#        Anwendung; die zugehörigen Gruppen von as4b_test.php (Auswahl über AS4B_ONLY) müssen sie erkennen (rot werden).
+#        Eine nicht erkannte Mutation ist ein Fehler dieser Suite. Isolierte Datenbanken wie in as4b_test.php.
+#
+# Aufruf (als root auf dem Testsystem): bash as4b_mutation_test.sh <App-Verzeichnis> <AS4a-App-Verzeichnis>
+
+set -uo pipefail
+APP="${1:-}"; BASEAPP="${2:-}"
+[ -d "$APP/web" ] && [ -d "$BASEAPP/web" ] || { echo "Aufruf: bash as4b_mutation_test.sh <App-Verzeichnis> <AS4a-App-Verzeichnis>"; exit 2; }
+W="$(mktemp -d /tmp/dnsmgr-as4b-mut.XXXXXX)"; chmod 700 "$W"
+trap 'rm -rf "$W"' EXIT
+PASS=0; FAIL=0
+ok() { if [ "$1" = 1 ]; then PASS=$((PASS + 1)); echo "  ok   $2"; else FAIL=$((FAIL + 1)); echo "  FAIL $2"; fi; }
+
+# mutate <ID> <Datei relativ> <alt> <neu> <Gruppen> <Beschreibung>
+mutate() {
+    local id="$1" file="$2" old="$3" new="$4" groups="$5" desc="$6" m="$W/$1"
+    rm -rf "$m"; cp -a "$APP" "$m"
+    if ! OLD="$old" NEW="$new" php -r '$f = $argv[1]; $s = file_get_contents($f); $n = substr_count($s, getenv("OLD"));
+            if ($n !== 1) { fwrite(STDERR, "Treffer: $n\n"); exit(1); } file_put_contents($f, str_replace(getenv("OLD"), getenv("NEW"), $s));' "$m/$file"; then
+        ok 0 "$id Mutation nicht anwendbar ($file)"; return
+    fi
+    AS4B_ONLY="$groups" php "$m/tests/history/as4b_test.php" "$m" RR "$BASEAPP" > "$W/$id.log" 2>&1
+    local rc=$? hits
+    hits=$(grep -c '^  FAIL' "$W/$id.log")
+    if [ "$rc" != 0 ] && [ "$hits" -gt 0 ]; then
+        ok 1 "$id erkannt – $desc ($(grep -m3 '^  FAIL' "$W/$id.log" | awk '{print $3}' | tr '\n' ' '))"
+    else
+        ok 0 "$id NICHT erkannt – $desc (Exit $rc)"; tail -5 "$W/$id.log" | sed 's/^/       /'
+    fi
+    rm -rf "$m"
+}
+
+J=web/inc/app/publish/PublishJournal.php
+D=web/inc/deploy/bind_file_distributor.php
+FC=web/inc/app/publish/FenceContext.php
+ST=web/inc/app/publish/ServerVerificationStore.php
+P=web/inc/app/publish/AgentResponseParser.php
+MS=web/inc/app/monitoring/MonitoringService.php
+echo "== Mutationsproben AS4b"
+mutate B01 "$J" '        $this->ledger->assertRunAlive($this->run);
+' '' L 'keine Laufprüfung vor dem Agent-Aufruf (E83)'
+mutate B02 "$D" '        $fail($sid, PublishTargetClassifier::localFailure('"'"'run_lock_lost'"'"', $e->getMessage()));
+        throw $e;' '        return [];' L 'Lock-Verlust verschluckt, Verteilung läuft weiter'
+mutate B03 "$FC" 'if (!hash_equals((string)$db, $this->configuredDomain)) {' 'if (false) {' F 'Domänenvergleich DB/Konfiguration entfernt (E74)'
+mutate B04 "$J" "'fence_token' => \$this->run->id," "'fence_token' => \$this->run->id + 1," F 'Token ≠ registrierte Lauf-ID (F5)'
+mutate B05 "$FC" '} elseif ($a['"'"'high'"'"'] >= $next) {' '} elseif ($a['"'"'high'"'"'] > $next + 1000000) {' R 'Restore-Abgleich wirkungslos (E81)'
+mutate B06 "$ST" "if (\$obs['state'] === 'verified') {" "if (\$obs['state'] !== 'unknown') {" O 'positiver Nachweis auch bei negativer Beobachtung überschrieben (E77)'
+mutate B07 "$ST" '            return $newKey > $rowKey;' '            return true;' O 'veraltete Beobachtung angenommen (Ordnungsschlüssel)'
+mutate B08 "$ST" "        return isset(self::ACCEPT_EQUAL[(string)\$row['last_method'] . '>' . \$newMethod]);" '        return true;' O 'Rangfolge bei gleichem Schlüssel ignoriert (K3)'
+mutate B09 "$MS" '->fetchColumn() !== $watermark) {' '->fetchColumn() < 0) {' M 'Wasserstand bei der Speicherung nicht erneut geprüft'
+mutate B10 "$MS" "        if ((int)\$this->pdo->query(\"SELECT GET_LOCK('\" . PublishLedger::MAIN_LOCK . \"', 0)\")->fetchColumn() !== 1) {
+            return null;
+        }
+        try {
+            if" "        if (false) {
+            return null;
+        }
+        try {
+            if" M 'Speicherung ohne Publish-Lock'
+mutate B11 "$P" '$serial !== null && $hash !== null && $consistent' '$serial !== null && $hash !== null' P 'installierter Stand ohne R1-Konsistenz übernommen'
+mutate B12 "$P" "if (\$classification !== 'ok' || \$fs === null" "if (\$fs === null" P 'verified trotz Einordnung unknown'
+mutate B13 "$ST" '        if (count($ids) !== 1) {' '        if ($ids === []) {' C 'Cleanup-Paar trotz mehrerer Kandidaten zugeordnet'
+mutate B14 "$ST" '        return $assigned ? null : ' '        return false ? null : ' C 'Cleanup-Beobachtung für noch zugewiesene Zone'
+mutate B15 web/inc/app/SchemaCheck.php 'bool $acceptPre007 = false' 'bool $acceptPre007 = true' X 'AS4b akzeptiert das Schema vor 007 (nicht strikt)'
+mutate B16 "$ST" "                \$this->pdo->beginTransaction();
+                \$stmt = \$this->pdo->prepare('SELECT last_run_id" "                \$this->pdo->beginTransaction();
+                if (str_contains(\$zoneName, 'beta')) { throw new RuntimeException('as4b_mut'); }
+                \$stmt = \$this->pdo->prepare('SELECT last_run_id" J 'Beobachtung fehlt bei verified (Schreibpfad unterbrochen)'
+
+echo "ERGEBNIS as4b_mutation: $PASS erkannt, $FAIL nicht erkannt"
+exit $([ "$FAIL" = 0 ] && echo 0 || echo 1)
