@@ -43,11 +43,19 @@ ALTER TABLE zone_publish_targets
         OR (zone_protocol IS NOT NULL AND zone_protocol = 'as2' AND zone_sync IN ('ok', 'rejected', 'unknown')
             AND zone_effect IS NOT NULL)
     ),
-    -- installierte Serial und Hash gemeinsam, nur bei zone_sync = ok
+    -- installierter Stand (Rohwert der Agentenantwort, nie selbst eine L2-/L3-Bestätigung): Serial und Hash gemeinsam,
+    -- nur mit nachgewiesener Dateiübernahme (as2, effect applied/unchanged) und Reload-Bericht des Agenten – so meldet
+    -- zone_sync ihn: Reload ok ⇒ HTTP 200 (zone_sync = ok); Reload failed/timeout/not_started ⇒ HTTP 500, nach E113
+    -- unknown (R1). Ohne Agentenantwort (Transport), bei effect none/partial/unknown, rejected oder failed nie.
     ADD CONSTRAINT chk_zpt_zone_installed CHECK (
         (zone_installed_serial IS NULL AND zone_installed_hash IS NULL)
         OR (zone_installed_serial IS NOT NULL AND zone_installed_hash IS NOT NULL
-            AND zone_installed_hash REGEXP '^[0-9a-f]{64}$' AND zone_sync = 'ok')
+            AND zone_installed_hash REGEXP '^[0-9a-f]{64}$'
+            AND zone_protocol IS NOT NULL AND zone_protocol = 'as2'
+            AND zone_effect IS NOT NULL AND zone_effect IN ('applied', 'unchanged')
+            AND zone_reload IS NOT NULL
+            AND ((zone_sync = 'ok' AND zone_reload = 'ok')
+                OR (zone_sync = 'unknown' AND zone_reload IN ('failed', 'timeout', 'not_started'))))
     ),
     ADD CONSTRAINT chk_zpt_zone_fence CHECK (
         (zone_fence_decision IS NULL AND zone_fence_code IS NULL)

@@ -1072,7 +1072,7 @@ Planungsgrundlage und Entscheidungen O1–O10 sowie K1–K3: Freigabe vom 21.11.
 **Journal-Ergebnisfelder (J4a, Migration 007a/007b):**
 - Je Kanal speichert `zone_publish_targets` das tatsächlich verwendete Protokoll (`zone_protocol`/`conf_protocol`:
   `legacy` ohne `effect`, `as2` mit `effect`), `effect`, Reload-Ergebnis und Fencing-Entscheidung mit Code. Für
-  `zone_sync` kommt der installierte Stand hinzu (`zone_installed_serial`/`zone_installed_hash`, nur bei `ok`), für
+  `zone_sync` kommt der installierte Stand hinzu (`zone_installed_serial`/`zone_installed_hash`, siehe unten), für
   `conf_sync` das L3-Ergebnis (`conf_verify_state` verified/serial_differs/unknown, Grund, Datei-Serial, Datei-Hash,
   ausgelieferte Serial).
 - `publish_cleanup_results` speichert Protokoll, `effect`, Fencing und **nur Zähler** des Entfernungsnachweises
@@ -1089,7 +1089,14 @@ initialisiert). AS4b initialisiert sie per Admin-CLI und prüft sie **vor J6/J1*
   hinter `<spalte> IS NOT NULL`, und jede Belegung ergibt TRUE oder FALSE.
 - `chk_zpt_zone_agent`/`chk_zpt_conf_agent`/`chk_pcr_agent`: Protokoll nur mit Antwort (`ok`/`rejected`/`unknown`);
   Legacy ohne AS2-Felder; `as2` mit `effect`; ohne Protokoll keine AS2-Felder.
-- `chk_zpt_zone_installed`: Serial und Hash gemeinsam, nur bei `zone_sync = ok`.
+- `chk_zpt_zone_installed` (Review PR #107, R1): Serial und Hash gemeinsam, nur mit nachgewiesener Dateiübernahme
+  (`zone_protocol = as2`, `zone_effect` applied/unchanged) und Reload-Bericht des Agenten. Zulässig bei
+  `zone_sync = ok` mit `zone_reload = ok` (HTTP 200) und bei `zone_sync = unknown` mit `zone_reload`
+  failed/timeout/not_started: `zone_sync` liefert `installed` auch bei gescheitertem Reload (HTTP 500), nach E113
+  `unknown`. Der installierte Stand ist ein **technischer Rohwert** der Antwort, nie selbst eine L2- oder
+  L3-Bestätigung. Ohne Agentenantwort (Transport-Timeout), bei `effect` none/partial/unknown, bei `rejected`/`failed`
+  und bei widersprüchlicher Kombination (z. B. `unknown` mit Reload `ok`) werden keine Werte gespeichert. Die
+  operative Einordnung und die Flags bleiben unverändert (E113, J8).
 - `chk_*_fence`: Code nur mit Entscheidung.
 - `chk_zpt_conf_verify`: `verified` nur mit gleichen Serials, Datei-Hash und `conf_sync = ok`; `serial_differs` mit
   beiden, verschiedenen Serials; ohne Zustand keine Werte.
@@ -1567,6 +1574,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 21.11.2026 | Review PR #107, R1: `chk_zpt_zone_installed` erlaubt den vom Agenten gemeldeten installierten Stand auch bei `zone_sync = unknown` nach gescheitertem Reload (as2, effect applied/unchanged, Reload failed/timeout/not_started), weiterhin nur gemeinsam und nie als L2-/L3-Bestätigung; Tests C06b–d, C29b, C30–C30h |
 | 21.11.2026 | AS4a umgesetzt: Abschnitt 5i (Migration 007 mit Agent-Ergebnisfeldern in `zone_publish_targets`/`publish_cleanup_results` und `system_status.fence_domain`, NULL-sichere CHECKs K1, Kompatibilitätsbrücke `HISTORY_TABLES_007`, `agent_protocol` als Registrierungszustand K3, Reihenfolge Domänenprüfung vor J6/J1 K2, Ordnungsvertrag für AS4b); Publish, Journal-Schreibpfade, Monitoring, Agent und Oberfläche unverändert |
 | 20.11.2026 | AS3 umgesetzt: Abschnitt 5h (Migration 006 mit `zones.soa_serial` als `INT UNSIGNED` und Tabelle `zone_server_verification`, Datenvertrag und NULL-sichere CHECKs, Migration unter dem Publish-Lock in einer Sitzung), E79 und E87 umgesetzt; Abschnitte 5 und 10 nachgeführt; Serial-Strategie, Publish, Historie, Agent und Oberfläche unverändert |
 | 20.11.2026 | Review PR #105, Nachtrag R2: `control_queries` zählt nur tatsächlich gestartete dig-Prozesse der Kontrollabfrage (`dnsQuery()['started']`, `dnsControlZoneState()['queried']`), nicht `dig_not_started`/`dig_error`; Zustände und Nachweislogik unverändert; Tests C09–C13, Mutation MV19 |

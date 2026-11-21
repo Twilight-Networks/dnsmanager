@@ -441,7 +441,12 @@ CREATE TABLE IF NOT EXISTS zone_publish_targets (
     CONSTRAINT chk_zpt_zone_installed CHECK (
         (zone_installed_serial IS NULL AND zone_installed_hash IS NULL)
         OR (zone_installed_serial IS NOT NULL AND zone_installed_hash IS NOT NULL
-            AND zone_installed_hash REGEXP '^[0-9a-f]{64}$' AND zone_sync = 'ok')
+            AND zone_installed_hash REGEXP '^[0-9a-f]{64}$'
+            AND zone_protocol IS NOT NULL AND zone_protocol = 'as2'
+            AND zone_effect IS NOT NULL AND zone_effect IN ('applied', 'unchanged')
+            AND zone_reload IS NOT NULL
+            AND ((zone_sync = 'ok' AND zone_reload = 'ok')
+                OR (zone_sync = 'unknown' AND zone_reload IN ('failed', 'timeout', 'not_started'))))
     ),
     CONSTRAINT chk_zpt_zone_fence CHECK (
         (zone_fence_decision IS NULL AND zone_fence_code IS NULL)
