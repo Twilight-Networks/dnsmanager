@@ -488,3 +488,85 @@ SELECT RELEASE_LOCK('dnsmanager_publish_all');
 ```
 
   Bei größeren Serials scheitert das `ALTER` im strikten Modus ohne Änderung (nachgewiesen in Q16).
+
+## 007 – Agent-Ergebnisfelder im Journal und Fencing-Domäne (AS4a)
+
+| Datei | Zweck |
+|---|---|
+| `007a_zone_publish_targets_agent.sql` | Schritt a: Agent-Ergebnisfelder je Kanal in `zone_publish_targets` (atomar) |
+| `007b_publish_cleanup_results_agent.sql` | Schritt b: Agent-Ergebnisfelder und Zähler in `publish_cleanup_results` (atomar) |
+| `007c_system_status_fence_domain.sql` | Schritt c: `system_status.fence_domain` (atomar) |
+| `../../scripts/migrate_007_journal_agent_results.sh` | Preflight, Sicherung, geschützte Sitzung unter dem Publish-Lock, Nachprüfung |
+
+**Inhalt** (`docs/ARCHITECTURE_HISTORY.md`, Abschnitt 5i):
+- **007a:** neue Spalten je Kanal in `zone_publish_targets`: das tatsächlich verwendete Protokoll (`zone_protocol`,
+  `conf_protocol`: `legacy`/`as2`), `effect`, installierte Serial und Datei-Hash, Reload-Ergebnis, Fencing-Entscheidung
+  und -Code sowie das L3-Ergebnis der Nachverifikation (`conf_verify_*`).
+- **007b:** in `publish_cleanup_results` dasselbe ohne installierten Stand, dazu nur Zähler des Entfernungsnachweises
+  (Q5).
+- **007c:** die Fencing-Domäne der Installation (`system_status.fence_domain`, UUID in Kleinbuchstaben; NULL = nicht
+  initialisiert).
+- Alle Spalten sind NULL-fähig ohne Standardwert. Geschrieben werden sie erst ab AS4b, einmal zusammen mit dem
+  Endzustand (J4a).
+- `agent_protocol` bleibt unverändert und bezeichnet nur den Registrierungszustand.
+- Die CHECKs sind NULL-sicher (K1). `zone_server_verification` bleibt unverändert.
+
+**Kompatibilitätsbrücke:**
+- Der `SchemaCheck` dieses Codestands (AS4a) akzeptiert `zone_publish_targets` und `publish_cleanup_results` **je
+  Tabelle** exakt vor oder exakt nach 007 (`HISTORY_TABLES_007`). Jede andere Struktur bleibt ein Befund.
+- Die Migrationsskripte 002–006 bewerten über denselben `SchemaCheck`, ihr `--check` gilt deshalb vor und nach 007.
+- Der Code vor AS4a (`abf8361`, AS3) prüft exakt und ist **nach 007 nicht mehr zulässig**: Login fail-closed (503),
+  `migrate_005 --check` ⇒ Exit 2.
+
+### Verbindliche Reihenfolge und Rückfall
+
+| Phase | Schritt | Zulässiger Code | Rückfall |
+|---|---|---|---|
+| 1 | Code AS4a (Brücke) installieren, Schema vor 007 | AS4a, AS3 | Code → AS3 |
+| 2 | Sicherung und Migration 007 (ruhiges Zeitfenster, Apache angehalten) | **nur AS4a** | Code bleibt AS4a; Teilzustand: Wiederanlauf |
+| 3 | Code AS4b (strikt nach 007), später | AS4b, AS4a | Code → AS4a, ohne Schemarückbau |
+
+Rollout-Voraussetzungen wie bei 006: ruhiges Zeitfenster; der Publish-Lock schließt nur Publish-Läufe aus. Andere
+Fachtransaktionen halten Metadatensperren auf den Journaltabellen bzw. `system_status`; das `ALTER` wartet höchstens
+`lock_wait_timeout` = 10 s und bricht dann mit Exit 3 ab, ein Wiederanlauf ist möglich.
+
+### Ablauf
+
+```bash
+bash scripts/migrate_007_journal_agent_results.sh --db dnsmanager --check
+#    Exit 1 = Migration erforderlich, 0 = vollständig, 2 = 002–006 fehlen/abweichend oder Struktur abweichend
+bash scripts/migrate_007_journal_agent_results.sh --db dnsmanager --apply --backup-dir /root/dnsmanager-backup/as4a-<Zeit>
+bash scripts/migrate_007_journal_agent_results.sh --db dnsmanager --check
+```
+
+- **Preflight ohne Lock:**
+  - 002–006 exakt wie erwartet, die zwei Journaltabellen vor oder nach 007;
+  - `system_status.fence_domain` fehlt oder entspricht exakt der Erwartung (Spalte und CHECK);
+  - daraus nur die fehlenden Schritte a/b/c; jede andere Struktur ⇒ Exit 2 ohne DDL.
+- **Geschützte Sitzung (eine Verbindung):**
+  - strikter `sql_mode` und `lock_wait_timeout = 10` auf der DDL-Verbindung;
+  - `GET_LOCK('dnsmanager_publish_all', 0)` mit Besitznachweis; belegt ⇒ Exit 2 ohne DDL;
+  - Preflight unter dem Lock;
+  - Kennwerte vorher: Zeilenzahl und Prüfwert über alle bisherigen Spalten je Tabelle;
+  - Lock-Besitz vor und nach jeder DDL; Ergebnis jedes Schritts in der Sitzung geprüft (eingebettetes SQL, kein
+    `source`);
+  - Kennwerte nachher, dann `RELEASE_LOCK`.
+- **Nachprüfung:** Struktur über `SchemaCheck`, Kennwerte vorher = nachher, neue Spalten leer.
+- **Teilzustände und Wiederanlauf:** Jeder Schritt ist atomar. Das Skript meldet bei Exit 3 die begonnenen und die
+  vorgefundenen Schritte. Erneut ausgeführt holt es nur die fehlenden nach. Der Brückencode arbeitet in jedem
+  Teilzustand unverändert.
+- **Notfall-Rückbau (gesondert freizugeben):** nur solange alle neuen Spalten leer sind, also vor AS4b-Daten. Prüfung:
+
+```sql
+SELECT (SELECT COUNT(*) FROM zone_publish_targets WHERE COALESCE(zone_protocol, zone_effect, zone_installed_serial,
+          zone_installed_hash, zone_reload, zone_fence_decision, zone_fence_code, conf_protocol, conf_effect, conf_reload,
+          conf_fence_decision, conf_fence_code, conf_verify_state, conf_verify_reason, conf_verify_file_serial,
+          conf_verify_file_hash, conf_verify_served_serial) IS NOT NULL)
+     + (SELECT COUNT(*) FROM publish_cleanup_results WHERE COALESCE(cleanup_protocol, cleanup_effect, fence_decision,
+          fence_code, served_absent_count, served_still_count, served_unknown_count, unassigned_count) IS NOT NULL)
+     + (SELECT COUNT(*) FROM system_status WHERE fence_domain IS NOT NULL);       -- muss 0 sein
+```
+
+  Danach unter dem Publish-Lock je Tabelle ein `ALTER TABLE … DROP CONSTRAINT …, DROP COLUMN …` für alle CHECKs und
+  Spalten aus 007a–c, in umgekehrter Reihenfolge c, b, a (Befehlsfolge wie in `tests/history/migration007_test.sh`,
+  `RB_A`/`RB_B`/`RB_C`). Danach ist auch der Code vor AS4a wieder zulässig.
