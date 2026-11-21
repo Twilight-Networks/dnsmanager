@@ -160,7 +160,8 @@ bash "$APP/scripts/migrate_003_history_dependencies.sh" --db "${H2A_PREFIX}m1" -
 bash "$APP/scripts/migrate_004_audit_events.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 004 auf m1"
 bash "$APP/scripts/migrate_005_publish_journal.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 005 auf m1"
 bash "$APP/scripts/migrate_006_zone_serial_verification.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 006 auf m1"
-ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}m1")" ] && echo 1)" "M08c Struktursignatur Neuinstallation = Migration 002 + 003 + 004 + 005 + 006 (byte-gleich)"
+bash "$APP/scripts/migrate_007_journal_agent_results.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/m7.out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 007 auf m1"
+ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}m1")" ] && echo 1)" "M08c Struktursignatur Neuinstallation = Migration 002 + 003 + 004 + 005 + 006 + 007 (byte-gleich)"
 
 echo "ERGEBNIS migration: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" = 0 ]

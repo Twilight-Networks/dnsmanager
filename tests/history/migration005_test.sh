@@ -120,7 +120,8 @@ D=$(mkdb p8 new)
 expect_exit 0 "P08 Neuinstallation: --check ohne Migration" bash "$MIG5" --db "$D" --check
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
 bash "$APP/scripts/migrate_006_zone_serial_verification.sh" --db "${H2A_PREFIX}p2" --apply --no-backup > "$W/m6.out" 2>&1 || ok 0 "P08b Vorbereitung: Migration 006 auf p2"
-ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}p2")" ] && echo 1)" "P08b Struktursignatur Neuinstallation = Migration 002–006 (byte-gleich)"
+bash "$APP/scripts/migrate_007_journal_agent_results.sh" --db "${H2A_PREFIX}p2" --apply --no-backup > "$W/m7.out" 2>&1 || ok 0 "P08b Vorbereitung: Migration 007 auf p2"
+ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}p2")" ] && echo 1)" "P08b Struktursignatur Neuinstallation = Migration 002–007 (byte-gleich)"
 
 # P09 frühere Skripte bleiben nach Migration 005 konsistent
 expect_exit 0 "P09 migrate_002 --check nach Migration 005" bash "$MIG2" --db "${H2A_PREFIX}p2" --check

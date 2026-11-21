@@ -32,6 +32,11 @@
  * 006 (sql/migrations/006a_zone_server_verification.sql, 006b_zones_soa_serial_unsigned.sql); das Migrationsskript 006
  * bewertet nur zone_server_verification und zones.soa_serial (Voraussetzung: Migrationen 002–005 unverändert).
  *
+ * AS4a (Migration 007, Kompatibilitätsbrücke): zone_publish_targets und publish_cleanup_results werden je Tabelle mit
+ * exakt der Struktur vor ODER exakt der Struktur nach Migration 007 akzeptiert (HISTORY_TABLES_007); alle übrigen
+ * Tabellen und jede andere Struktur bleiben unverändert strikt. system_status.fence_domain (007c) wird erst mit AS4b
+ * geprüft (REQUIRED).
+ *
  * Es werden niemals Schemaänderungen vorgenommen (keine automatische Migration beim Seitenaufruf).
  * Das Ergebnis wird je Prozess zwischengespeichert (eine Prüfung je Anfrage).
  */
@@ -348,6 +353,104 @@ final class SchemaCheck
     ];
 
     /**
+     * AS4a (Migration 007, Kompatibilitätsbrücke): exakte Signatur NACH Migration 007 für die zwei Journaltabellen, die 007
+     * erweitert (sql/migrations/007a_zone_publish_targets_agent.sql, 007b_publish_cleanup_results_agent.sql). Für genau
+     * diese Tabellen akzeptiert evaluateHistory() die bisherige Signatur aus HISTORY_TABLES ODER exakt diese; jede andere
+     * Struktur bleibt ein Befund. Der Brückencode liest und schreibt die neuen Spalten nicht. AS4b ersetzt die Einträge in
+     * HISTORY_TABLES durch diese Signatur und entfernt die Konstante (dann wieder nur eine zulässige Struktur).
+     */
+    public const HISTORY_TABLES_007 = [
+        'zone_publish_targets' => [
+            'table|BASE TABLE|InnoDB',
+            'col|attempt_id|bigint(20) unsigned|NO|~||~|~',
+            'col|server_id|int(11)|NO|~||~|~',
+            'col|server_name|varchar(255)|NO|~||utf8mb4|utf8mb4_unicode_ci',
+            "col|agent_protocol|enum('legacy')|NO|'legacy'||ascii|ascii_bin",
+            "col|zone_sync|enum('sending','ok','failed','rejected','unknown','abandoned')|NO|'sending'||ascii|ascii_bin",
+            'col|zone_sync_at|datetime(6)|YES|NULL||~|~',
+            'col|zone_http_status|smallint(5) unsigned|YES|NULL||~|~',
+            'col|zone_error_code|varchar(32)|YES|NULL||ascii|ascii_bin',
+            'col|zone_error_detail|varchar(500)|YES|NULL||utf8mb4|utf8mb4_bin',
+            "col|conf_sync|enum('sending','ok','failed','rejected','unknown','abandoned')|NO|'sending'||ascii|ascii_bin",
+            'col|conf_sync_at|datetime(6)|YES|NULL||~|~',
+            'col|conf_http_status|smallint(5) unsigned|YES|NULL||~|~',
+            'col|conf_error_code|varchar(32)|YES|NULL||ascii|ascii_bin',
+            'col|conf_error_detail|varchar(500)|YES|NULL||utf8mb4|utf8mb4_bin',
+            'col|conf_hash|char(64)|YES|NULL||ascii|ascii_bin',
+            "col|zone_protocol|enum('legacy','as2')|YES|NULL||ascii|ascii_bin",
+            "col|zone_effect|enum('none','unchanged','applied','partial','unknown')|YES|NULL||ascii|ascii_bin",
+            'col|zone_installed_serial|int(10) unsigned|YES|NULL||~|~',
+            'col|zone_installed_hash|char(64)|YES|NULL||ascii|ascii_bin',
+            "col|zone_reload|enum('ok','failed','timeout','not_started')|YES|NULL||ascii|ascii_bin",
+            "col|zone_fence_decision|enum('accept','would_reject','reject')|YES|NULL||ascii|ascii_bin",
+            'col|zone_fence_code|varchar(32)|YES|NULL||ascii|ascii_bin',
+            "col|conf_protocol|enum('legacy','as2')|YES|NULL||ascii|ascii_bin",
+            "col|conf_effect|enum('none','unchanged','applied','partial','unknown')|YES|NULL||ascii|ascii_bin",
+            "col|conf_reload|enum('ok','failed','timeout','not_started')|YES|NULL||ascii|ascii_bin",
+            "col|conf_fence_decision|enum('accept','would_reject','reject')|YES|NULL||ascii|ascii_bin",
+            'col|conf_fence_code|varchar(32)|YES|NULL||ascii|ascii_bin',
+            "col|conf_verify_state|enum('verified','serial_differs','unknown')|YES|NULL||ascii|ascii_bin",
+            'col|conf_verify_reason|varchar(64)|YES|NULL||ascii|ascii_bin',
+            'col|conf_verify_file_serial|int(10) unsigned|YES|NULL||~|~',
+            'col|conf_verify_file_hash|char(64)|YES|NULL||ascii|ascii_bin',
+            'col|conf_verify_served_serial|int(10) unsigned|YES|NULL||~|~',
+            'idx|idx_zpt_server|1|1|server_id|~|BTREE',
+            'idx|idx_zpt_server|1|2|attempt_id|~|BTREE',
+            'idx|PRIMARY|0|1|attempt_id|~|BTREE',
+            'idx|PRIMARY|0|2|server_id|~|BTREE',
+            'fk|fk_zpt_attempt|1|attempt_id|zone_publish_attempts|id|RESTRICT|RESTRICT',
+            "chk|chk_zpt_conf_agent|Table|`conf_protocol` is null and `conf_effect` is null and `conf_reload` is null and `conf_fence_decision` is null and `conf_fence_code` is null and `conf_verify_state` is null or `conf_protocol` is not null and `conf_protocol` = 'legacy' and `conf_sync` in ('ok','rejected','unknown') and `conf_effect` is null and `conf_reload` is null and `conf_fence_decision` is null and `conf_fence_code` is null and `conf_verify_state` is null or `conf_protocol` is not null and `conf_protocol` = 'as2' and `conf_sync` in ('ok','rejected','unknown') and `conf_effect` is not null",
+            "chk|chk_zpt_conf_fence|Table|`conf_fence_decision` is null and `conf_fence_code` is null or `conf_fence_decision` is not null and `conf_fence_code` is null or `conf_fence_decision` is not null and `conf_fence_code` is not null and `conf_fence_code` regexp '^[a-z_]{1,32}\$'",
+            "chk|chk_zpt_conf_hash|Table|`conf_hash` is null or `conf_hash` regexp '^[0-9a-f]{64}\$'",
+            "chk|chk_zpt_conf_sync|Table|`conf_sync` = 'sending' and `conf_sync_at` is null and `conf_http_status` is null and `conf_error_code` is null and `conf_error_detail` is null or `conf_sync` in ('ok','abandoned') and `conf_sync_at` is not null and `conf_error_code` is null and `conf_error_detail` is null or `conf_sync` in ('failed','rejected','unknown') and `conf_sync_at` is not null and `conf_error_code` is not null and `conf_error_code` regexp '^[a-z_]{1,32}\$'",
+            "chk|chk_zpt_conf_verify|Table|`conf_verify_state` is null and `conf_verify_reason` is null and `conf_verify_file_serial` is null and `conf_verify_file_hash` is null and `conf_verify_served_serial` is null or `conf_verify_state` is not null and `conf_verify_state` = 'verified' and `conf_sync` = 'ok' and `conf_verify_file_serial` is not null and `conf_verify_served_serial` is not null and `conf_verify_file_serial` = `conf_verify_served_serial` and `conf_verify_file_hash` is not null or `conf_verify_state` is not null and `conf_verify_state` = 'serial_differs' and `conf_verify_file_serial` is not null and `conf_verify_served_serial` is not null and `conf_verify_file_serial` <> `conf_verify_served_serial` or `conf_verify_state` is not null and `conf_verify_state` = 'unknown'",
+            "chk|chk_zpt_conf_verify_fmt|Table|(`conf_verify_reason` is null or `conf_verify_reason` is not null and `conf_verify_reason` regexp '^[a-z0-9_:]{1,64}\$') and (`conf_verify_file_hash` is null or `conf_verify_file_hash` is not null and `conf_verify_file_hash` regexp '^[0-9a-f]{64}\$')",
+            'chk|chk_zpt_http|Table|(`zone_http_status` is null or `zone_http_status` between 100 and 599) and (`conf_http_status` is null or `conf_http_status` between 100 and 599)',
+            'chk|chk_zpt_target|Table|`server_id` >= 1 and char_length(`server_name`) >= 1',
+            "chk|chk_zpt_zone_agent|Table|`zone_protocol` is null and `zone_effect` is null and `zone_installed_serial` is null and `zone_installed_hash` is null and `zone_reload` is null and `zone_fence_decision` is null and `zone_fence_code` is null or `zone_protocol` is not null and `zone_protocol` = 'legacy' and `zone_sync` in ('ok','rejected','unknown') and `zone_effect` is null and `zone_installed_serial` is null and `zone_installed_hash` is null and `zone_reload` is null and `zone_fence_decision` is null and `zone_fence_code` is null or `zone_protocol` is not null and `zone_protocol` = 'as2' and `zone_sync` in ('ok','rejected','unknown') and `zone_effect` is not null",
+            "chk|chk_zpt_zone_fence|Table|`zone_fence_decision` is null and `zone_fence_code` is null or `zone_fence_decision` is not null and `zone_fence_code` is null or `zone_fence_decision` is not null and `zone_fence_code` is not null and `zone_fence_code` regexp '^[a-z_]{1,32}\$'",
+            "chk|chk_zpt_zone_installed|Table|`zone_installed_serial` is null and `zone_installed_hash` is null or `zone_installed_serial` is not null and `zone_installed_hash` is not null and `zone_installed_hash` regexp '^[0-9a-f]{64}\$' and `zone_protocol` is not null and `zone_protocol` = 'as2' and `zone_effect` is not null and `zone_effect` in ('applied','unchanged') and `zone_reload` is not null and (`zone_sync` = 'ok' and `zone_reload` = 'ok' or `zone_sync` = 'unknown' and `zone_reload` in ('failed','timeout','not_started'))",
+            "chk|chk_zpt_zone_sync|Table|`zone_sync` = 'sending' and `zone_sync_at` is null and `zone_http_status` is null and `zone_error_code` is null and `zone_error_detail` is null or `zone_sync` in ('ok','abandoned') and `zone_sync_at` is not null and `zone_error_code` is null and `zone_error_detail` is null or `zone_sync` in ('failed','rejected','unknown') and `zone_sync_at` is not null and `zone_error_code` is not null and `zone_error_code` regexp '^[a-z_]{1,32}\$'",
+        ],
+        'publish_cleanup_results' => [
+            'table|BASE TABLE|InnoDB',
+            'col|run_id|bigint(20) unsigned|NO|~||~|~',
+            'col|server_id|int(11)|NO|~||~|~',
+            'col|server_name|varchar(255)|NO|~||utf8mb4|utf8mb4_unicode_ci',
+            "col|agent_protocol|enum('legacy')|NO|'legacy'||ascii|ascii_bin",
+            'col|registered_at|datetime(6)|NO|current_timestamp(6)||~|~',
+            "col|status|enum('sending','ok','partial','failed','rejected','unknown','abandoned')|NO|'sending'||ascii|ascii_bin",
+            'col|finished_at|datetime(6)|YES|NULL||~|~',
+            'col|valid_zone_count|int(10) unsigned|YES|NULL||~|~',
+            'col|removed_conf_count|int(10) unsigned|YES|NULL||~|~',
+            'col|removed_zone_file_count|int(10) unsigned|YES|NULL||~|~',
+            'col|http_status|smallint(5) unsigned|YES|NULL||~|~',
+            'col|error_code|varchar(32)|YES|NULL||ascii|ascii_bin',
+            'col|error_detail|varchar(500)|YES|NULL||utf8mb4|utf8mb4_bin',
+            "col|cleanup_protocol|enum('legacy','as2')|YES|NULL||ascii|ascii_bin",
+            "col|cleanup_effect|enum('none','unchanged','applied','partial','unknown')|YES|NULL||ascii|ascii_bin",
+            "col|fence_decision|enum('accept','would_reject','reject')|YES|NULL||ascii|ascii_bin",
+            'col|fence_code|varchar(32)|YES|NULL||ascii|ascii_bin',
+            'col|served_absent_count|int(10) unsigned|YES|NULL||~|~',
+            'col|served_still_count|int(10) unsigned|YES|NULL||~|~',
+            'col|served_unknown_count|int(10) unsigned|YES|NULL||~|~',
+            'col|unassigned_count|int(10) unsigned|YES|NULL||~|~',
+            'idx|idx_pcr_server|1|1|server_id|~|BTREE',
+            'idx|idx_pcr_server|1|2|run_id|~|BTREE',
+            'idx|PRIMARY|0|1|run_id|~|BTREE',
+            'idx|PRIMARY|0|2|server_id|~|BTREE',
+            'fk|fk_pcr_run|1|run_id|publish_runs|id|RESTRICT|RESTRICT',
+            "chk|chk_pcr_agent|Table|`cleanup_protocol` is null and `cleanup_effect` is null and `fence_decision` is null and `fence_code` is null or `cleanup_protocol` is not null and `cleanup_protocol` = 'legacy' and `status` in ('ok','partial','rejected','unknown') and `cleanup_effect` is null and `fence_decision` is null and `fence_code` is null or `cleanup_protocol` is not null and `cleanup_protocol` = 'as2' and `status` in ('ok','partial','rejected','unknown') and `cleanup_effect` is not null",
+            "chk|chk_pcr_counts|Table|`status` in ('ok','partial') and `removed_conf_count` is not null and `removed_zone_file_count` is not null or `status` not in ('ok','partial') and `removed_conf_count` is null and `removed_zone_file_count` is null",
+            "chk|chk_pcr_fence|Table|`fence_decision` is null and `fence_code` is null or `fence_decision` is not null and `fence_code` is null or `fence_decision` is not null and `fence_code` is not null and `fence_code` regexp '^[a-z_]{1,32}\$'",
+            'chk|chk_pcr_http|Table|`http_status` is null or `http_status` between 100 and 599',
+            "chk|chk_pcr_served|Table|`served_absent_count` is null and `served_still_count` is null and `served_unknown_count` is null and `unassigned_count` is null or `served_absent_count` is not null and `served_still_count` is not null and `served_unknown_count` is not null and `unassigned_count` is not null and `cleanup_protocol` is not null and `cleanup_protocol` = 'as2'",
+            "chk|chk_pcr_status|Table|`status` = 'sending' and `finished_at` is null and `http_status` is null and `error_code` is null and `error_detail` is null and `removed_conf_count` is null and `removed_zone_file_count` is null or `status` in ('ok','abandoned') and `finished_at` is not null and `error_code` is null and `error_detail` is null or `status` in ('partial','failed','rejected','unknown') and `finished_at` is not null and `error_code` is not null and `error_code` regexp '^[a-z_]{1,32}\$'",
+            'chk|chk_pcr_target|Table|`server_id` >= 1 and char_length(`server_name`) >= 1',
+        ],
+    ];
+
+    /**
      * Signaturabfrage für die aktuelle Datenbank (DATABASE()): Zeilen [Tabelle, Signaturzeile], deterministisch
      * sortiert. Der Platzhalter {TABLES} wird durch die festen Namen aus HISTORY_TABLES ersetzt.
      */
@@ -468,6 +571,8 @@ SQL;
      *
      * @return array<string, array{state: string, detail: string}> je erwarteter Tabelle in fester Reihenfolge:
      *         ok | absent | mismatch; detail = erste Abweichung (erwartet/gefunden) bei mismatch, sonst ""
+     *         (gegenüber der bisherigen Signatur aus HISTORY_TABLES). AS4a: zone_publish_targets und
+     *         publish_cleanup_results sind auch mit exakt der Signatur aus HISTORY_TABLES_007 ok.
      */
     public static function evaluateHistory(array $rows): array
     {
@@ -484,6 +589,11 @@ SQL;
                 continue;
             }
             if ($lines === $expected) {
+                $result[$table] = ['state' => self::STATE_OK, 'detail' => ''];
+                continue;
+            }
+            // AS4a-Brücke: für die von Migration 007 erweiterten Tabellen auch exakt die Struktur nach 007
+            if (isset(self::HISTORY_TABLES_007[$table]) && $lines === self::HISTORY_TABLES_007[$table]) {
                 $result[$table] = ['state' => self::STATE_OK, 'detail' => ''];
                 continue;
             }

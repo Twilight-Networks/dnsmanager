@@ -1,6 +1,6 @@
 #!/bin/bash
 # Datei: tests/history/run.sh
-# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c, H2d) und AS3 reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
+# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c, H2d), AS3 und AS4a reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
 #
 #   bash run.sh <App-SHA> <Basis-SHA> [<Generator-Basis-SHA>]
 #     <App-SHA>   zu prüfender Commit (40 Zeichen)
@@ -22,6 +22,8 @@
 #      Mutationsproben in 5. /etc/bind und die installierten Agenten werden nicht berührt (Nachweis Z01).
 #   8. AS3: Migration 006 (migration006_test.sh), Datenvertrag zone_server_verification, 32-Bit-Serials mit dem echten
 #      Generator, altes/neues Schema mit altem/neuem Code und statische Nachweise (as3_test.php, RR und RC)
+#   9. AS4a: Migration 007 (migration007_test.sh), Kompatibilitätsbrücke, CHECK-Vertrag 007, Code × Schema und
+#      unveränderter Journalablauf vor/nach 007 (as4a_test.php, RR und RC; Generator-Basis = Stand vor AS4a)
 # Nur isolierte Datenbanken dnsmgr_t21_r<RUN>_* und der Benutzer h2a<RUN> (Lauf-Kennung H2A_RUN, 8 Hex-Zeichen; optional
 # vorgebbar, sonst zufällig). Eigentum nach tests/history/owned.sh: Jede Suite legt ihre Ressourcen ohne IF NOT EXISTS an
 # und trägt sie danach in das gemeinsame Register dieses Laufs ein; aufgeräumt werden ausschließlich registrierte
@@ -35,7 +37,7 @@ SHA="${1:-}"; BASE="${2:-}"; GBASE="${3:-${2:-}}"
 [ "$(id -u)" = 0 ] || { echo "als root ausführen"; exit 2; }
 REPO="${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}"
 
-echo "History-Tests H2a/H2b/H2c/H2d/AS3 – $(hostname) $(date '+%F %T')"
+echo "History-Tests H2a/H2b/H2c/H2d/AS3/AS4a – $(hostname) $(date '+%F %T')"
 export H2A_RUN="${H2A_RUN:-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 [[ "$H2A_RUN" =~ ^[0-9a-f]{8}$ ]] || { echo "ABBRUCH: ungültige Lauf-Kennung H2A_RUN"; exit 2; }
 echo "Lauf-Kennung: $H2A_RUN (Datenbanken dnsmgr_t21_r${H2A_RUN}_*, Benutzer h2a${H2A_RUN})"
@@ -95,6 +97,10 @@ H2D_SLOW=0 php "$H/journal_test.php" "$T/app" RC "$T/base" || RC=1
 bash "$H/migration006_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
 php "$H/as3_test.php" "$T/app" RR "$T/base" || RC=1
 php "$H/as3_test.php" "$T/app" RC "$T/base" || RC=1
+# AS4a: Migration 007, Brücke, CHECK-Vertrag, Code × Schema, Journalablauf vor/nach 007 (Generator-Basis = Stand vor AS4a)
+bash "$H/migration007_test.sh" "$T/app" "$T/base_schema.sql" || RC=1
+php "$H/as4a_test.php" "$T/app" RR "$T/base" || RC=1
+php "$H/as4a_test.php" "$T/app" RC "$T/base" || RC=1
 [ "${H2B_SKIP_MUTATION:-0}" = 1 ] && echo "Hinweis: Mutationsproben übersprungen (H2B_SKIP_MUTATION=1)" || bash "$H/mutation_test.sh" "$T/app" || RC=1
 
 echo "GESAMT: $([ $RC = 0 ] && echo 'alle Suiten bestanden' || echo 'FEHLER')"

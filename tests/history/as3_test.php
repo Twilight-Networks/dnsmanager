@@ -182,6 +182,13 @@ $pdo->exec("UPDATE zones SET soa_serial = 2026112001 WHERE id = $zoneId");
 $pdo->exec('ALTER TABLE zones MODIFY soa_serial INT UNSIGNED NOT NULL DEFAULT 2025010101');
 
 // ---------------------------------------------------------------- K: alter Code (Basis-Commit) auf neuem Schema
+// Seit AS4a enthält das Neuinstallationsschema auch Migration 007. Der Code vor AS3 ist nur mit dem Schemastand nach
+// AS3 (vor 007) verträglich; deshalb wird 007 für diese Gruppe zurückgebaut (Notfall-Rückbau, sql/migrations/README.md).
+if ((int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'zone_publish_targets' AND COLUMN_NAME = 'zone_protocol'")->fetchColumn() === 1) {
+    $pdo->exec('ALTER TABLE zone_publish_targets DROP CONSTRAINT chk_zpt_zone_agent, DROP CONSTRAINT chk_zpt_zone_installed, DROP CONSTRAINT chk_zpt_zone_fence, DROP CONSTRAINT chk_zpt_conf_agent, DROP CONSTRAINT chk_zpt_conf_fence, DROP CONSTRAINT chk_zpt_conf_verify, DROP CONSTRAINT chk_zpt_conf_verify_fmt, DROP COLUMN zone_protocol, DROP COLUMN zone_effect, DROP COLUMN zone_installed_serial, DROP COLUMN zone_installed_hash, DROP COLUMN zone_reload, DROP COLUMN zone_fence_decision, DROP COLUMN zone_fence_code, DROP COLUMN conf_protocol, DROP COLUMN conf_effect, DROP COLUMN conf_reload, DROP COLUMN conf_fence_decision, DROP COLUMN conf_fence_code, DROP COLUMN conf_verify_state, DROP COLUMN conf_verify_reason, DROP COLUMN conf_verify_file_serial, DROP COLUMN conf_verify_file_hash, DROP COLUMN conf_verify_served_serial');
+    $pdo->exec('ALTER TABLE publish_cleanup_results DROP CONSTRAINT chk_pcr_agent, DROP CONSTRAINT chk_pcr_fence, DROP CONSTRAINT chk_pcr_served, DROP COLUMN cleanup_protocol, DROP COLUMN cleanup_effect, DROP COLUMN fence_decision, DROP COLUMN fence_code, DROP COLUMN served_absent_count, DROP COLUMN served_still_count, DROP COLUMN served_unknown_count, DROP COLUMN unassigned_count');
+    $pdo->exec('ALTER TABLE system_status DROP CONSTRAINT chk_ss_fence_domain, DROP COLUMN fence_domain');
+}
 $db = H2b::$db;
 $code = 'require ' . var_export("$baseApp/web/inc/app/SchemaCheck.php", true) . ';'
     . 'require ' . var_export("$baseApp/web/inc/deploy/bind_file_generator.php", true) . ';'
@@ -209,7 +216,7 @@ $diff = trim((string)shell_exec('LC_ALL=C diff -rq ' . escapeshellarg("$baseApp/
 t('T03 web/ und agent/ gegenüber Basis nur in SchemaCheck.php geändert',
     $diff === "Files $baseApp/web/inc/app/SchemaCheck.php and $app/web/inc/app/SchemaCheck.php differ", $diff);
 $hits = trim((string)shell_exec('grep -rl zone_server_verification ' . escapeshellarg("$app/web") . ' ' . escapeshellarg("$app/agent") . ' ' . escapeshellarg("$app/scripts") . ' 2>/dev/null'));
-$allowed = ["$app/web/inc/app/SchemaCheck.php", "$app/scripts/migrate_006_zone_serial_verification.sh"];
+$allowed = ["$app/web/inc/app/SchemaCheck.php", "$app/scripts/migrate_006_zone_serial_verification.sh", "$app/scripts/migrate_007_journal_agent_results.sh"];   // 007: nur Strukturprüfung (AS4a)
 $extra = array_diff(array_filter(explode("\n", $hits)), $allowed);
 t('T02 zone_server_verification nur in SchemaCheck und Migrationsskript (kein Schreiber, kein Leser vor AS4)', $extra === [], implode(', ', $extra));
 

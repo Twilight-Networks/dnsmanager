@@ -107,7 +107,8 @@ expect_exit 0 "O07 Neuinstallation: --check ohne Migration" bash "$MIG4" --db "$
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
 bash "$APP/scripts/migrate_005_publish_journal.sh" --db "${H2A_PREFIX}o2" --apply --no-backup > "$W/m5.out" 2>&1 || ok 0 "O07b Vorbereitung: Migration 005 auf o2"
 bash "$APP/scripts/migrate_006_zone_serial_verification.sh" --db "${H2A_PREFIX}o2" --apply --no-backup > "$W/m6.out" 2>&1 || ok 0 "O07b Vorbereitung: Migration 006 auf o2"
-ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}o2")" ] && echo 1)" "O07b Struktursignatur Neuinstallation = Migration 002 + 003 + 004 + 005 + 006 (byte-gleich)"
+bash "$APP/scripts/migrate_007_journal_agent_results.sh" --db "${H2A_PREFIX}o2" --apply --no-backup > "$W/m7.out" 2>&1 || ok 0 "O07b Vorbereitung: Migration 007 auf o2"
+ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}o2")" ] && echo 1)" "O07b Struktursignatur Neuinstallation = Migration 002 + 003 + 004 + 005 + 006 + 007 (byte-gleich)"
 
 # O08 Skripte 002/003 bleiben nach Migration 004 konsistent; Migration 004 ohne 003 möglich (keine Abhängigkeit)
 expect_exit 0 "O08 migrate_002 --check nach Migration 004" bash "$MIG2" --db "${H2A_PREFIX}o2" --check

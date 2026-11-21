@@ -1,6 +1,6 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt, AS2b (Nachverifikation, Nachweis der Entfernung) umgesetzt, AS3 (Migration 006) umgesetzt
+Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt, AS2b (Nachverifikation, Nachweis der Entfernung) umgesetzt, AS3 (Migration 006) umgesetzt, AS4a (Migration 007, Kompatibilitätsbrücke) umgesetzt
 
 ## 0. Status und Geltung
 
@@ -1062,6 +1062,79 @@ Tabelle, negative Serial, belegter Lock, Lock-Besitz während des Wartens auf di
 frühere Skripte, Rückweg) und `tests/history/as3_test.php` unter RR und RC (C Datenvertrag, S 32-Bit-Serials mit dem
 echten Generator, O altes Schema, K alter Code mit neuem Schema, T statische Unverändertheit).
 
+## 5i. Festlegungen AS4a (umgesetzt)
+
+**Umfang:** reines Schema- und Kompatibilitätspaket. Es umfasst Migration 007, die Kompatibilitätsbrücke im
+`SchemaCheck`, das Neuinstallationsschema, das Migrationsskript, Tests und Doku. Unverändert bleiben Publish,
+Journal-Schreibpfade, Monitoring, Agent, Web-Adapter und Oberfläche. Die neuen Spalten werden erst ab AS4b geschrieben.
+Planungsgrundlage und Entscheidungen O1–O10 sowie K1–K3: Freigabe vom 21.11.2026.
+
+**Journal-Ergebnisfelder (J4a, Migration 007a/007b):**
+- Je Kanal speichert `zone_publish_targets` das tatsächlich verwendete Protokoll (`zone_protocol`/`conf_protocol`:
+  `legacy` ohne `effect`, `as2` mit `effect`), `effect`, Reload-Ergebnis und Fencing-Entscheidung mit Code. Für
+  `zone_sync` kommt der installierte Stand hinzu (`zone_installed_serial`/`zone_installed_hash`, siehe unten), für
+  `conf_sync` das L3-Ergebnis (`conf_verify_state` verified/serial_differs/unknown, Grund, Datei-Serial, Datei-Hash,
+  ausgelieferte Serial).
+- `publish_cleanup_results` speichert Protokoll, `effect`, Fencing und **nur Zähler** des Entfernungsnachweises
+  (absent, still_served, unknown, nicht eindeutig zuordenbar; Q5).
+- Die Felder werden einmal zusammen mit dem Endzustand des Kanals geschrieben, nie danach (J4a).
+- `agent_protocol` bleibt unverändert. Es bezeichnet **nur den Registrierungszustand** (J2) und sagt nichts über die
+  spätere Agent-Antwort (K3).
+
+**Fencing-Domäne (E74, O2, 007c):** `system_status.fence_domain` (UUID in Kleinbuchstaben, NULL = nicht
+initialisiert). AS4b initialisiert sie per Admin-CLI und prüft sie **vor J6/J1** gegen die Web-Konfiguration (K2).
+
+**CHECKs (K1):**
+- MariaDB wertet UNKNOWN als erfüllt. Deshalb steht jeder Vergleich einer NULL-fähigen Spalte in seinem AND-Zweig
+  hinter `<spalte> IS NOT NULL`, und jede Belegung ergibt TRUE oder FALSE.
+- `chk_zpt_zone_agent`/`chk_zpt_conf_agent`/`chk_pcr_agent`: Protokoll nur mit Antwort (`ok`/`rejected`/`unknown`);
+  Legacy ohne AS2-Felder; `as2` mit `effect`; ohne Protokoll keine AS2-Felder.
+- `chk_zpt_zone_installed` (Review PR #107, R1): Serial und Hash gemeinsam, nur mit nachgewiesener Dateiübernahme
+  (`zone_protocol = as2`, `zone_effect` applied/unchanged) und Reload-Bericht des Agenten. Zulässig bei
+  `zone_sync = ok` mit `zone_reload = ok` (HTTP 200) und bei `zone_sync = unknown` mit `zone_reload`
+  failed/timeout/not_started: `zone_sync` liefert `installed` auch bei gescheitertem Reload (HTTP 500), nach E113
+  `unknown`. Der installierte Stand ist ein **technischer Rohwert** der Antwort, nie selbst eine L2- oder
+  L3-Bestätigung. Ohne Agentenantwort (Transport-Timeout), bei `effect` none/partial/unknown, bei `rejected`/`failed`
+  und bei widersprüchlicher Kombination (z. B. `unknown` mit Reload `ok`) werden keine Werte gespeichert. Die
+  operative Einordnung und die Flags bleiben unverändert (E113, J8).
+- `chk_*_fence`: Code nur mit Entscheidung.
+- `chk_zpt_conf_verify`: `verified` nur mit gleichen Serials, Datei-Hash und `conf_sync = ok`; `serial_differs` mit
+  beiden, verschiedenen Serials; ohne Zustand keine Werte.
+- `chk_pcr_served`: Zähler gemeinsam und nur bei `as2`.
+- `chk_ss_fence_domain`: UUID-Form.
+- Negativtests decken widersprüchliche NULL-Kombinationen ab, z. B. `zone_protocol` NULL bei gesetztem `zone_effect`
+  (`tests/history/as4a_test.php`, Gruppe C). Zur Gegenprobe akzeptiert die NULL-unsichere Form diese Kombination
+  (K06).
+
+**Kompatibilitätsbrücke:**
+- `SchemaCheck::HISTORY_TABLES_007` enthält die exakte Signatur der zwei Journaltabellen nach 007.
+- `evaluateHistory()` akzeptiert für genau diese Tabellen je Tabelle die bisherige **oder** diese Signatur, auch
+  gemischt (Teilzustände). Alle übrigen Tabellen und jede andere Struktur bleiben strikt; `HISTORY_TABLES` und
+  `REQUIRED` sind unverändert.
+- Die Skripte 002–006 bewerten über denselben `SchemaCheck`.
+- Der AS3-Code ist nach 007 nicht mehr zulässig (fail-closed).
+- AS4b ersetzt die Einträge durch die 007-Signatur, entfernt die Brücke und nimmt `system_status.fence_domain` in
+  `REQUIRED` auf.
+- Rollout und Rückfall: `sql/migrations/README.md`, Abschnitt 007.
+
+**Ordnungs- und Schreibvertrag für AS4b** (festgelegt, nicht Teil von AS4a):
+- `zone_server_verification` bleibt unverändert (O7).
+- `last_run_id` ist „Lauf, auf den sich die Beobachtung bezieht“: für Publish der erzeugende Lauf, für Monitoring der
+  zuletzt abgeschlossene Lauf vor Beginn der Beobachtung (Wasserstand).
+- Bei gleichem Schlüssel gilt die ausdrückliche Rangfolge (K3):
+  - Publish `conf_sync` < Publish `cleanup` desselben Laufs < Monitoring mit gleichem Wasserstand;
+  - Monitoring nach Monitoring desselben Wasserstands gilt als später;
+  - keine alphabetische und keine ENUM-Reihenfolge, nie die Serial.
+
+**Tests (AS4a):**
+- `tests/history/migration007_test.sh` (R01–R14): fehlende Vorgänger, Grundablauf mit Sitzungsparametern, Lock und
+  Kennwerten, keine DDL bei vollständigem Schema, **alle Teilzustände** mit nur den fehlenden Schritten, abweichende
+  Strukturen (auch die NULL-unsichere CHECK-Form), belegter Lock, Lock-Besitz während des Wartens, Abbruch nach
+  `lock_wait_timeout` mit Wiederanlauf, Zustandsänderung und Lock-Verlust in Mutationskopien, Neuinstallation =
+  Migration, frühere Skripte vor und nach 007, Notfall-Rückbau.
+- `tests/history/as4a_test.php` unter RR und RC: G Brücke, C CHECK-Vertrag, K Code × Schema, V unveränderter
+  Journalablauf vor/nach 007, S statische Nachweise.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -1449,7 +1522,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E84 | `fsync` auch für Zonen- und Konfigurationsdateien | entschieden; umgesetzt (AS1) |
 | E85 | Discard unveröffentlichter Änderungen (Admin; zoneadmin nur berechtigte Zonen; ohne L3, sofern seit P kein möglicherweise verteilter Versuch existiert) und Restore veröffentlichter oder möglicherweise verteilter Revisionen (Admin alle, zoneadmin berechtigte Zonen; `partial`/`unknown` nur Admin) sind getrennte Core-Vorgänge; Restore veröffentlicht nie selbst und löst nie Publish All aus (ersetzt die Empfehlung zu E4) | entschieden, Umsetzung H4/H5 |
 | E86 | Absturztests per dm-flakey | entschieden; umgesetzt (AS1) |
-| E87 | `zone_server_verification` als retentionsfeste Tabelle des letzten Stands | umgesetzt (AS3, Abschnitt 5h; Schreibregeln AS4) |
+| E87 | `zone_server_verification` als retentionsfeste Tabelle des letzten Stands | umgesetzt (AS3, Abschnitt 5h; Schreibregeln AS4b, Ordnungsvertrag Abschnitt 5i) |
 | E88 | AS-PRs nacheinander | entschieden |
 | E89 | Verzeichnis-`fsync` nativ in PHP (`fopen($dir, 'r')`), kein `sync`-Ersatz | entschieden (AS0); umgesetzt (AS1) |
 | E90 | Write-ahead-Fehlermarke: dauerhaft vor jeder Änderung von H, Entfernen erst nach vollständiger Persistenz; Aufheben nur lokal per CLI | entschieden (Präzisierung AS1); umgesetzt |
@@ -1501,6 +1574,8 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 21.11.2026 | Review PR #107, R1: `chk_zpt_zone_installed` erlaubt den vom Agenten gemeldeten installierten Stand auch bei `zone_sync = unknown` nach gescheitertem Reload (as2, effect applied/unchanged, Reload failed/timeout/not_started), weiterhin nur gemeinsam und nie als L2-/L3-Bestätigung; Tests C06b–d, C29b, C30–C30h |
+| 21.11.2026 | AS4a umgesetzt: Abschnitt 5i (Migration 007 mit Agent-Ergebnisfeldern in `zone_publish_targets`/`publish_cleanup_results` und `system_status.fence_domain`, NULL-sichere CHECKs K1, Kompatibilitätsbrücke `HISTORY_TABLES_007`, `agent_protocol` als Registrierungszustand K3, Reihenfolge Domänenprüfung vor J6/J1 K2, Ordnungsvertrag für AS4b); Publish, Journal-Schreibpfade, Monitoring, Agent und Oberfläche unverändert |
 | 20.11.2026 | AS3 umgesetzt: Abschnitt 5h (Migration 006 mit `zones.soa_serial` als `INT UNSIGNED` und Tabelle `zone_server_verification`, Datenvertrag und NULL-sichere CHECKs, Migration unter dem Publish-Lock in einer Sitzung), E79 und E87 umgesetzt; Abschnitte 5 und 10 nachgeführt; Serial-Strategie, Publish, Historie, Agent und Oberfläche unverändert |
 | 20.11.2026 | Review PR #105, Nachtrag R2: `control_queries` zählt nur tatsächlich gestartete dig-Prozesse der Kontrollabfrage (`dnsQuery()['started']`, `dnsControlZoneState()['queried']`), nicht `dig_not_started`/`dig_error`; Zustände und Nachweislogik unverändert; Tests C09–C13, Mutation MV19 |
 | 20.11.2026 | Review PR #105: R1 – Cleanup meldet `still_served` auch bei K = ja bzw. strukturell unbestimmbarem K nur aus der letzten vollständigen Runde (Abschnitt 5g an R4 und die freigegebene Matrix angeglichen); R2 – `control_queries` zählt nur tatsächlich ausgeführte DNS-Abfragen der Kontrollzone; Tests F08/F09, DR04–DR04c, C06–C10, Mutationen MV17/MV18 |

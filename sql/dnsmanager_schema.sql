@@ -81,7 +81,13 @@ CREATE TABLE user_zones (
 -- Systemstatus (für Publish-Trigger)
 CREATE TABLE system_status (
     id INT PRIMARY KEY CHECK (id = 1),
-    bind_dirty BOOLEAN NOT NULL DEFAULT 0
+    bind_dirty BOOLEAN NOT NULL DEFAULT 0,
+    -- AS4a (Migration 007c, E74/O2): Fencing-Domäne der Installation; NULL = nicht initialisiert (AS4b: Admin-CLI)
+    fence_domain CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    CONSTRAINT chk_ss_fence_domain CHECK (
+        fence_domain IS NULL
+        OR (fence_domain IS NOT NULL AND fence_domain REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+    )
 );
 
 -- Tabelle: zone_servers (Zuordnung Zone ↔ Server)
@@ -383,6 +389,24 @@ CREATE TABLE IF NOT EXISTS zone_publish_targets (
     conf_error_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
     conf_error_detail VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL DEFAULT NULL,
     conf_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
+    -- AS4a (Migration 007a): Agent-Ergebnisfelder je Kanal (J4a); agent_protocol = Registrierungszustand
+    zone_protocol ENUM('legacy', 'as2') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    zone_effect ENUM('none', 'unchanged', 'applied', 'partial', 'unknown') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    zone_installed_serial INT UNSIGNED NULL,
+    zone_installed_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    zone_reload ENUM('ok', 'failed', 'timeout', 'not_started') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    zone_fence_decision ENUM('accept', 'would_reject', 'reject') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    zone_fence_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_protocol ENUM('legacy', 'as2') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_effect ENUM('none', 'unchanged', 'applied', 'partial', 'unknown') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_reload ENUM('ok', 'failed', 'timeout', 'not_started') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_fence_decision ENUM('accept', 'would_reject', 'reject') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_fence_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_verify_state ENUM('verified', 'serial_differs', 'unknown') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_verify_reason VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_verify_file_serial INT UNSIGNED NULL,
+    conf_verify_file_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    conf_verify_served_serial INT UNSIGNED NULL,
     PRIMARY KEY (attempt_id, server_id),
     KEY idx_zpt_server (server_id, attempt_id),
     CONSTRAINT fk_zpt_attempt FOREIGN KEY (attempt_id) REFERENCES zone_publish_attempts (id)
@@ -404,6 +428,59 @@ CREATE TABLE IF NOT EXISTS zone_publish_targets (
     CONSTRAINT chk_zpt_http CHECK (
         (zone_http_status IS NULL OR zone_http_status BETWEEN 100 AND 599)
         AND (conf_http_status IS NULL OR conf_http_status BETWEEN 100 AND 599)
+    ),
+    CONSTRAINT chk_zpt_zone_agent CHECK (
+        (zone_protocol IS NULL AND zone_effect IS NULL AND zone_installed_serial IS NULL AND zone_installed_hash IS NULL
+            AND zone_reload IS NULL AND zone_fence_decision IS NULL AND zone_fence_code IS NULL)
+        OR (zone_protocol IS NOT NULL AND zone_protocol = 'legacy' AND zone_sync IN ('ok', 'rejected', 'unknown')
+            AND zone_effect IS NULL AND zone_installed_serial IS NULL AND zone_installed_hash IS NULL
+            AND zone_reload IS NULL AND zone_fence_decision IS NULL AND zone_fence_code IS NULL)
+        OR (zone_protocol IS NOT NULL AND zone_protocol = 'as2' AND zone_sync IN ('ok', 'rejected', 'unknown')
+            AND zone_effect IS NOT NULL)
+    ),
+    CONSTRAINT chk_zpt_zone_installed CHECK (
+        (zone_installed_serial IS NULL AND zone_installed_hash IS NULL)
+        OR (zone_installed_serial IS NOT NULL AND zone_installed_hash IS NOT NULL
+            AND zone_installed_hash REGEXP '^[0-9a-f]{64}$'
+            AND zone_protocol IS NOT NULL AND zone_protocol = 'as2'
+            AND zone_effect IS NOT NULL AND zone_effect IN ('applied', 'unchanged')
+            AND zone_reload IS NOT NULL
+            AND ((zone_sync = 'ok' AND zone_reload = 'ok')
+                OR (zone_sync = 'unknown' AND zone_reload IN ('failed', 'timeout', 'not_started'))))
+    ),
+    CONSTRAINT chk_zpt_zone_fence CHECK (
+        (zone_fence_decision IS NULL AND zone_fence_code IS NULL)
+        OR (zone_fence_decision IS NOT NULL AND zone_fence_code IS NULL)
+        OR (zone_fence_decision IS NOT NULL AND zone_fence_code IS NOT NULL AND zone_fence_code REGEXP '^[a-z_]{1,32}$')
+    ),
+    CONSTRAINT chk_zpt_conf_agent CHECK (
+        (conf_protocol IS NULL AND conf_effect IS NULL AND conf_reload IS NULL AND conf_fence_decision IS NULL
+            AND conf_fence_code IS NULL AND conf_verify_state IS NULL)
+        OR (conf_protocol IS NOT NULL AND conf_protocol = 'legacy' AND conf_sync IN ('ok', 'rejected', 'unknown')
+            AND conf_effect IS NULL AND conf_reload IS NULL AND conf_fence_decision IS NULL AND conf_fence_code IS NULL
+            AND conf_verify_state IS NULL)
+        OR (conf_protocol IS NOT NULL AND conf_protocol = 'as2' AND conf_sync IN ('ok', 'rejected', 'unknown')
+            AND conf_effect IS NOT NULL)
+    ),
+    CONSTRAINT chk_zpt_conf_fence CHECK (
+        (conf_fence_decision IS NULL AND conf_fence_code IS NULL)
+        OR (conf_fence_decision IS NOT NULL AND conf_fence_code IS NULL)
+        OR (conf_fence_decision IS NOT NULL AND conf_fence_code IS NOT NULL AND conf_fence_code REGEXP '^[a-z_]{1,32}$')
+    ),
+    CONSTRAINT chk_zpt_conf_verify CHECK (
+        (conf_verify_state IS NULL AND conf_verify_reason IS NULL AND conf_verify_file_serial IS NULL
+            AND conf_verify_file_hash IS NULL AND conf_verify_served_serial IS NULL)
+        OR (conf_verify_state IS NOT NULL AND conf_verify_state = 'verified' AND conf_sync = 'ok'
+            AND conf_verify_file_serial IS NOT NULL AND conf_verify_served_serial IS NOT NULL
+            AND conf_verify_file_serial = conf_verify_served_serial AND conf_verify_file_hash IS NOT NULL)
+        OR (conf_verify_state IS NOT NULL AND conf_verify_state = 'serial_differs'
+            AND conf_verify_file_serial IS NOT NULL AND conf_verify_served_serial IS NOT NULL
+            AND conf_verify_file_serial <> conf_verify_served_serial)
+        OR (conf_verify_state IS NOT NULL AND conf_verify_state = 'unknown')
+    ),
+    CONSTRAINT chk_zpt_conf_verify_fmt CHECK (
+        (conf_verify_reason IS NULL OR (conf_verify_reason IS NOT NULL AND conf_verify_reason REGEXP '^[a-z0-9_:]{1,64}$'))
+        AND (conf_verify_file_hash IS NULL OR (conf_verify_file_hash IS NOT NULL AND conf_verify_file_hash REGEXP '^[0-9a-f]{64}$'))
     )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -421,6 +498,15 @@ CREATE TABLE IF NOT EXISTS publish_cleanup_results (
     http_status SMALLINT UNSIGNED NULL DEFAULT NULL,
     error_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
     error_detail VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL DEFAULT NULL,
+    -- AS4a (Migration 007b): Agent-Ergebnisfelder (J4a, nur Zähler Q5)
+    cleanup_protocol ENUM('legacy', 'as2') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    cleanup_effect ENUM('none', 'unchanged', 'applied', 'partial', 'unknown') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    fence_decision ENUM('accept', 'would_reject', 'reject') CHARACTER SET ascii COLLATE ascii_bin NULL,
+    fence_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    served_absent_count INT UNSIGNED NULL,
+    served_still_count INT UNSIGNED NULL,
+    served_unknown_count INT UNSIGNED NULL,
+    unassigned_count INT UNSIGNED NULL,
     PRIMARY KEY (run_id, server_id),
     KEY idx_pcr_server (server_id, run_id),
     CONSTRAINT fk_pcr_run FOREIGN KEY (run_id) REFERENCES publish_runs (id)
@@ -437,7 +523,24 @@ CREATE TABLE IF NOT EXISTS publish_cleanup_results (
         (status IN ('ok', 'partial') AND removed_conf_count IS NOT NULL AND removed_zone_file_count IS NOT NULL)
         OR (status NOT IN ('ok', 'partial') AND removed_conf_count IS NULL AND removed_zone_file_count IS NULL)
     ),
-    CONSTRAINT chk_pcr_http CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599)
+    CONSTRAINT chk_pcr_http CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+    CONSTRAINT chk_pcr_agent CHECK (
+        (cleanup_protocol IS NULL AND cleanup_effect IS NULL AND fence_decision IS NULL AND fence_code IS NULL)
+        OR (cleanup_protocol IS NOT NULL AND cleanup_protocol = 'legacy' AND status IN ('ok', 'partial', 'rejected', 'unknown')
+            AND cleanup_effect IS NULL AND fence_decision IS NULL AND fence_code IS NULL)
+        OR (cleanup_protocol IS NOT NULL AND cleanup_protocol = 'as2' AND status IN ('ok', 'partial', 'rejected', 'unknown')
+            AND cleanup_effect IS NOT NULL)
+    ),
+    CONSTRAINT chk_pcr_fence CHECK (
+        (fence_decision IS NULL AND fence_code IS NULL)
+        OR (fence_decision IS NOT NULL AND fence_code IS NULL)
+        OR (fence_decision IS NOT NULL AND fence_code IS NOT NULL AND fence_code REGEXP '^[a-z_]{1,32}$')
+    ),
+    CONSTRAINT chk_pcr_served CHECK (
+        (served_absent_count IS NULL AND served_still_count IS NULL AND served_unknown_count IS NULL AND unassigned_count IS NULL)
+        OR (served_absent_count IS NOT NULL AND served_still_count IS NOT NULL AND served_unknown_count IS NOT NULL
+            AND unassigned_count IS NOT NULL AND cleanup_protocol IS NOT NULL AND cleanup_protocol = 'as2')
+    )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Ausgelieferter Stand je Zone und Server (Migration 006, AS3, E87); retentionsfest, ohne Fremdschlüssel
