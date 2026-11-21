@@ -216,7 +216,7 @@ $diff = trim((string)shell_exec('LC_ALL=C diff -rq ' . escapeshellarg("$baseApp/
 t('T03 web/ und agent/ gegenüber Basis nur in SchemaCheck.php geändert',
     $diff === "Files $baseApp/web/inc/app/SchemaCheck.php and $app/web/inc/app/SchemaCheck.php differ", $diff);
 $hits = trim((string)shell_exec('grep -rl zone_server_verification ' . escapeshellarg("$app/web") . ' ' . escapeshellarg("$app/agent") . ' ' . escapeshellarg("$app/scripts") . ' 2>/dev/null'));
-$allowed = ["$app/web/inc/app/SchemaCheck.php", "$app/scripts/migrate_006_zone_serial_verification.sh"];
+$allowed = ["$app/web/inc/app/SchemaCheck.php", "$app/scripts/migrate_006_zone_serial_verification.sh", "$app/scripts/migrate_007_journal_agent_results.sh"];   // 007: nur Strukturprüfung (AS4a)
 $extra = array_diff(array_filter(explode("\n", $hits)), $allowed);
 t('T02 zone_server_verification nur in SchemaCheck und Migrationsskript (kein Schreiber, kein Leser vor AS4)', $extra === [], implode(', ', $extra));
 
