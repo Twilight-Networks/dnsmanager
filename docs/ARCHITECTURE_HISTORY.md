@@ -1197,6 +1197,10 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
   abweichende Zone gilt für jeden Zustand als ungültig und ergibt nie `verified`.
 - **Ungültiges Verifikationsobjekt (Review R3):** Ein fehlendes, ungültiges, unvollständiges oder widersprüchliches Objekt
   ist kein Messergebnis. Dazu zählen auch vorhandene, aber fehlerhaft geformte Serials, Hashes oder Gründe.
+  - Vollständig heißt: Alle sechs Felder des Grundschemas (`state`, `reason`, `zone`, `file_serial`, `file_sha256`,
+    `served_serial`) sind vorhanden; nicht verfügbare Messwerte sind ausdrücklich `null`. Ein fehlendes Feld wird nicht
+    mit `null` gleichgesetzt. Bei `state = unknown` ist ein gültiger Grund Pflicht. `verified` und `serial_differs`
+    behalten ihre Zustandsbedingungen.
   - Im Publish-Pfad wird es nach E77 sicher eingeordnet: Journal und Beobachtung `unknown`/`verification_invalid`,
     `verified_*` bleibt unverändert, die operative Einordnung bleibt.
   - Im rein lesenden Monitoring wird es verworfen: `last_*` und `verified_*` bleiben unverändert, der Bericht
@@ -1268,7 +1272,7 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
   - E Fehlerinjektion;
   - X Code × Schema;
   - S statisch.
-- `tests/history/as4b_mutation_test.sh` mit 21 Mutationsproben (B17–B21 für R2/R3).
+- `tests/history/as4b_mutation_test.sh` mit 23 Mutationsproben (B17–B23 für R2/R3).
 - Angepasst: Migrationstests 002–007 (strikte Befunde vor 007, Werkzeugsicht), `as3_test.php`, `as4a_test.php`,
   `static_rh8_test.php`.
 
@@ -1711,6 +1715,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 23.11.2026 | Review PR #108, R3-Nachtrag: Vollständigkeit des Verifikationsobjekts (alle sechs Grundfelder vorhanden, fehlend ≠ `null`, `unknown` nur mit gültigem Grund); `conf_sync` unverändert nach E77; Tests P34–P43, Mutationen B22/B23 |
 | 23.11.2026 | Review PR #108: R2 – Zonenidentität des Verifikationsnachweises (`conf_sync` gegen die Zone des Versuchs, `zone_verify` gegen die angefragte Zone, DNS-Namensnormalisierung; fehlend/ungültig/abweichend nie `verified`); R3 – ungültige Monitoring-Verifikation wird verworfen statt als `unknown` gespeichert, vorhandene fehlerhaft geformte Rohwerte machen das Objekt ungültig; Abschnitt 5j, Tests P17–P33, J13/J14, M07–M09, Mutationen B17–B21 |
 | 21.11.2026 | AS4b umgesetzt: Abschnitt 5j (Fencing-Domäne vor J6/J1, Lauf-ID als Token an `zone_sync`/`conf_sync`/`zone_cleanup`, Laufprüfung vor jedem Agent-Aufruf, Restore-Abgleich und Admin-CLI, `AgentResponseParser` mit R1, Journal-Ergebnisfelder, `ServerVerificationStore` mit Ordnungsvertrag und Nachweiserhalt, Cleanup-Zuordnung, `zone_verify` und Monitoring mit Wasserstand, Code verlangt 007 strikt); E74, E76, E81, E83, E87, E109 umgesetzt; Abschnitte 0 und 18 nachgeführt |
 | 21.11.2026 | Review PR #107, R1: `chk_zpt_zone_installed` erlaubt den vom Agenten gemeldeten installierten Stand auch bei `zone_sync = unknown` nach gescheitertem Reload (as2, effect applied/unchanged, Reload failed/timeout/not_started), weiterhin nur gemeinsam und nie als L2-/L3-Bestätigung; Tests C06b–d, C29b, C30–C30h |

@@ -73,7 +73,9 @@ mutate B16 "$ST" "                \$this->pdo->beginTransaction();
 mutate B17 "$P" "if (\$expected === null || self::zoneName(\$v['zone'] ?? null) !== \$expected) {" 'if (false) {' P,J,M 'Zonenidentität der Verifikation nicht geprüft (R2)'
 mutate B18 "$P" "self::zoneName(\$v['zone'] ?? null) !== \$expected" "(\$v['zone'] ?? null) !== \$zone" P 'Zonenvergleich ohne DNS-Namensnormalisierung (R2)'
 mutate B19 "$P" '        if ($invalid !== []) {' '        if (false) {' P,M 'ungültige zone_verify-Antwort herabgestuft und gespeichert statt verworfen (R3)'
-mutate B20 "$P" "            if ((\$v[\$k] ?? null) !== null && \$parsed === null) {" '            if (false) {' P,M 'fehlerhaft geformte Rohwerte stillschweigend verworfen (R3)'
+mutate B20 "$P" "            if (\$v[\$k] !== null && \$parsed === null) {" '            if (false) {' P,M 'fehlerhaft geformte Rohwerte stillschweigend verworfen (R3)'
+mutate B22 "$P" '            if (!array_key_exists($k, $v)) {' '            if (false) {' P 'fehlendes Grundfeld wie null behandelt (R3-Nachtrag)'
+mutate B23 "$P" "        if (\$v['state'] === 'unknown' && \$reason === null) {" '        if (false) {' P 'unknown ohne gültigen Grund akzeptiert (R3-Nachtrag)'
 mutate B21 "$J" "\$raw, \$c, (string)\$attempt['zoneName']);" "\$raw, \$c, 'beta.h2b.test');" J 'Publish prüft gegen eine feste statt die Zone des Versuchs (R2)'
 
 echo "ERGEBNIS as4b_mutation: $PASS erkannt, $FAIL nicht erkannt"

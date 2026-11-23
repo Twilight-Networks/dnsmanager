@@ -24,6 +24,9 @@
  *   zugeordnet wird.
  * - zone_verify (Review R3): Nur ein vollständig gültiges Verifikationsobjekt ist eine Beobachtung (auch state unknown);
  *   ein fehlendes, ungültiges, unvollständiges oder widersprüchliches Objekt wird verworfen, nicht herabgestuft.
+ *   Vollständig heißt: alle Felder des Grundschemas (VERIFY_FIELDS) vorhanden, nicht verfügbare Messwerte ausdrücklich
+ *   null, Nicht-null-Werte streng gültig, bei unknown ein gültiger Grund. Für conf_sync gilt dieselbe Prüfung mit der
+ *   bisherigen E77-Folge (Herabstufung zu unknown/verification_invalid).
  * - Cleanup (AS2b): Ergebnis je Zone (Name aus dem Konfigurationsnachweis des Agenten, served, served_reason,
  *   served_serial nur bei still_served aus einer konkreten DNS-Beobachtung) und Zähler.
  * Ungültige Einzelangaben werden verworfen (NULL) und unter "invalid" benannt.
@@ -35,6 +38,8 @@ final class AgentResponseParser
     public const RELOADS = ['ok', 'failed', 'timeout', 'not_started'];
     public const DECISIONS = ['accept', 'would_reject', 'reject'];
     public const VERIFY_STATES = ['verified', 'serial_differs', 'unknown'];
+    /** Grundschema des Verifikationsobjekts (agent/inc/dns_verify.php, auch bei unknown vollständig; R3) */
+    public const VERIFY_FIELDS = ['state', 'reason', 'zone', 'file_serial', 'file_sha256', 'served_serial'];
     public const SERVED = ['absent', 'still_served', 'unknown'];
     public const SERIAL_MAX = 4294967295;
 
@@ -233,11 +238,22 @@ final class AgentResponseParser
         $ss = self::serial($v['served_serial'] ?? null);
         $fh = self::hash($v['file_sha256'] ?? null);
         $reason = self::reason($v['reason'] ?? null);
-        // R3: vorhandene, aber fehlerhaft geformte Rohwerte ⇒ Objekt ungültig (nicht stillschweigend NULL)
-        foreach (['file_serial' => $fs, 'served_serial' => $ss, 'file_sha256' => $fh, 'reason' => $reason] as $k => $parsed) {
-            if (($v[$k] ?? null) !== null && $parsed === null) {
+        // R3: festes Grundschema des Agenten – alle Felder vorhanden (nicht verfügbare Werte ausdrücklich null); ein
+        // fehlendes Feld ist nicht dasselbe wie null
+        foreach (self::VERIFY_FIELDS as $k) {
+            if (!array_key_exists($k, $v)) {
                 return $down();
             }
+        }
+        // R3: vorhandene, aber fehlerhaft geformte Rohwerte ⇒ Objekt ungültig (nicht stillschweigend NULL)
+        foreach (['file_serial' => $fs, 'served_serial' => $ss, 'file_sha256' => $fh, 'reason' => $reason] as $k => $parsed) {
+            if ($v[$k] !== null && $parsed === null) {
+                return $down();
+            }
+        }
+        // R3: unknown nur mit gültigem Grund
+        if ($v['state'] === 'unknown' && $reason === null) {
+            return $down();
         }
         switch ($v['state']) {
             case 'verified':

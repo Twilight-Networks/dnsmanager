@@ -11,7 +11,8 @@
  *   L  Lock-Verlust (E83): laufeigene Sperre bzw. Verbindung verloren ⇒ kein weiterer Agent-Request, Ziel run_lock_lost,
  *      Lauf exception, Flags 2 → 1
  *   P  Parser (rein): Protokoll, effect, installierter Stand mit R1, Verifikation mit Herabstufung, Cleanup-Zonen;
- *      Zonenidentität mit Normalisierung (R2), zone_verify: gültig gespeichert, ungültig verworfen (R3)
+ *      Zonenidentität mit Normalisierung (R2), zone_verify: gültig gespeichert, ungültig verworfen (R3), Grundschema
+ *      vollständig (fehlend ≠ null, unknown nur mit Grund)
  *   J  Journal-Rohwerte und Matrix E77/J8: je Fall Journal, Flags und Beobachtung; R1 installierter Stand bei
  *      gescheitertem Reload als Rohwert; Mischbetrieb legacy/as2 im selben Lauf
  *   O  Ordnungsvertrag (K3) und Erhalt des positiven Nachweises
@@ -195,7 +196,7 @@ if ($group('L')) {
 
 // ---------------------------------------------------------------- P: Parser (rein)
 if ($group('P')) {
-    $R = static fn (int $h, array $b): array => As4bFakeAgent::resp($h, $b);
+    $R = static fn (int $h, array $b): array => As4bFakeAgent::resp($h, is_array($b['verification'] ?? null) ? ['verification' => As4bFakeAgent::v($b['verification'])] + $b : $b);
     $h = str_repeat('a', 64);
     $cOk = ['status' => 'ok'];
     $cUnk = ['status' => 'unknown'];
@@ -243,6 +244,7 @@ if ($group('P')) {
     [$v2, $w2] = $zv($R(404, ['status' => 'error']));
     t('P16 Zone-verify: 409 (off) und 404 (alter Agent) ⇒ keine Beobachtung (no_result)', $v1 === null && $v2 === null && $w1 === 'no_result' && $w2 === 'no_result');
     $ok = static fn (array $v): array => $R(200, ['status' => 'success', 'verification' => $v]);
+    $raw = static fn (array $v): array => As4bFakeAgent::resp(200, ['status' => 'success', 'verification' => $v]);   // ohne Ergänzung
     [$v, $w] = $zv($ok(['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]));
     t('P24 Zone-verify gültig, richtige Zone ⇒ verified', ($v['state'] ?? null) === 'verified' && $w === null, json_encode([$v, $w]));
     [$v, $w] = $zv($ok(['state' => 'unknown', 'zone' => 'z.test', 'reason' => 'last_round_unknown']));
@@ -262,12 +264,35 @@ if ($group('P')) {
     }
     [$v, $w] = $zv($R(200, ['status' => 'success', 'verification' => 'kaputt']));
     t('P33 Verifikation kein Objekt ⇒ verworfen (invalid)', $v === null && $w === 'invalid');
+    // R3-Nachtrag: festes Grundschema (state, reason, zone, file_serial, file_sha256, served_serial)
+    $full = ['state' => 'unknown', 'reason' => 'last_round_unknown', 'zone' => 'z.test', 'file_serial' => null, 'file_sha256' => null, 'served_serial' => null];
+    [$v, $w] = $zv($raw($full));
+    t('P34 unknown mit vollständigem Schema und ausdrücklichen null-Werten ⇒ gültige Beobachtung', ($v['state'] ?? null) === 'unknown'
+        && $v['reason'] === 'last_round_unknown' && $v['fileSerial'] === null && $v['fileHash'] === null && $v['servedSerial'] === null && $w === null, json_encode([$v, $w]));
+    $cases3 = [
+        'P35 unknown ohne file_serial' => array_diff_key($full, ['file_serial' => 1]),
+        'P36 unknown ohne file_sha256' => array_diff_key($full, ['file_sha256' => 1]),
+        'P37 unknown ohne served_serial' => array_diff_key($full, ['served_serial' => 1]),
+        'P38 unknown ohne reason' => array_diff_key($full, ['reason' => 1]),
+        'P39 unknown mit reason null' => ['reason' => null] + $full,
+        'P40 fehlerhafter Hash (Großbuchstaben)' => ['file_sha256' => str_repeat('A', 64)] + $full,
+        'P41 fehlerhafter reason' => ['reason' => 'Ungültiger Grund!'] + $full,
+        'P42 verified ohne Feld reason' => array_diff_key(['state' => 'verified', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h] + $full, ['reason' => 1]),
+    ];
+    foreach ($cases3 as $id => $obj) {
+        [$v, $w] = $zv($raw($obj));
+        t("$id ⇒ Zone-verify verworfen (invalid)", $v === null && $w === 'invalid', json_encode([$v, $w]));
+    }
+    $p = AgentResponseParser::parse('conf_sync', As4bFakeAgent::resp(200, ['status' => 'success', 'effect' => 'applied',
+        'verification' => array_diff_key(['state' => 'verified', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h] + $full, ['served_serial' => 1])]), $cOk, 'z.test');
+    t('P43 conf_sync: unvollständiges Objekt ⇒ unknown/verification_invalid (E77 unverändert)', $p['verify'] === ['state' => 'unknown', 'reason' => 'verification_invalid',
+        'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null] && in_array('verification', $p['invalid'], true), json_encode($p['verify']));
 }
 
 // ---------------------------------------------------------------- J: Journal-Rohwerte, Matrix E77/J8, R1, Mischbetrieb
 if ($group('J')) {
     $pdo->exec('DELETE FROM zone_server_verification');
-    $R = static fn (int $h, array $b): array => As4bFakeAgent::resp($h, $b);
+    $R = static fn (int $h, array $b): array => As4bFakeAgent::resp($h, is_array($b['verification'] ?? null) ? ['verification' => As4bFakeAgent::v($b['verification'])] + $b : $b);
     // Matrix je conf_sync-Antwort für beta (Server 1): [Antwort, Journal conf_sync, conf_protocol, verify, changed, Beobachtung]
     $matrix = [
         'J01 nicht zugestellt' => [As4bFakeAgent::transport(7, 'refused'), 'failed', null, null, 1, null],
@@ -523,7 +548,7 @@ if ($group('M')) {
         'gamma.h2b.test' => ['state' => 'unknown', 'zone' => 'gamma.h2b.test', 'served_serial' => 'abc'],
         '2.0.192.in-addr.arpa' => ['state' => 'unknown', 'zone' => '2.0.192.in-addr.arpa', 'reason' => 'dns_timeout'],
     ];
-    $a->queue['/zones/zone_verify.php|' . IP1] = array_fill(0, 4, static fn (array $pl) => As4bFakeAgent::resp(200, ['status' => 'success', 'verification' => $answers[$pl['zone_name']]]));
+    $a->queue['/zones/zone_verify.php|' . IP1] = array_fill(0, 4, static fn (array $pl) => As4bFakeAgent::resp(200, ['status' => 'success', 'verification' => As4bFakeAgent::v($answers[$pl['zone_name']])]));
     $r = $mon($a);
     $s1 = $snapRows();
     t('M07 falsche Zone (beta), fehlende Zone (alpha), fehlerhafte Serial (gamma) ⇒ verworfen: last_* und verified_* unverändert',

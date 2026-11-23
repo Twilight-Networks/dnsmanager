@@ -68,6 +68,15 @@ final class As4bFakeAgent implements AgentClient
         return self::resp(200, ['status' => 'ok', 'message' => '']);
     }
 
+    /**
+     * Verifikationsobjekt im festen Grundschema des Agenten (state, reason, zone, file_serial, file_sha256, served_serial;
+     * nicht verfügbare Werte ausdrücklich null). Fehlende Grundfelder werden ergänzt, „zone“ nie (Prüfung R2).
+     */
+    public static function v(array $v): array
+    {
+        return $v + ['reason' => null, 'file_serial' => null, 'file_sha256' => null, 'served_serial' => null];
+    }
+
     /** Endpunkte eines Laufs (ohne system/status) */
     public function writes(): array
     {
@@ -94,7 +103,7 @@ final class As4bFakeAgent implements AgentClient
                 }
                 $f = $this->files[$ip . '|' . $payload['zone_name']] ?? null;
                 return self::resp(200, $base + ['verification' => $f === null
-                    ? ['state' => 'unknown', 'reason' => 'file_missing', 'zone' => $payload['zone_name']]
+                    ? ['state' => 'unknown', 'reason' => 'file_missing', 'zone' => $payload['zone_name'], 'file_serial' => null, 'file_sha256' => null, 'served_serial' => null]
                     : ['state' => 'verified', 'reason' => null, 'zone' => $payload['zone_name'], 'file_serial' => $f['serial'],
                         'file_sha256' => $f['sha'], 'served_serial' => $f['serial']]]);
             case '/zones/zone_cleanup.php':
@@ -103,7 +112,7 @@ final class As4bFakeAgent implements AgentClient
             case '/zones/zone_verify.php':
                 $f = $this->files[$ip . '|' . $payload['zone_name']] ?? null;
                 return self::resp(200, ['status' => 'success', 'verification' => $f === null
-                    ? ['state' => 'unknown', 'reason' => 'file_missing', 'zone' => $payload['zone_name']]
+                    ? ['state' => 'unknown', 'reason' => 'file_missing', 'zone' => $payload['zone_name'], 'file_serial' => null, 'file_sha256' => null, 'served_serial' => null]
                     : ['state' => 'verified', 'reason' => null, 'zone' => $payload['zone_name'], 'file_serial' => $f['serial'], 'file_sha256' => $f['sha'], 'served_serial' => $f['serial']]]);
         }
 

@@ -268,7 +268,9 @@ Konfiguration oder H.
 
 `system/status` meldet in `observe`/`enforce` `capabilities.zone_verify = 1`; nur solche Agenten fragt das Monitoring ab.
 Ältere Agenten (404) und Agenten in `off` werden nicht abgefragt. `verification.zone` muss die angefragte Zone nennen;
-eine Antwort für eine andere Zone, ohne Zone oder mit ungültigem bzw. unvollständigem Objekt verwirft der Core (kein
+eine Antwort für eine andere Zone, ohne Zone oder mit ungültigem bzw. unvollständigem Objekt (Grundschema `state`,
+`reason`, `zone`, `file_serial`, `file_sha256`, `served_serial` nicht vollständig, bei `unknown` ohne gültigen Grund)
+verwirft der Core (kein
 Eintrag, Zähler im Monitoring-Bericht). Das Monitoring speichert die Beobachtungen nur, wenn
 während der Abfragen kein Publish-Lauf begonnen hat (Wasserstand, `ARCHITECTURE_HISTORY.md` Abschnitt 5j).
 
