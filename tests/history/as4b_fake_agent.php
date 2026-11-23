@@ -94,7 +94,7 @@ final class As4bFakeAgent implements AgentClient
                 }
                 $f = $this->files[$ip . '|' . $payload['zone_name']] ?? null;
                 return self::resp(200, $base + ['verification' => $f === null
-                    ? ['state' => 'unknown', 'reason' => 'file_missing']
+                    ? ['state' => 'unknown', 'reason' => 'file_missing', 'zone' => $payload['zone_name']]
                     : ['state' => 'verified', 'reason' => null, 'zone' => $payload['zone_name'], 'file_serial' => $f['serial'],
                         'file_sha256' => $f['sha'], 'served_serial' => $f['serial']]]);
             case '/zones/zone_cleanup.php':
@@ -103,8 +103,8 @@ final class As4bFakeAgent implements AgentClient
             case '/zones/zone_verify.php':
                 $f = $this->files[$ip . '|' . $payload['zone_name']] ?? null;
                 return self::resp(200, ['status' => 'success', 'verification' => $f === null
-                    ? ['state' => 'unknown', 'reason' => 'file_missing']
-                    : ['state' => 'verified', 'reason' => null, 'file_serial' => $f['serial'], 'file_sha256' => $f['sha'], 'served_serial' => $f['serial']]]);
+                    ? ['state' => 'unknown', 'reason' => 'file_missing', 'zone' => $payload['zone_name']]
+                    : ['state' => 'verified', 'reason' => null, 'zone' => $payload['zone_name'], 'file_serial' => $f['serial'], 'file_sha256' => $f['sha'], 'served_serial' => $f['serial']]]);
         }
 
         return self::resp(404, ['status' => 'error', 'message' => 'unbekannt']);

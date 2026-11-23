@@ -10,12 +10,14 @@
  *      Admin-Dienst: init-domain nur einmal und nur passend zur Konfiguration, raise-runs nur anheben
  *   L  Lock-Verlust (E83): laufeigene Sperre bzw. Verbindung verloren ⇒ kein weiterer Agent-Request, Ziel run_lock_lost,
  *      Lauf exception, Flags 2 → 1
- *   P  Parser (rein): Protokoll, effect, installierter Stand mit R1, Verifikation mit Herabstufung, Cleanup-Zonen
+ *   P  Parser (rein): Protokoll, effect, installierter Stand mit R1, Verifikation mit Herabstufung, Cleanup-Zonen;
+ *      Zonenidentität mit Normalisierung (R2), zone_verify: gültig gespeichert, ungültig verworfen (R3)
  *   J  Journal-Rohwerte und Matrix E77/J8: je Fall Journal, Flags und Beobachtung; R1 installierter Stand bei
  *      gescheitertem Reload als Rohwert; Mischbetrieb legacy/as2 im selben Lauf
  *   O  Ordnungsvertrag (K3) und Erhalt des positiven Nachweises
  *   C  Cleanup-Zuordnung (0/1/2 Kandidaten, zugewiesen) und served_serial
- *   M  Monitoring: Fähigkeit, Wasserstand unter dem Publish-Lock, belegter Lock, geänderter Wasserstand
+ *   M  Monitoring: Fähigkeit, Wasserstand unter dem Publish-Lock, belegter Lock, geänderter Wasserstand; ungültige
+ *      Antworten (falsche/fehlende Zone, fehlerhafte Rohwerte) ändern weder last_* noch verified_* (R2/R3)
  *   E  Fehlerinjektion beim Schreiben der Beobachtung (Trigger) ⇒ operatives Ergebnis und Journal unverändert
  *   X  Code × Schema: AS4b strikt nach 007; Schema vor 007 ⇒ fail-closed; AS4a-Code auf dem Schema nach 007 ohne Befund
  *   S  statisch: nur ServerVerificationStore schreibt zone_server_verification
@@ -208,25 +210,58 @@ if ($group('P')) {
         'P06 installierter Stand bei effect none verworfen' => ['zone_sync', $R(409, ['status' => 'error', 'effect' => 'none', 'reload' => ['status' => 'failed'], 'installed' => ['serial' => 7, 'sha256' => $h]]), ['status' => 'rejected'], ['installedSerial' => null]],
         'P07 installierter Stand ohne Reload-Bericht verworfen' => ['zone_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'installed' => ['serial' => 7, 'sha256' => $h]]), $cOk, ['installedSerial' => null]],
         'P08 installierte Serial außerhalb 32 Bit verworfen' => ['zone_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok'], 'installed' => ['serial' => 4294967296, 'sha256' => $h]]), $cOk, ['installedSerial' => null, 'installedHash' => null]],
-        'P09 verified gültig' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'verified', 'reason' => null, 'fileSerial' => 9, 'fileHash' => $h, 'servedSerial' => 9]]],
-        'P10 verified mit abweichenden Serials ⇒ unknown' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'file_serial' => 9, 'served_serial' => 8, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
-        'P11 verified ohne Hash ⇒ unknown' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'file_serial' => 9, 'served_serial' => 9]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
-        'P12 verified bei Einordnung unknown ⇒ unknown' => ['conf_sync', $R(500, ['status' => 'error', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cUnk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
-        'P13 serial_differs gültig' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'serial_differs', 'file_serial' => 9, 'served_serial' => 8, 'reason' => 'x']]), $cOk, ['verify' => ['state' => 'serial_differs', 'reason' => 'x', 'fileSerial' => 9, 'fileHash' => null, 'servedSerial' => 8]]],
+        'P09 verified gültig' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'verified', 'reason' => null, 'fileSerial' => 9, 'fileHash' => $h, 'servedSerial' => 9]]],
+        'P10 verified mit abweichenden Serials ⇒ unknown' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 8, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P11 verified ohne Hash ⇒ unknown' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 9]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P12 verified bei Einordnung unknown ⇒ unknown' => ['conf_sync', $R(500, ['status' => 'error', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cUnk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P13 serial_differs gültig' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'serial_differs', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 8, 'reason' => 'x']]), $cOk, ['verify' => ['state' => 'serial_differs', 'reason' => 'x', 'fileSerial' => 9, 'fileHash' => null, 'servedSerial' => 8]]],
         'P14 legacy ohne Verifikation' => ['conf_sync', $R(200, ['status' => 'success', 'verification' => ['state' => 'verified']]), $cOk, ['protocol' => 'legacy', 'verify' => null]],
         'P15 Cleanup-Zonen' => ['zone_cleanup', $R(200, ['status' => 'success', 'effect' => 'applied', 'removed_conf' => [], 'removed_zone_files' => [], 'zones' => [
             ['zone' => 'a', 'name' => 'a.test', 'served' => 'absent', 'served_reason' => 'refused_control_ok'],
             ['zone' => 'b', 'name' => 'b.test', 'served' => 'still_served', 'served_reason' => null, 'served_serial' => 5],
             ['zone' => 'c', 'name' => null, 'served' => 'unknown', 'served_reason' => 'zone_name_unresolved']]]), $cOk,
             ['zones' => [['name' => 'a.test', 'served' => 'absent', 'reason' => 'refused_control_ok', 'servedSerial' => null], ['name' => 'b.test', 'served' => 'still_served', 'reason' => null, 'servedSerial' => 5], ['name' => null, 'served' => 'unknown', 'reason' => 'zone_name_unresolved', 'servedSerial' => null]]]],
+        // R2: Zonenidentität (angefragt z.test)
+        'P17 verified, Zone in anderer Schreibweise (Normalisierung) ⇒ verified' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'zone' => 'Z.Test.', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'verified', 'reason' => null, 'fileSerial' => 9, 'fileHash' => $h, 'servedSerial' => 9]]],
+        'P18 verified ohne Zone ⇒ unknown (verification_invalid)' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P19 verified einer anderen Zone ⇒ unknown (verification_invalid)' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'zone' => 'andere.test', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P20 verified mit ungültigem Zonennamen ⇒ unknown (verification_invalid)' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'verified', 'zone' => 'z..test', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P21 serial_differs einer anderen Zone ⇒ unknown (verification_invalid)' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'serial_differs', 'zone' => 'andere.test', 'file_serial' => 9, 'served_serial' => 8]]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P22 unknown der richtigen Zone ⇒ unknown mit Grund des Agenten' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'unknown', 'zone' => 'z.test', 'reason' => 'dns_timeout']]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'dns_timeout', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
+        'P23 unknown mit fehlerhaft geformter Serial ⇒ verification_invalid (R3)' => ['conf_sync', $R(200, ['status' => 'success', 'effect' => 'applied', 'verification' => ['state' => 'unknown', 'zone' => 'z.test', 'served_serial' => '007']]), $cOk, ['verify' => ['state' => 'unknown', 'reason' => 'verification_invalid', 'fileSerial' => null, 'fileHash' => null, 'servedSerial' => null]]],
     ];
     foreach ($cases as $id => [$kind, $r, $c, $want]) {
-        $p = AgentResponseParser::parse($kind, $r, $c);
+        $p = AgentResponseParser::parse($kind, $r, $c, 'z.test');
         $got = array_intersect_key($p, $want);
         t($id, $got == $want, json_encode($got));
     }
-    t('P16 Zone-verify: 409 (off) und 404 (alter Agent) ⇒ keine Beobachtung', AgentResponseParser::parseZoneVerify($R(409, ['status' => 'error', 'code' => 'verification_disabled'])) === null
-        && AgentResponseParser::parseZoneVerify($R(404, ['status' => 'error'])) === null);
+    $zv = static function (array $resp, string $zone = 'z.test'): array {
+        $v = AgentResponseParser::parseZoneVerify($resp, $zone, $why);
+        return [$v, $why];
+    };
+    [$v1, $w1] = $zv($R(409, ['status' => 'error', 'code' => 'verification_disabled']));
+    [$v2, $w2] = $zv($R(404, ['status' => 'error']));
+    t('P16 Zone-verify: 409 (off) und 404 (alter Agent) ⇒ keine Beobachtung (no_result)', $v1 === null && $v2 === null && $w1 === 'no_result' && $w2 === 'no_result');
+    $ok = static fn (array $v): array => $R(200, ['status' => 'success', 'verification' => $v]);
+    [$v, $w] = $zv($ok(['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h]));
+    t('P24 Zone-verify gültig, richtige Zone ⇒ verified', ($v['state'] ?? null) === 'verified' && $w === null, json_encode([$v, $w]));
+    [$v, $w] = $zv($ok(['state' => 'unknown', 'zone' => 'z.test', 'reason' => 'last_round_unknown']));
+    t('P25 Zone-verify gültig mit state unknown ⇒ Beobachtung unknown (wird gespeichert)', ($v['state'] ?? null) === 'unknown' && $v['reason'] === 'last_round_unknown' && $w === null, json_encode([$v, $w]));
+    $bad = [
+        'P26 falsche Zone' => ['state' => 'verified', 'zone' => 'andere.test', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h],
+        'P27 fehlende Zone' => ['state' => 'verified', 'file_serial' => 9, 'served_serial' => 9, 'file_sha256' => $h],
+        'P28 unknown einer anderen Zone' => ['state' => 'unknown', 'zone' => 'andere.test', 'reason' => 'dns_timeout'],
+        'P29 unvollständig (verified ohne Hash)' => ['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 9],
+        'P30 widersprüchlich (verified, Serials verschieden)' => ['state' => 'verified', 'zone' => 'z.test', 'file_serial' => 9, 'served_serial' => 8, 'file_sha256' => $h],
+        'P31 unbekannter Zustand' => ['state' => 'gut', 'zone' => 'z.test'],
+        'P32 fehlerhaft geformte Serial bei unknown' => ['state' => 'unknown', 'zone' => 'z.test', 'file_serial' => -1],
+    ];
+    foreach ($bad as $id => $obj) {
+        [$v, $w] = $zv($ok($obj));
+        t("$id ⇒ Zone-verify verworfen (invalid), nicht herabgestuft", $v === null && $w === 'invalid', json_encode([$v, $w]));
+    }
+    [$v, $w] = $zv($R(200, ['status' => 'success', 'verification' => 'kaputt']));
+    t('P33 Verifikation kein Objekt ⇒ verworfen (invalid)', $v === null && $w === 'invalid');
 }
 
 // ---------------------------------------------------------------- J: Journal-Rohwerte, Matrix E77/J8, R1, Mischbetrieb
@@ -238,11 +273,11 @@ if ($group('J')) {
         'J01 nicht zugestellt' => [As4bFakeAgent::transport(7, 'refused'), 'failed', null, null, 1, null],
         'J02 Zeitüberschreitung' => [As4bFakeAgent::transport(28, 'timeout'), 'unknown', null, null, 1, ['unknown', 'agent_timeout']],
         'J03 Ablehnung stale_fence' => [$R(409, ['status' => 'error', 'code' => 'stale_fence', 'effect' => 'none', 'fence' => ['mode' => 'enforce', 'decision' => 'reject', 'code' => 'stale_fence']]), 'rejected', 'as2', null, 1, null],
-        'J04 Reload gescheitert' => [$R(500, ['status' => 'error', 'code' => 'reload_failed', 'effect' => 'applied', 'reload' => ['status' => 'failed'], 'verification' => ['state' => 'unknown', 'reason' => 'reload_failed']]), 'unknown', 'as2', 'unknown', 1, ['unknown', 'reload_failed']],
+        'J04 Reload gescheitert' => [$R(500, ['status' => 'error', 'code' => 'reload_failed', 'effect' => 'applied', 'reload' => ['status' => 'failed'], 'verification' => ['state' => 'unknown', 'zone' => 'beta.h2b.test', 'reason' => 'reload_failed']]), 'unknown', 'as2', 'unknown', 1, ['unknown', 'reload_failed']],
         'J05 legacy' => [$R(200, ['status' => 'success']), 'ok', 'legacy', null, 0, null],
         'J06 as2 ohne Verifikation (AS2a)' => [$R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok']]), 'ok', 'as2', null, 0, null],
-        'J09 serial_differs' => [static fn (array $pl, As4bFakeAgent $a) => $R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok'], 'verification' => ['state' => 'serial_differs', 'file_serial' => $a->files[IP1 . '|beta.h2b.test']['serial'], 'served_serial' => 1, 'file_sha256' => $a->files[IP1 . '|beta.h2b.test']['sha']]]), 'ok', 'as2', 'serial_differs', 0, ['serial_differs', null]],
-        'J10 verification unknown' => [$R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok'], 'verification' => ['state' => 'unknown', 'reason' => 'last_round_unknown:dns_timeout']]), 'ok', 'as2', 'unknown', 0, ['unknown', 'last_round_unknown:dns_timeout']],
+        'J09 serial_differs' => [static fn (array $pl, As4bFakeAgent $a) => $R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok'], 'verification' => ['state' => 'serial_differs', 'zone' => 'beta.h2b.test', 'file_serial' => $a->files[IP1 . '|beta.h2b.test']['serial'], 'served_serial' => 1, 'file_sha256' => $a->files[IP1 . '|beta.h2b.test']['sha']]]), 'ok', 'as2', 'serial_differs', 0, ['serial_differs', null]],
+        'J10 verification unknown' => [$R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok'], 'verification' => ['state' => 'unknown', 'zone' => 'beta.h2b.test', 'reason' => 'last_round_unknown:dns_timeout']]), 'ok', 'as2', 'unknown', 0, ['unknown', 'last_round_unknown:dns_timeout']],
     ];
     foreach ($matrix as $id => [$resp, $jConf, $proto, $vstate, $chg, $obs]) {
         $a = new As4bFakeAgent();
@@ -276,12 +311,30 @@ if ($group('J')) {
     $a->modes[IP1] = 'as2';
     $other = str_repeat('b', 64);
     $a->queue['/zones/conf_sync.php|' . IP1] = [static fn (array $pl, As4bFakeAgent $ag) => $R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok'],
-        'verification' => ['state' => 'verified', 'file_serial' => 123, 'served_serial' => 123, 'file_sha256' => $other]])];
+        'verification' => ['state' => 'verified', 'zone' => 'beta.h2b.test', 'file_serial' => 123, 'served_serial' => 123, 'file_sha256' => $other]])];
     $publish($pdo, $a, 2);
     $aid = $lastAttempt($pdo, 2);
     $fh = H2b::one($pdo, 'SELECT file_hash FROM zone_publish_attempts WHERE id = ?', [$aid]);
     $z = $zsv($pdo, 2, 1);
     t('J08 verified mit fremdem Datei-Hash: gespeichert als Fakt, ungleich dem file_hash des Versuchs', $z['last_state'] === 'verified' && $z['verified_file_hash'] === $other && $other !== $fh);
+    // J13/J14 R2: verified für eine andere bzw. ohne Zone ⇒ kein positiver Nachweis in Journal und zone_server_verification
+    foreach (['J13 falsche Zone' => 'gamma.h2b.test', 'J14 fehlende Zone' => null] as $id => $wrongZone) {
+        $before = $zsv($pdo, 2, 1);
+        $a = new As4bFakeAgent();
+        $a->modes[IP1] = 'as2';
+        $a->queue['/zones/conf_sync.php|' . IP1] = [static fn (array $pl, As4bFakeAgent $ag) => $R(200, ['status' => 'success', 'effect' => 'applied', 'reload' => ['status' => 'ok'],
+            'verification' => array_filter(['state' => 'verified', 'zone' => $wrongZone, 'file_serial' => $ag->files[IP1 . '|beta.h2b.test']['serial'],
+                'served_serial' => $ag->files[IP1 . '|beta.h2b.test']['serial'], 'file_sha256' => $ag->files[IP1 . '|beta.h2b.test']['sha']], static fn ($x) => $x !== null)])];
+        $r = $publish($pdo, $a, 2);
+        $t = $target($pdo, $lastAttempt($pdo, 2), 1);
+        $z = $zsv($pdo, 2, 1);
+        $proofKeys = array_flip(['verified_serial', 'verified_file_hash', 'verified_run_id', 'verified_at']);
+        t("$id: Journal unknown/verification_invalid, Beobachtung unknown, positiver Nachweis unverändert, operativ veröffentlicht (E77)",
+            $t['conf_sync'] === 'ok' && $t['conf_verify_state'] === 'unknown' && $t['conf_verify_reason'] === 'verification_invalid'
+            && $t['conf_verify_file_hash'] === null && $z['last_state'] === 'unknown' && $z['last_reason'] === 'verification_invalid'
+            && array_intersect_key($z, $proofKeys) == array_intersect_key($before, $proofKeys) && $r['status'] === 'published' && $changed($pdo, 2) === 0,
+            json_encode([$t['conf_verify_state'], $t['conf_verify_reason'], $z['last_state'], $z['verified_run_id'], $before['verified_run_id'] ?? null]));
+    }
     // J11 R1: zone_sync mit gescheitertem Reload ⇒ installierter Stand als Rohwert, Ziel unknown, Zone ausstehend
     $a = new As4bFakeAgent();
     $a->modes[IP1] = 'as2';
@@ -457,6 +510,30 @@ if ($group('M')) {
     $r = $mon($a);
     $holder2->query('SELECT RELEASE_ALL_LOCKS()')->fetchColumn();   // GET_LOCK je zone_verify-Aufruf: verschachtelt
     t('M05 Publish-Lock bei der Speicherung belegt ⇒ verworfen', ($r['l3']['status'] ?? null) === 'discarded' && (int)H2b::one($pdo, 'SELECT COUNT(*) FROM zone_server_verification') === 0);
+    // M07–M09 R2/R3: gültige Beobachtung speichern, ungültige (falsche/fehlende Zone, unvollständig, widersprüchlich) verwerfen
+    $pdo->exec('DELETE FROM zone_server_verification');
+    $mon($mk());   // Ausgangsstand: alle vier Zonen auf Server 1 verified
+    $snapRows = static fn (): array => array_column(H2b::all($pdo, 'SELECT zone_name, last_state, last_reason, last_observed_at, verified_serial, verified_file_hash, verified_at FROM zone_server_verification WHERE server_id = 1'), null, 'zone_name');
+    $s0 = $snapRows();
+    $a = $mk();
+    $hh = str_repeat('e', 64);
+    $answers = [
+        'beta.h2b.test' => ['state' => 'verified', 'zone' => 'gamma.h2b.test', 'file_serial' => 2026112202, 'served_serial' => 2026112202, 'file_sha256' => $hh],
+        'alpha.h2b.test' => ['state' => 'verified', 'file_serial' => 2026112202, 'served_serial' => 2026112202, 'file_sha256' => $hh],
+        'gamma.h2b.test' => ['state' => 'unknown', 'zone' => 'gamma.h2b.test', 'served_serial' => 'abc'],
+        '2.0.192.in-addr.arpa' => ['state' => 'unknown', 'zone' => '2.0.192.in-addr.arpa', 'reason' => 'dns_timeout'],
+    ];
+    $a->queue['/zones/zone_verify.php|' . IP1] = array_fill(0, 4, static fn (array $pl) => As4bFakeAgent::resp(200, ['status' => 'success', 'verification' => $answers[$pl['zone_name']]]));
+    $r = $mon($a);
+    $s1 = $snapRows();
+    t('M07 falsche Zone (beta), fehlende Zone (alpha), fehlerhafte Serial (gamma) ⇒ verworfen: last_* und verified_* unverändert',
+        $s1['beta.h2b.test'] == $s0['beta.h2b.test'] && $s1['alpha.h2b.test'] == $s0['alpha.h2b.test'] && $s1['gamma.h2b.test'] == $s0['gamma.h2b.test'], json_encode([$s0['beta.h2b.test'] ?? null, $s1['beta.h2b.test'] ?? null]));
+    $rev0 = $s0['2.0.192.in-addr.arpa'];
+    $rev1 = $s1['2.0.192.in-addr.arpa'];
+    t('M08 gültiges unknown (richtige Zone) gespeichert, positiver Nachweis erhalten', $rev1['last_state'] === 'unknown' && $rev1['last_reason'] === 'dns_timeout'
+        && $rev1['verified_serial'] === $rev0['verified_serial'] && $rev1['verified_at'] === $rev0['verified_at'], json_encode($rev1));
+    t('M09 Verwerfen nachvollziehbar im Bericht (invalid = 3, gespeichert = 1)', ($r['l3']['invalid'] ?? null) === 3 && ($r['l3']['stored']['stored'] ?? null) === 1
+        && count($r['l3']['invalidPairs'] ?? []) === 3, json_encode($r['l3'] ?? null));
     t('M06 Diagnosen unverändert erhoben, Monitoring-Lock frei', in_array($r['status'] ?? null, ['ok'], true) && (int)$pdo->query("SELECT IS_FREE_LOCK('dnsmanager_monitoring')")->fetchColumn() === 1, (string)($r['status'] ?? ''));
 }
 

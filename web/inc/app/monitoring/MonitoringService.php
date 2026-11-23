@@ -228,11 +228,17 @@ final class MonitoringService
             }
             $items = [];
             $skipped = 0;
+            $invalid = [];
             foreach ($candidates as $row) {
                 $r = $this->backend->verifyZone((string)$row['zone_name'], $row);
-                $v = AgentResponseParser::parseZoneVerify($r);
+                $v = AgentResponseParser::parseZoneVerify($r, (string)$row['zone_name'], $why);
                 if ($v === null) {
-                    $skipped++;
+                    // R3: ungültige Verifikation (auch falsche Zone, R2) wird verworfen – nachvollziehbar im Bericht
+                    if ($why === 'invalid') {
+                        $invalid[] = $row['zone_name'] . '@' . $row['name'];
+                    } else {
+                        $skipped++;
+                    }
                     continue;
                 }
                 $items[] = ['zoneId' => (int)$row['zone_id'], 'zoneName' => (string)$row['zone_name'], 'serverId' => (int)$row['server_id'],
@@ -242,7 +248,7 @@ final class MonitoringService
             $stored = $this->storeUnderPublishLock($watermark, $items);
 
             return ['status' => $stored === null ? 'discarded' : 'ok', 'watermark' => $watermark, 'queried' => count($candidates),
-                'noObservation' => $skipped, 'stored' => $stored];
+                'noObservation' => $skipped, 'invalid' => count($invalid), 'invalidPairs' => $invalid, 'stored' => $stored];
         } catch (Throwable $e) {
             $this->rollbackIfActive();
             return ['status' => 'error', 'detail' => $e->getMessage()];

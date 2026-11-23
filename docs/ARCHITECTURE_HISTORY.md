@@ -1190,6 +1190,18 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
   ausstehend.
 - **Verifikation aus `conf_sync`:** `verified` nur bei Einordnung `ok`, gleichen Serials und Datei-Hash; sonst Herabstufung
   zu `unknown` mit Grund `verification_invalid`. `serial_differs` nur mit beiden, verschiedenen Serials.
+- **Zonenidentität (Review R2):** Das Verifikationsobjekt muss die angefragte Zone nennen (`verification.zone`).
+  Verglichen wird nach der verbindlichen DNS-Namensnormalisierung des Agenten (`dnsNormName`: Kleinbuchstaben, ohne
+  abschließenden Punkt, gültige Namensform; im Core `AgentResponseParser::zoneName`). `conf_sync` prüft gegen die Zone
+  des registrierten Versuchs, `zone_verify` gegen die im Monitoring angefragte Zone. Fehlende, ungültige oder
+  abweichende Zone gilt für jeden Zustand als ungültig und ergibt nie `verified`.
+- **Ungültiges Verifikationsobjekt (Review R3):** Ein fehlendes, ungültiges, unvollständiges oder widersprüchliches Objekt
+  ist kein Messergebnis. Dazu zählen auch vorhandene, aber fehlerhaft geformte Serials, Hashes oder Gründe.
+  - Im Publish-Pfad wird es nach E77 sicher eingeordnet: Journal und Beobachtung `unknown`/`verification_invalid`,
+    `verified_*` bleibt unverändert, die operative Einordnung bleibt.
+  - Im rein lesenden Monitoring wird es verworfen: `last_*` und `verified_*` bleiben unverändert, der Bericht
+    (`l3.invalid`, `l3.invalidPairs`) weist es aus.
+  - Ein gültiges Ergebnis mit `state = unknown` ist dagegen eine Beobachtung und wird gespeichert.
 - Die Felder werden im selben bedingten Endzustands-UPDATE wie der Kanal geschrieben (`PublishLedger::AGENT_FIELDS` als
   Whitelist), also genau einmal (J4a). `agent_protocol` bleibt Registrierungszustand (K3).
 - Cleanup: Journal nur mit Zählern (absent, still_served, unknown, nicht zuordenbar).
@@ -1235,7 +1247,8 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
   bleiben unverändert. Ablauf:
   - Publish-Lock (0 s) holen, W = `MAX(publish_runs.id)` lesen, Lock freigeben (belegt ⇒ `publish_active`, keine Abfrage);
   - Abfragen ohne Lock;
-  - Speicherung erneut unter dem Publish-Lock, nur wenn `MAX(id)` noch W ist (sonst `discarded`).
+  - Speicherung erneut unter dem Publish-Lock, nur wenn `MAX(id)` noch W ist (sonst `discarded`);
+  - ungültige Antworten (falsche oder fehlende Zone, unvollständig, widersprüchlich) verworfen und gezählt (R2/R3).
 - Lock-Reihenfolge: `dnsmanager_monitoring` vor `dnsmanager_publish_all` (`ARCHITECTURE_CORE.md`, Abschnitt 1).
 - **Mischbetrieb:** Legacy-Agenten liefern weder AS2-Felder noch Beobachtungen; AS2a-Agenten ohne `verification`
   liefern Journalfelder, aber keine Beobachtung. Ältere Agenten ohne `zone_verify` (404) werden im Monitoring nicht
@@ -1255,7 +1268,7 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
   - E Fehlerinjektion;
   - X Code × Schema;
   - S statisch.
-- `tests/history/as4b_mutation_test.sh` mit 16 Mutationsproben.
+- `tests/history/as4b_mutation_test.sh` mit 21 Mutationsproben (B17–B21 für R2/R3).
 - Angepasst: Migrationstests 002–007 (strikte Befunde vor 007, Werkzeugsicht), `as3_test.php`, `as4a_test.php`,
   `static_rh8_test.php`.
 
@@ -1698,6 +1711,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 23.11.2026 | Review PR #108: R2 – Zonenidentität des Verifikationsnachweises (`conf_sync` gegen die Zone des Versuchs, `zone_verify` gegen die angefragte Zone, DNS-Namensnormalisierung; fehlend/ungültig/abweichend nie `verified`); R3 – ungültige Monitoring-Verifikation wird verworfen statt als `unknown` gespeichert, vorhandene fehlerhaft geformte Rohwerte machen das Objekt ungültig; Abschnitt 5j, Tests P17–P33, J13/J14, M07–M09, Mutationen B17–B21 |
 | 21.11.2026 | AS4b umgesetzt: Abschnitt 5j (Fencing-Domäne vor J6/J1, Lauf-ID als Token an `zone_sync`/`conf_sync`/`zone_cleanup`, Laufprüfung vor jedem Agent-Aufruf, Restore-Abgleich und Admin-CLI, `AgentResponseParser` mit R1, Journal-Ergebnisfelder, `ServerVerificationStore` mit Ordnungsvertrag und Nachweiserhalt, Cleanup-Zuordnung, `zone_verify` und Monitoring mit Wasserstand, Code verlangt 007 strikt); E74, E76, E81, E83, E87, E109 umgesetzt; Abschnitte 0 und 18 nachgeführt |
 | 21.11.2026 | Review PR #107, R1: `chk_zpt_zone_installed` erlaubt den vom Agenten gemeldeten installierten Stand auch bei `zone_sync = unknown` nach gescheitertem Reload (as2, effect applied/unchanged, Reload failed/timeout/not_started), weiterhin nur gemeinsam und nie als L2-/L3-Bestätigung; Tests C06b–d, C29b, C30–C30h |
 | 21.11.2026 | AS4a umgesetzt: Abschnitt 5i (Migration 007 mit Agent-Ergebnisfeldern in `zone_publish_targets`/`publish_cleanup_results` und `system_status.fence_domain`, NULL-sichere CHECKs K1, Kompatibilitätsbrücke `HISTORY_TABLES_007`, `agent_protocol` als Registrierungszustand K3, Reihenfolge Domänenprüfung vor J6/J1 K2, Ordnungsvertrag für AS4b); Publish, Journal-Schreibpfade, Monitoring, Agent und Oberfläche unverändert |

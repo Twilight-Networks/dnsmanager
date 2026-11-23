@@ -69,6 +69,12 @@ mutate B16 "$ST" "                \$this->pdo->beginTransaction();
                 \$stmt = \$this->pdo->prepare('SELECT last_run_id" "                \$this->pdo->beginTransaction();
                 if (str_contains(\$zoneName, 'beta')) { throw new RuntimeException('as4b_mut'); }
                 \$stmt = \$this->pdo->prepare('SELECT last_run_id" J 'Beobachtung fehlt bei verified (Schreibpfad unterbrochen)'
+# Review R2/R3
+mutate B17 "$P" "if (\$expected === null || self::zoneName(\$v['zone'] ?? null) !== \$expected) {" 'if (false) {' P,J,M 'Zonenidentität der Verifikation nicht geprüft (R2)'
+mutate B18 "$P" "self::zoneName(\$v['zone'] ?? null) !== \$expected" "(\$v['zone'] ?? null) !== \$zone" P 'Zonenvergleich ohne DNS-Namensnormalisierung (R2)'
+mutate B19 "$P" '        if ($invalid !== []) {' '        if (false) {' P,M 'ungültige zone_verify-Antwort herabgestuft und gespeichert statt verworfen (R3)'
+mutate B20 "$P" "            if ((\$v[\$k] ?? null) !== null && \$parsed === null) {" '            if (false) {' P,M 'fehlerhaft geformte Rohwerte stillschweigend verworfen (R3)'
+mutate B21 "$J" "\$raw, \$c, (string)\$attempt['zoneName']);" "\$raw, \$c, 'beta.h2b.test');" J 'Publish prüft gegen eine feste statt die Zone des Versuchs (R2)'
 
 echo "ERGEBNIS as4b_mutation: $PASS erkannt, $FAIL nicht erkannt"
 exit $([ "$FAIL" = 0 ] && echo 0 || echo 1)

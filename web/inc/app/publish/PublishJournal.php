@@ -97,7 +97,8 @@ final class PublishJournal
     public function confResult(array $attempt, int $serverId, array $c, ?string $confHash, ?array $raw = null): void
     {
         $attemptId = (int)$attempt['attemptId'];
-        $p = AgentResponseParser::parse(PublishTargetClassifier::KIND_CONF, $raw, $c);
+        // R2: Zonenidentität der Verifikation gegen die Zone des registrierten Versuchs
+        $p = AgentResponseParser::parse(PublishTargetClassifier::KIND_CONF, $raw, $c, (string)$attempt['zoneName']);
         $agent = AgentResponseParser::journalFields(PublishTargetClassifier::KIND_CONF, $p);
         $this->guard("conf_sync Versuch $attemptId Server $serverId", fn () => $this->ledger->recordConfTarget($this->run, $attemptId, $serverId, $c, $confHash, $agent));
         if ($this->store === null) {

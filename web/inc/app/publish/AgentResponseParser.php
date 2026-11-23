@@ -17,6 +17,13 @@
  * - Verifikation (nur conf_sync, AS2b): verified nur bei Einordnung ok, beiden Serials gleich und gültigem Datei-Hash;
  *   serial_differs nur mit beiden, verschiedenen Serials. Jede ungültige oder unvollständige Angabe wird zu unknown mit
  *   Grund verification_invalid herabgestuft – nie zu einem positiven Nachweis (E77, E107).
+ * - Zonenidentität (Review R2): Das Verifikationsobjekt muss die angefragte Zone nennen (verification.zone). Verglichen
+ *   wird nach der verbindlichen DNS-Namensnormalisierung des Agenten (dnsNormName: Kleinbuchstaben, ohne abschließenden
+ *   Punkt, gültige Namensform). Fehlende, ungültige oder abweichende Zone ⇒ ungültig (conf_sync: unknown mit
+ *   verification_invalid; zone_verify: verworfen) – für jeden Zustand, damit nie eine Beobachtung der falschen Zone
+ *   zugeordnet wird.
+ * - zone_verify (Review R3): Nur ein vollständig gültiges Verifikationsobjekt ist eine Beobachtung (auch state unknown);
+ *   ein fehlendes, ungültiges, unvollständiges oder widersprüchliches Objekt wird verworfen, nicht herabgestuft.
  * - Cleanup (AS2b): Ergebnis je Zone (Name aus dem Konfigurationsnachweis des Agenten, served, served_reason,
  *   served_serial nur bei still_served aus einer konkreten DNS-Beobachtung) und Zähler.
  * Ungültige Einzelangaben werden verworfen (NULL) und unter "invalid" benannt.
@@ -35,10 +42,11 @@ final class AgentResponseParser
      * @param string                    $kind PublishTargetClassifier::KIND_*
      * @param array<string, mixed>|null $r    Ergebnis von postJson() (null = kein Request, lokaler Fehler)
      * @param array{status: string}     $c    Einordnung (classify bzw. localFailure)
+     * @param string|null               $zone conf_sync: Zone des registrierten Versuchs (Prüfung der Zonenidentität, R2)
      * @return array{protocol: ?string, effect: ?string, reload: ?string, fenceDecision: ?string, fenceCode: ?string,
      *               installedSerial: ?int, installedHash: ?string, verify: ?array, zones: ?array, invalid: string[]}
      */
-    public static function parse(string $kind, ?array $r, array $c): array
+    public static function parse(string $kind, ?array $r, array $c, ?string $zone = null): array
     {
         $out = ['protocol' => null, 'effect' => null, 'reload' => null, 'fenceDecision' => null, 'fenceCode' => null,
             'installedSerial' => null, 'installedHash' => null, 'verify' => null, 'zones' => null, 'invalid' => []];
@@ -97,7 +105,7 @@ final class AgentResponseParser
         }
 
         if ($kind === PublishTargetClassifier::KIND_CONF && array_key_exists('verification', $json)) {
-            $out['verify'] = self::verification($json['verification'], $c['status'], $out['invalid']);
+            $out['verify'] = self::verification($json['verification'], $c['status'], $zone, $out['invalid']);
         }
 
         if ($kind === PublishTargetClassifier::KIND_CLEANUP && array_key_exists('zones', $json)) {
@@ -160,13 +168,18 @@ final class AgentResponseParser
     }
 
     /**
-     * AS4b: Antwort von zones/zone_verify (Monitoring). Nur HTTP 200 mit status success und verification liefert eine
-     * Beobachtung; 404 (älterer Agent), 409 verification_disabled (off), Transportfehler und ungültige Antworten ⇒ null.
+     * AS4b: Antwort von zones/zone_verify (Monitoring) für die angefragte Zone. Nur HTTP 200 mit status success und
+     * einem vollständig gültigen Verifikationsobjekt dieser Zone ist eine Beobachtung. Sonst null mit Grund:
+     * no_result (404 älterer Agent, 409 verification_disabled, Transportfehler, kein JSON/kein Objekt) bzw. invalid
+     * (Objekt vorhanden, aber ungültig, unvollständig, widersprüchlich oder für eine andere Zone; R2, R3 – verworfen,
+     * nicht als unknown gespeichert).
      *
+     * @param-out string|null $why
      * @return array{state: string, reason: ?string, fileSerial: ?int, fileHash: ?string, servedSerial: ?int}|null
      */
-    public static function parseZoneVerify(array $r): ?array
+    public static function parseZoneVerify(array $r, string $zone, ?string &$why = null): ?array
     {
+        $why = 'no_result';
         if (($r['curlError'] ?? '') !== '' || (int)($r['curlErrno'] ?? 0) !== 0 || (int)($r['httpCode'] ?? 0) !== 200) {
             return null;
         }
@@ -175,12 +188,34 @@ final class AgentResponseParser
             return null;
         }
         $invalid = [];
+        $v = self::verification($json['verification'], 'ok', $zone, $invalid);
+        if ($invalid !== []) {
+            $why = 'invalid';
+            return null;
+        }
+        $why = null;
 
-        return self::verification($json['verification'], 'ok', $invalid);
+        return $v;
+    }
+
+    /**
+     * Verbindliche DNS-Namensnormalisierung (wie dnsNormName() des Agenten, agent/inc/dns_state.php).
+     */
+    public static function zoneName(mixed $name): ?string
+    {
+        if (!is_string($name)) {
+            return null;
+        }
+        $n = strtolower(rtrim($name, '.'));
+        if ($n === '' || strlen($n) > 253 || preg_match('/^[a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?$/D', $n) !== 1 || str_contains($n, '..')) {
+            return null;
+        }
+
+        return $n;
     }
 
     /** @param string[] $invalid */
-    private static function verification(mixed $v, string $classification, array &$invalid): array
+    private static function verification(mixed $v, string $classification, ?string $zone, array &$invalid): array
     {
         $down = static function () use (&$invalid): array {
             $invalid[] = 'verification';
@@ -189,10 +224,21 @@ final class AgentResponseParser
         if (!is_array($v) || !is_string($v['state'] ?? null) || !in_array($v['state'], self::VERIFY_STATES, true)) {
             return $down();
         }
+        // R2: Zonenidentität – angefragte und verifizierte Zone müssen nach Normalisierung gleich sein (jeder Zustand)
+        $expected = self::zoneName($zone);
+        if ($expected === null || self::zoneName($v['zone'] ?? null) !== $expected) {
+            return $down();
+        }
         $fs = self::serial($v['file_serial'] ?? null);
         $ss = self::serial($v['served_serial'] ?? null);
         $fh = self::hash($v['file_sha256'] ?? null);
         $reason = self::reason($v['reason'] ?? null);
+        // R3: vorhandene, aber fehlerhaft geformte Rohwerte ⇒ Objekt ungültig (nicht stillschweigend NULL)
+        foreach (['file_serial' => $fs, 'served_serial' => $ss, 'file_sha256' => $fh, 'reason' => $reason] as $k => $parsed) {
+            if (($v[$k] ?? null) !== null && $parsed === null) {
+                return $down();
+            }
+        }
         switch ($v['state']) {
             case 'verified':
                 if ($classification !== 'ok' || $fs === null || $ss === null || $fs !== $ss || $fh === null) {
