@@ -142,11 +142,46 @@ final class J
         file_put_contents(self::$sbx . '/control.json', json_encode((object)$out));
     }
 
-    /** @return string[] Agentaufrufe "ip endpunkt zone=… verhalten" */
+    /** @return string[] Agentaufrufe "ip endpunkt zone=… verhalten methode" */
     public static function agentCalls(): array
     {
+        return array_map(static fn (array $c): string => $c[1], self::agentCallsTimed());
+    }
+
+    /** @return array<int, array{0: float, 1: string}> Agentaufrufe mit Zeitstempel des Testagenten (Unix-Zeit) */
+    public static function agentCallsTimed(): array
+    {
         $lines = array_values(array_filter(explode("\n", (string)file_get_contents(self::$sbx . '/agent.log'))));
-        return array_map(static fn (string $l): string => substr($l, strpos($l, ' ') + 1), $lines);
+        return array_map(static fn (string $l): array => [(float)substr($l, 0, (int)strpos($l, ' ')), substr($l, strpos($l, ' ') + 1)], $lines);
+    }
+
+    /**
+     * AS4b (E81): Aufteilung der Agentaufrufe in den lesenden Restore-Abgleich und alle übrigen Aufrufe. Als
+     * Restore-Abgleich zählt ausschließlich die exakte Zeile "<IP eines aktiven Servers> status.php zone=- php GET";
+     * jede andere Zeile (anderer Endpunkt, andere Methode, anderes Verhalten, fremde IP) bleibt in $other – kein
+     * pauschaler Filter.
+     *
+     * @return array{status: string[], other: string[], expected: string[]} expected = genau ein Abgleich je aktivem Server
+     */
+    public static function splitCalls(PDO $p): array
+    {
+        $expected = [];
+        foreach (H2b::all($p, 'SELECT api_ip FROM servers WHERE active = 1 ORDER BY id') as $s) {
+            $expected[] = $s['api_ip'] . ' status.php zone=- php GET';
+        }
+        $status = [];
+        $other = [];
+        foreach (self::agentCalls() as $l) {
+            if (preg_match('/^127\.0\.0\.[45] status\.php zone=- php GET$/D', $l) === 1 && in_array($l, $expected, true)) {
+                $status[] = $l;
+            } else {
+                $other[] = $l;
+            }
+        }
+        sort($status);
+        sort($expected);
+
+        return ['status' => $status, 'other' => $other, 'expected' => $expected];
     }
 
     public static function client(): BindAgentClient

@@ -13,6 +13,9 @@
  *             L Lebendigkeit, Verbindungsabbruch, Prozessende, Verbindungs-ID-Wiederverwendung · N Nebenläufigkeit ·
  *             R Reaktivierung (E70) · X Stresslauf mit Invarianten · B Byte-Gleichheit der Zonendateien mit dem Basis-Commit
  * Schutz (Q1): /etc/bind/zones wird vorher und nachher byte-genau verglichen (Z01).
+ * AS4b (E81): Vor J6/J1 fragt der Core je aktivem Server einmal GET system/status.php ab (Restore-Abgleich, lesend).
+ * Die Fälle ohne Seiteneffekt (F01–F04, L04) unterscheiden diesen Abgleich von allen übrigen Agentaufrufen
+ * (J::splitCalls(), exakte Zeilen, kein pauschaler Filter); F00 belegt die Reihenfolge im erfolgreichen Lauf.
  */
 
 require_once __DIR__ . '/journal_lib.php';
@@ -31,6 +34,17 @@ $clean = static function (PDO $p, string $id): void {
     T::ok(J::locksFree($p) && !H2b::hasOpenTrx($p), "$id.z", 'Publish-Lock und Laufsperren frei, keine offene Transaktion');
 };
 $zoneName = static fn (PDO $p, int $z): string => (string)H2b::one($p, 'SELECT name FROM zones WHERE id = ?', [$z]);
+/**
+ * AS4b (E81): genau ein lesender Restore-Abgleich (GET system/status.php) je aktivem Server. Liegt er vor, obwohl der
+ * Ablauf bei J6/J1 bzw. J2 abbrach, belegt das zugleich die Reihenfolge „Abgleich vor J6/J1“.
+ *
+ * @return int Zahl aller übrigen Agentaufrufe (jeder andere Endpunkt, jede andere Methode, jeder weitere Abgleich)
+ */
+$e81 = static function (PDO $p, string $id): int {
+    $s = J::splitCalls($p);
+    T::eq($s['expected'], $s['status'], "$id.e81", 'Restore-Abgleich (E81): genau ein GET system/status.php je aktivem Server, vor J6/J1');
+    return count($s['other']);
+};
 
 /* ================================================================ K Constraints */
 if ($run('K')) {
@@ -264,6 +278,21 @@ if ($run('O')) {
 /* ================================================================ F Fehlerinjektion */
 if ($run('F')) {
     T::section('F Fehlerinjektion (J1, J6, J2, J4, Cleanup)');
+    // F00 AS4b (E81): Reihenfolge im erfolgreichen Lauf – Restore-Abgleich vor J1 (publish_runs.started_at), alle
+    // übrigen (schreibenden) Agentaufrufe erst danach
+    $p = J::reset();
+    $p->exec('UPDATE system_status SET bind_dirty = 1 WHERE id = 1');
+    $rep = J::publishAll($p);
+    $s = J::splitCalls($p);
+    $t1 = (float)H2b::one($p, 'SELECT UNIX_TIMESTAMP(started_at) FROM publish_runs ORDER BY id DESC LIMIT 1');
+    $timed = J::agentCallsTimed();
+    $tsStatus = array_column(array_filter($timed, static fn (array $c): bool => in_array($c[1], $s['status'], true)), 0);
+    $tsOther = array_column(array_filter($timed, static fn (array $c): bool => !in_array($c[1], $s['status'], true)), 0);
+    T::eq(['success', $s['expected']], [$rep['status'], $s['status']], 'F00', 'erfolgreicher Lauf: genau ein Restore-Abgleich je aktivem Server');
+    // Zeitstempel des Testagenten auf ms gerundet (±0,5 ms), started_at aus NOW(6) derselben Maschine
+    T::ok($tsStatus !== [] && $tsOther !== [] && max($tsStatus) <= $t1 + 0.0005 && $t1 <= min($tsOther) + 0.0005, 'F00b',
+        sprintf('Reihenfolge: Abgleich (bis %.3f) vor J1 (%.6f), übrige Aufrufe ab %.3f', $tsStatus === [] ? 0 : max($tsStatus), $t1, $tsOther === [] ? 0 : min($tsOther)));
+    $clean($p, 'F00');
     $noSide = static function (PDO $p, array $rep, string $before, int $calls, string $id, string $msg) use ($clean): void {
         T::eq(['exception', true, 'untouched', $before, 0], [$rep['status'], str_starts_with((string)$rep['exception'], 'Publish-Journal:'), $rep['flags']['outcome'], H2b::businessSum($p), $calls], $id, $msg);
         $clean($p, $id);
@@ -274,7 +303,7 @@ if ($run('F')) {
     $sum = H2b::businessSum($p);
     J::inject($p, 'h2d_f01', 'BEFORE INSERT', 'publish_runs');
     $rep = J::publishAll($p);
-    $noSide($p, $rep, $sum, count(J::agentCalls()), 'F01', 'J1 gescheitert: exception, Flags/Fachdaten unverändert, kein Agentaufruf');
+    $noSide($p, $rep, $sum, $e81($p, 'F01'), 'F01', 'J1 gescheitert: exception, Flags/Fachdaten unverändert, kein schreibender Agentaufruf');
     T::eq(0, count(J::runs($p)), 'F01b', 'kein Lauf registriert');
     $rz = J::report(J::service($p)->publishZone(2));
     T::eq(['exception', '2:1'], [$rz['status'], J::flags($p)['changed'][1]], 'F01c', 'Publish Zone: J1 gescheitert ⇒ exception, changed unverändert');
@@ -286,7 +315,7 @@ if ($run('F')) {
     $sum = H2b::businessSum($p);
     J::inject($p, 'h2d_f02', 'BEFORE UPDATE', 'publish_runs');
     $rep = J::publishAll($p);
-    $noSide($p, $rep, $sum, count(J::agentCalls()), 'F02', 'J6 gescheitert: exception vor jedem Seiteneffekt');
+    $noSide($p, $rep, $sum, $e81($p, 'F02'), 'F02', 'J6 gescheitert: exception vor jedem Seiteneffekt (kein schreibender Agentaufruf)');
     T::eq(['running', 1], [J::runs($p)[0]['status'], count(J::runs($p))], 'F02b', 'alter Lauf unverändert offen, kein neuer Lauf');
     J::dropInjection($p, 'h2d_f02');
 
@@ -298,8 +327,8 @@ if ($run('F')) {
         $rep = J::publishAll($p);
         $rid = J::lastRunId($p);
         T::eq(['error', 'generation_failed', $s2, 0, 0, '2:1', 'finished', 'error'],
-            [$rep['status'], $rep['zones'][0]['outcome'], (int)H2b::one($p, 'SELECT soa_serial FROM zones WHERE id = 2'), count(J::attempts($p)), count(J::agentCalls()), J::flags($p)['changed'][1], J::runs($p)[0]['status'], J::runs($p)[0]['result']],
-            $id, "J2 ($table) gescheitert: Rollback, Serial unverändert, kein Agentaufruf, Zone 2 → 1, Lauf error");
+            [$rep['status'], $rep['zones'][0]['outcome'], (int)H2b::one($p, 'SELECT soa_serial FROM zones WHERE id = 2'), count(J::attempts($p)), $e81($p, $id), J::flags($p)['changed'][1], J::runs($p)[0]['status'], J::runs($p)[0]['result']],
+            $id, "J2 ($table) gescheitert: Rollback, Serial unverändert, kein schreibender Agentaufruf, Zone 2 → 1, Lauf error");
         T::ok(str_contains(implode(' ', $rep['errors']), 'Publish-Journal'), "{$id}b", 'Fehler als bisheriger Generierungsfehler mit Journal-Hinweis');
         T::eq(0, count(glob(sys_get_temp_dir() . '/dnsmanager-work-*/db.beta*') ?: []), "{$id}c", 'keine Zonendatei zurückgeblieben');
         J::dropInjection($p, "h2d_$id");
@@ -496,7 +525,7 @@ if ($run('L')) {
     // L04 J6 verweigert die Markierung, solange die Laufsperre gehalten wird
     $sum = H2b::businessSum($p);
     $rep = J::publishAll($p);
-    T::eq(['exception', 'running', $sum, 0], [$rep['status'], J::runs($p)[0]['status'], H2b::businessSum($p), count(J::agentCalls())], 'L04', 'J6 markiert keinen Lauf mit gehaltener Laufsperre; Abbruch ohne Seiteneffekt');
+    T::eq(['exception', 'running', $sum, 0], [$rep['status'], J::runs($p)[0]['status'], H2b::businessSum($p), $e81($p, 'L04')], 'L04', 'J6 markiert keinen Lauf mit gehaltener Laufsperre; Abbruch ohne Seiteneffekt (kein schreibender Agentaufruf)');
     $q->query("SELECT RELEASE_LOCK('$lock')")->fetchAll();
     $q = null;
     $rep = J::publishAll($p);

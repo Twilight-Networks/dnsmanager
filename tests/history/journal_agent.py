@@ -9,7 +9,8 @@
 #            Antwort schließen) | reject (422, Agent-JSON) | garbage (200 ohne Agent-JSON) | html500 | rollback_failed |
 #            partial_cleanup
 # Aufruf: journal_agent.py <ip> <port> <cert.pem> <key.pem> <Agent-Verzeichnis> <Steuerdatei> <Logdatei>
-# Lauscht nur auf 127.0.0.2 … 127.0.0.254; protokolliert Endpunkt, Zone und Verhalten, keine Inhalte oder Token.
+# Lauscht nur auf 127.0.0.2 … 127.0.0.254; protokolliert Endpunkt, Zone, Verhalten und HTTP-Methode, keine Inhalte
+# oder Token.
 import http.server
 import json
 import os
@@ -57,7 +58,8 @@ class H(http.server.BaseHTTPRequestHandler):
             zone = '?'
         b = behavior(ep)
         with open(log, 'a') as f:
-            f.write(f"{time.time():.3f} {ip} {ep} zone={zone} {b}\n")
+            # AS4b: HTTP-Methode am Zeilenende (Unterscheidung lesender Restore-Abgleich GET system/status.php)
+            f.write(f"{time.time():.3f} {ip} {ep} zone={zone} {b} {self.command}\n")
         if ep not in ENDPOINTS:
             return self.send(404, '<html>not found</html>', 'text/html')
         if b == 'hang':
