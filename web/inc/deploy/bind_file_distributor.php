@@ -28,6 +28,11 @@
  * - wird jede Agentenantwort unmittelbar nach ihrem Eingang gemeldet (J4).
  * Status, errors und output – und damit die operative Auswertung im PublishService – bleiben unverändert (J8).
  *
+ * AS4b (E83, F5, E74): Mit 'beforeCall' im Journal wird unmittelbar vor JEDEM Agent-Aufruf die Laufberechtigung
+ * geprüft; die Rückgabe (fence_token, fence_domain) wird der Nutzlast hinzugefügt. Scheitert die Prüfung, wird das
+ * aktuelle Ziel als sicher nicht gesendet (run_lock_lost) gemeldet und die Ausnahme weitergereicht – kein weiterer
+ * Request dieses Laufs. 'onResult' erhält zusätzlich das Rohergebnis von postJson() (AgentResponseParser).
+ *
  * Sicherheit:
  * - Die Übertragung erfolgt per HTTPS mit Token-basierter Authentifizierung.
  * - Nur Server mit gültigem API-Token und API-IP dürfen Zonendaten empfangen.
@@ -68,6 +73,26 @@ function distribute_registered_targets(array $servers, array $registered, string
 }
 
 /**
+ * AS4b (E83, F5, E74): Laufberechtigung unmittelbar vor einem Agent-Aufruf; liefert die Fencing-Felder der Nutzlast.
+ * Scheitert die Prüfung, wird das Ziel als sicher nicht gesendet gemeldet ($fail, run_lock_lost) und die Ausnahme
+ * weitergereicht (kein weiterer Request des Laufs).
+ *
+ * @return array<string, int|string>
+ */
+function distribute_before_call(?array $journal, int $sid, callable $fail): array
+{
+    if ($journal === null || !isset($journal['beforeCall'])) {
+        return [];
+    }
+    try {
+        return ($journal['beforeCall'])($sid);
+    } catch (Throwable $e) {
+        $fail($sid, PublishTargetClassifier::localFailure('run_lock_lost', $e->getMessage()));
+        throw $e;
+    }
+}
+
+/**
  * Verteilt eine Zonendatei (db.<zone>) an alle aktiven, zugewiesenen Server (lokal und remote) über die API (zone_sync.php).
  *
  * Verhalten:
@@ -76,21 +101,21 @@ function distribute_registered_targets(array $servers, array $registered, string
  * - Alle Übertragungsfehler (Curl, HTTP) werden gesammelt zurückgegeben.
  *
  * @param PDO $pdo Datenbankverbindung
- * @param BindAgentClient $agent Agent-Client
+ * @param AgentClient $agent Agent-Client (BindAgentClient)
  * @param int $zone_id ID der zu verteilenden Zone (muss in `zones` existieren)
  * @param string|null $zone_path Pfad der erzeugten Zonendatei
  * @param array|null $journal AP1/H2d: ['targets' => [serverId => Name], 'fileHash' => string,
  *                            'onResult' => callable(int $serverId, array $einordnung): void]
  * @return array Assoziatives Array mit 'status', 'errors', 'output', 'targets'
  */
-function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?string $zone_path, ?array $journal = null): array {
+function distribute_zone_file(PDO $pdo, AgentClient $agent, int $zone_id, ?string $zone_path, ?array $journal = null): array {
     $errors = [];
     $outputs = [];
     $targets = [];
-    $report = static function (int $sid, array $c) use (&$targets, $journal): void {
+    $report = static function (int $sid, array $c, ?array $raw = null) use (&$targets, $journal): void {
         $targets[$sid] = $c;
         if ($journal !== null) {
-            ($journal['onResult'])($sid, $c);
+            ($journal['onResult'])($sid, $c, $raw);
         }
     };
     $failAll = static function (array $registered, string $code, string $detail) use ($report): void {
@@ -177,15 +202,18 @@ function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?s
     $zone_data = base64_encode((string)$zone_bytes);
 
     foreach ($servers as $srv) {
+        // AS4b (E83): Laufberechtigung unmittelbar vor dem Aufruf; Fencing-Felder (F5, E74)
+        $fence = distribute_before_call($journal, (int)$srv['server_id'], $report);
+
         // Nur die konkrete Zone
         $r = $agent->postJson($srv['api_ip'], '/zones/zone_sync.php', (string)$srv['api_token'], [
             'zone_id'     => $zone_id,
             'zone_name'   => $zone_name,
             'zone_data'   => $zone_data
-        ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
+        ] + $fence, BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
 
         // Journal (J4): Ergebnis unmittelbar nach der Antwort
-        $report((int)$srv['server_id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_ZONE, $r));
+        $report((int)$srv['server_id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_ZONE, $r), $r);
 
         // Fehlerauswertung für diesen Server
         if (!empty($r['curlError'])) {
@@ -221,21 +249,21 @@ function distribute_zone_file(PDO $pdo, BindAgentClient $agent, int $zone_id, ?s
  * - Wenn ein Server nicht erreichbar ist oder einen Fehler zurückliefert, wird dies gesammelt und als Fehlerstatus gemeldet.
  *
  * @param PDO $pdo Datenbankverbindung
- * @param BindAgentClient $agent Agent-Client
+ * @param AgentClient $agent Agent-Client (BindAgentClient)
  * @param BindWorkDir $work Arbeitsverzeichnis des Aufrufers
  * @param string $zone_name Name der Zone, für die die Konfiguration erzeugt und verteilt werden soll.
  * @param array|null $journal AP1/H2d: ['targets' => [serverId => Name],
  *                            'onResult' => callable(int $serverId, array $einordnung, ?string $confHash): void]
  * @return array Assoziatives Array mit 'status', 'errors', 'output', 'targets'
  */
-function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir $work, string $zone_name, ?array $journal = null): array {
+function distribute_zone_conf_file(PDO $pdo, AgentClient $agent, BindWorkDir $work, string $zone_name, ?array $journal = null): array {
     $errors = [];
     $outputs = [];
     $targets = [];
-    $report = static function (int $sid, array $c, ?string $confHash) use (&$targets, $journal): void {
+    $report = static function (int $sid, array $c, ?string $confHash, ?array $raw = null) use (&$targets, $journal): void {
         $targets[$sid] = $c + ['confHash' => $confHash];
         if ($journal !== null) {
-            ($journal['onResult'])($sid, $c, $confHash);
+            ($journal['onResult'])($sid, $c, $confHash, $raw);
         }
     };
     $registered = $journal['targets'] ?? [];
@@ -301,14 +329,17 @@ function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir
         $conf_bytes = (string)file_get_contents($conf_path);
         $conf_data = base64_encode($conf_bytes);
 
+        // AS4b (E83): Laufberechtigung unmittelbar vor dem Aufruf; Fencing-Felder (F5, E74)
+        $fence = distribute_before_call($journal, (int)$srv['id'], static fn (int $sid, array $c) => $report($sid, $c, null));
+
         // API-Payload senden (nur die konkrete Zone)
         $r = $agent->postJson($srv['api_ip'], '/zones/conf_sync.php', (string)$srv['api_token'], [
             'zone_name' => $zone_name,
             'conf_data' => $conf_data
-        ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
+        ] + $fence, BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
 
         // Journal (J4): Ergebnis unmittelbar nach der Antwort, mit conf_hash der gesendeten Bytes
-        $report((int)$srv['id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_CONF, $r), PublishHashContract::sha256($conf_bytes));
+        $report((int)$srv['id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_CONF, $r), PublishHashContract::sha256($conf_bytes), $r);
 
         if (!empty($r['curlError'])) {
             $errors[] = "CURL-Fehler bei {$srv['name']}: {$r['curlError']}";
@@ -352,19 +383,19 @@ function distribute_zone_conf_file(PDO $pdo, BindAgentClient $agent, BindWorkDir
  * - status 'ok', wenn alle Cleanup-Requests erfolgreich waren, sonst 'warning'.
  *
  * @param PDO $pdo Datenbankverbindung
- * @param BindAgentClient $agent Agent-Client
+ * @param AgentClient $agent Agent-Client (BindAgentClient)
  * @param array|null $journal AP1/H2d: ['register' => callable(array $servers): bool,
  *                            'onResult' => callable(int $serverId, array $einordnung, ?int $validZoneCount): void]
  * @return array Assoziatives Array mit 'status', 'errors', 'output', 'targets'
  */
-function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent, ?array $journal = null): array {
+function distribute_zone_cleanup(PDO $pdo, AgentClient $agent, ?array $journal = null): array {
     $errors = [];
     $outputs = [];
     $targets = [];
-    $report = static function (int $sid, array $c, ?int $valid) use (&$targets, $journal): void {
+    $report = static function (int $sid, array $c, ?int $valid, ?array $raw = null, string $name = '') use (&$targets, $journal): void {
         $targets[$sid] = $c + ['validZoneCount' => $valid];
         if ($journal !== null) {
-            ($journal['onResult'])($sid, $c, $valid);
+            ($journal['onResult'])($sid, $c, $valid, $raw, $name);
         }
     };
 
@@ -407,14 +438,17 @@ function distribute_zone_cleanup(PDO $pdo, BindAgentClient $agent, ?array $journ
             continue;
         }
 
+        // AS4b (E83): Laufberechtigung unmittelbar vor dem Aufruf; Fencing-Felder (F5, E74)
+        $fence = distribute_before_call($journal, (int)$srv['id'], static fn (int $sid, array $c) => $report($sid, $c, null, null, (string)$srv['name']));
+
         // Leere Liste nur mit ausdrücklichem allow_empty = true (Server ohne zugewiesene Zone)
         $r = $agent->postJson($srv['api_ip'], '/zones/zone_cleanup.php', (string)$srv['api_token'], [
             'valid_zones' => array_values($valid_zones),
             'allow_empty' => empty($valid_zones)
-        ], BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
+        ] + $fence, BindAgentClient::SYNC_CONNECT_TIMEOUT, BindAgentClient::SYNC_TIMEOUT);
 
         // Journal (J4): Ergebnis unmittelbar nach der Antwort (nur Zähler, Q5)
-        $report((int)$srv['id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_CLEANUP, $r), count($valid_zones));
+        $report((int)$srv['id'], PublishTargetClassifier::classify(PublishTargetClassifier::KIND_CLEANUP, $r), count($valid_zones), $r, (string)$srv['name']);
 
         if (!empty($r['curlError'])) {
             $errors[] = "CURL-Fehler bei Cleanup auf {$srv['name']} ({$srv['api_ip']}): {$r['curlError']}";

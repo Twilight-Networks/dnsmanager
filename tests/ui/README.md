@@ -42,7 +42,7 @@ die Felder direkt mit dem CSRF-Token der Session gesendet. Ein Fall (`record/add
   Lauf zufällig erzeugt und nur in `/tmp/dnsmgr-uig/creds.php` (0600) abgelegt; sie erscheinen in keinem Ergebnis.
 - **Normalisierung:**
   - CSRF-Token, Zeitstempel und Session-Zeiten;
-  - Passwort-Hashes, Tokens und SOA-Serials nur als „wie Fixture“/„neu“;
+  - Passwort-Hashes, Tokens, SOA-Serials und die Fencing-Domäne (`system_status.fence_domain`, AS4b) nur als „wie Fixture“/„neu“;
   - Zeitstempelspalten entfallen;
   - Asset-Versionen (`?v=`) und Pfade der Testkopie.
 
@@ -75,6 +75,10 @@ bleiben unter `OUT_DIR` (Standard `/root/dnsmgr-uig-results`, 0700/0600).
 ```
 
 Jede Ausnahme braucht im PR eine Fall-ID-genaue Begründung und die Freigabe im Review.
+
+**Fencing-Domäne (AS4b):** Ab AS4b startet ein Publish nur mit gesetzter Fencing-Domäne. `UIG_FENCE_DOMAIN=<uuid>` setzt
+sie in der Testkopie (`FENCE_DOMAIN` in der Testkonfiguration, `system_status.fence_domain` in der Vorlage); bei Ständen
+vor AS4b ist der Eintrag ohne Wirkung. Ohne die Variable endet jeder Publish-Fall fail-closed (beabsichtigt).
 
 ## Screenshots
 

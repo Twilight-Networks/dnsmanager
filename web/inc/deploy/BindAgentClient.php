@@ -25,7 +25,9 @@
  * - Der Bearer-Token erscheint in keiner Fehlermeldung.
  */
 
-final class BindAgentClient
+require_once __DIR__ . '/AgentClient.php';
+
+final class BindAgentClient implements AgentClient
 {
     /** Zeitgrenzen der Datei-Synchronisation (unverändert aus bind_file_distributor.php) */
     public const SYNC_CONNECT_TIMEOUT = 5;

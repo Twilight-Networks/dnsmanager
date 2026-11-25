@@ -4,6 +4,9 @@
 #        dnsmgr_t21_r<RUN>_r* (Eigentum nach tests/history/owned.sh): Plan nur der fehlenden Schritte a/b/c für alle
 #        Teilzustände, Erkennung abweichender Strukturen durch Skript und SchemaCheck (Brücke), Lock- und Abbruchfälle,
 #        Kennwerte, Neuinstallation = Migration, frühere Skripte vor und nach 007, Notfall-Rückbau.
+#        AS4b: Die Anwendung verlangt 007 strikt. Vor und während 007 (Teilzustände, Rückbau) meldet SchemaCheck::problems()
+#        genau die Befunde der offenen Schritte (Login und Publish fail-closed); die Brücke (Stand vor oder nach 007 je
+#        Tabelle ok) bleibt die Sicht des Migrationswerkzeugs und des AS4a-Codes (Rückfallstand, as4b_test.php X02/X04).
 #
 # Aufruf (als root auf dem Testsystem): bash migration007_test.sh <App-Verzeichnis> <Basis-Schema.sql>
 #   <Basis-Schema.sql> = Schema vor Migration 002 (wie run.sh); Migrationen 002–006 mit den Skripten des App-Commits.
@@ -74,6 +77,16 @@ gen() { # <db> ⇒ "a b c" mit 1 = Schritt ausgeführt
 ctime() { mariadb -N -e "SELECT IFNULL(CREATE_TIME, '-') FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME = '$2'"; }
 state() { php "$H/schemacheck.php" "$APP" "$1" | grep "^$2"$'\t' | cut -f2; }
 problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | cut -f2- | tr '\n' ';'; }
+# AS4b: Befunde in Kurzform (Journaltabellen vor 007 ⇒ "<Tabelle>:vor007") und die nach gen() erwarteten Befunde
+problems7() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | cut -f2- \
+    | sed -E 's/^(zone_publish_targets): Struktur weicht ab \(erwartet col\|zone_protocol\|.*$/\1:vor007/; s/^(publish_cleanup_results): Struktur weicht ab \(erwartet col\|cleanup_protocol\|.*$/\1:vor007/' | tr '\n' ';'; }
+expect7() { # <db> ⇒ erwartete Befunde der offenen Schritte (Reihenfolge wie SchemaCheck: system_status, dann Journaltabellen)
+    local a b c; read -r a b c <<< "$(gen "$1")"
+    [ "$c" = 1 ] || printf '%s;' 'system_status.fence_domain fehlt'
+    [ "$a" = 1 ] || printf '%s;' 'zone_publish_targets:vor007'
+    [ "$b" = 1 ] || printf '%s;' 'publish_cleanup_results:vor007'
+}
+tool_ok() { [ "$(state "$1" zone_publish_targets)" = ok ] && [ "$(state "$1" publish_cleanup_results)" = ok ]; }   # Werkzeugsicht (Brücke)
 journal() { # unabhängiger Vergleichswert aller bisherigen Journal- und Statusspalten
     mariadb -N -B "$1" -e "SELECT attempt_id, server_id, server_name, agent_protocol, zone_sync, zone_sync_at, zone_http_status, zone_error_code, zone_error_detail, conf_sync, conf_sync_at, conf_http_status, conf_error_code, conf_error_detail, conf_hash FROM zone_publish_targets ORDER BY attempt_id, server_id;
       SELECT run_id, server_id, server_name, agent_protocol, registered_at, status, finished_at, valid_zone_count, removed_conf_count, removed_zone_file_count, http_status, error_code, error_detail FROM publish_cleanup_results ORDER BY run_id, server_id;
@@ -101,7 +114,7 @@ ok "$([ "$(gen "$D")" = "0 0 0" ] && echo 1)" "R01c keine DDL"
 D=$(mkdb r2 m6)
 expect_exit 1 "R02 --check nach Migration 006: Migration 007 erforderlich (a, b, c offen)" bash "$MIG7" --db "$D" --check
 ok "$(grep -q 'Schritt a: offen, Schritt b: offen, Schritt c: offen' "$W/out" && echo 1)" "R02b Plan a, b, c"
-ok "$([ -z "$(problems "$D")" ] && echo 1)" "R02c SchemaCheck (Brückencode) auf dem Schema vor 007 ohne Befund"
+ok "$([ "$(problems7 "$D")" = 'system_status.fence_domain fehlt;zone_publish_targets:vor007;publish_cleanup_results:vor007;' ] && tool_ok "$D" && echo 1)" "R02c Schema vor 007: SchemaCheck (AS4b) fail-closed mit genau den drei Befunden, Werkzeugsicht ok"
 expect_exit 2 "R02d --no-backup für Nicht-Testdatenbank abgelehnt" bash "$MIG7" --db dnsmanager --apply --no-backup
 before="$(journal "$D")"
 expect_exit 0 "R02e --apply mit Sicherung" bash "$MIG7" --db "$D" --apply --backup-dir "$W/bak"
@@ -124,11 +137,12 @@ c1="$(ctime "$D" zone_publish_targets)"; c2="$(ctime "$D" publish_cleanup_result
 expect_exit 0 "R03 --apply erneut" bash "$MIG7" --db "$D" --apply --no-backup
 ok "$(grep -q 'Nichts zu tun' "$W/out" && ! grep -q 'Geschützter Teil' "$W/out" && [ "$(ctime "$D" zone_publish_targets)" = "$c1" ] && [ "$(ctime "$D" publish_cleanup_results)" = "$c2" ] && [ "$(ctime "$D" system_status)" = "$c3" ] && echo 1)" "R03b keine DDL (CREATE_TIME aller drei Tabellen unverändert)"
 
-# R04 alle Teilzustände: nur die fehlenden Schritte werden ausgeführt; der Brückencode akzeptiert jeden Teilzustand
+# R04 alle Teilzustände: nur die fehlenden Schritte werden ausgeführt; die Werkzeugsicht akzeptiert jeden Teilzustand,
+#     die Anwendung (AS4b) meldet genau die offenen Schritte
 for subset in a b c ab ac bc; do
     D=$(mkdb "r4$subset" m6)
     for s in $(echo "$subset" | grep -o .); do apply_step "$D" "$s"; done
-    ok "$([ -z "$(problems "$D")" ] && echo 1)" "R04 Teilzustand {$subset}: SchemaCheck (Brücke) ohne Befund"
+    ok "$([ "$(problems7 "$D")" = "$(expect7 "$D")" ] && [ -n "$(expect7 "$D")" ] && tool_ok "$D" && echo 1)" "R04 Teilzustand {$subset}: SchemaCheck (AS4b) meldet genau die offenen Schritte ($(expect7 "$D")), Werkzeugsicht ok"
     sleep 1.2
     declare -A CT=( [a]="$(ctime "$D" zone_publish_targets)" [b]="$(ctime "$D" publish_cleanup_results)" [c]="$(ctime "$D" system_status)" )
     expect_exit 1 "R04b Teilzustand {$subset}: --check meldet offene Schritte" bash "$MIG7" --db "$D" --check
@@ -209,7 +223,7 @@ t0=$(date +%s)
 expect_exit 3 "R09 Metadatensperre: Abbruch" bash "$MIG7" --db "$D" --apply --no-backup
 dt=$(( $(date +%s) - t0 ))
 ok "$([ "$dt" -ge 9 ] && [ "$dt" -le 16 ] && grep -q 'Lock wait timeout' "$W/out" && grep -q 'Teilzustand: begonnene Schritte: a b' "$W/out" && echo 1)" "R09b nach ≈ 10 s ($dt s), Teilzustand gemeldet"
-ok "$([ "$(gen "$D")" = "1 0 0" ] && [ -z "$(problems "$D")" ] && [ "$(lockfree)" = 1 ] && echo 1)" "R09c Schritt a vollständig, b atomar nicht ausgeführt, Brücke ohne Befund, Lock frei"
+ok "$([ "$(gen "$D")" = "1 0 0" ] && [ "$(problems7 "$D")" = "$(expect7 "$D")" ] && tool_ok "$D" && [ "$(lockfree)" = 1 ] && echo 1)" "R09c Schritt a vollständig, b atomar nicht ausgeführt, AS4b meldet genau b und c, Werkzeugsicht ok, Lock frei"
 wait; BG=()
 expect_exit 0 "R09d Wiederanlauf" bash "$MIG7" --db "$D" --apply --no-backup
 ok "$(! grep -q 'STEP|a' "$W/out" && grep -q 'STEP|b' "$W/out" && grep -q 'STEP|c' "$W/out" && [ "$(gen "$D")" = "1 1 1" ] && echo 1)" "R09e nur Schritte b und c nachgeholt"
@@ -259,7 +273,7 @@ bash "$MIG7" --db "$D" --apply --no-backup > /dev/null 2>&1
 nz="$(mariadb -N "$D" -e "SELECT (SELECT COUNT(*) FROM zone_publish_targets WHERE COALESCE(zone_protocol, zone_effect, zone_installed_serial, zone_installed_hash, zone_reload, zone_fence_decision, zone_fence_code, conf_protocol, conf_effect, conf_reload, conf_fence_decision, conf_fence_code, conf_verify_state, conf_verify_reason, conf_verify_file_serial, conf_verify_file_hash, conf_verify_served_serial) IS NOT NULL) + (SELECT COUNT(*) FROM publish_cleanup_results WHERE COALESCE(cleanup_protocol, cleanup_effect, fence_decision, fence_code, served_absent_count, served_still_count, served_unknown_count, unassigned_count) IS NOT NULL) + (SELECT COUNT(*) FROM system_status WHERE fence_domain IS NOT NULL)")"
 ok "$([ "$nz" = 0 ] && echo 1)" "R14 Vorbedingung des Rückbaus: alle neuen Spalten leer"
 mariadb "$D" -e "SET SESSION sql_mode = 'STRICT_ALL_TABLES'; $RB_A; $RB_B; $RB_C" > "$W/out" 2>&1
-ok "$([ "$(gen "$D")" = "0 0 0" ] && [ -z "$(problems "$D")" ] && [ "$(journal "$D")" = "$before" ] && echo 1)" "R14b Rückbau: Struktur vor 007, Brücke ohne Befund, Journalwerte unverändert"
+ok "$([ "$(gen "$D")" = "0 0 0" ] && [ "$(problems7 "$D")" = "$(expect7 "$D")" ] && tool_ok "$D" && [ "$(journal "$D")" = "$before" ] && echo 1)" "R14b Rückbau: Struktur vor 007, AS4b fail-closed (drei Befunde), Werkzeugsicht ok, Journalwerte unverändert"
 expect_exit 1 "R14c nach Rückbau: --check meldet Migration 007 erforderlich" bash "$MIG7" --db "$D" --check
 expect_exit 0 "R14d erneut anwendbar" bash "$MIG7" --db "$D" --apply --no-backup
 

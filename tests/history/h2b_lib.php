@@ -14,6 +14,9 @@ final class H2b
 {
     public const SOCK = '/run/mysqld/mysqld.sock';
     public const DYN_PASSWORD = 'H2B-Dyn-Geheim-4711';
+    /** AS4b: Fencing-Domäne der Testinstallation (Datenbank und FenceContext identisch) */
+    public const FENCE_DOMAIN = '5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d';
+
     public const BUSINESS_TABLES = ['users', 'user_zones', 'zones', 'zone_servers', 'servers', 'records', 'dyndns_accounts', 'system_status'];
     public const HISTORY_TABLES = ['history_change_sets', 'zone_snapshots', 'zone_revisions', 'zone_history_state', 'history_dependencies', 'audit_events'];
 
@@ -96,6 +99,7 @@ final class H2b
         }
         self::sh("grep -vE '^(CREATE DATABASE|USE )' " . escapeshellarg(self::$app . '/sql/dnsmanager_schema.sql') . " | mariadb $db");
         self::sh("mariadb $db -e 'DELETE FROM users; DELETE FROM system_status WHERE id <> 1'");
+        self::sh("mariadb $db -e \"UPDATE system_status SET fence_domain = '" . self::FENCE_DOMAIN . "' WHERE id = 1\"");   // AS4b
         self::sh('mariadb ' . $db . ' < ' . escapeshellarg(__DIR__ . '/fixture_h2b.sql'));
         $pdo = self::pdo();
         $stmt = $pdo->prepare('UPDATE dyndns_accounts SET password_hash = ? WHERE id = 1');
@@ -136,7 +140,7 @@ final class H2b
     public static function records(PDO $p): RecordService { return new RecordService($p, new ZoneAccess($p), [new BindZoneBuildBackend($p), 'validateAndFlag']); }
     public static function servers(PDO $p): ServerService { return new ServerService($p, new BindZoneBuildBackend($p), new TopologyLock($p)); }
     public static function dyndns(PDO $p): DyndnsAccountService { return new DyndnsAccountService($p, new BindZoneBuildBackend($p)); }
-    public static function dyndnsApi(PDO $p): DyndnsUpdateService { return new DyndnsUpdateService($p, new BindZoneBuildBackend($p), new PublishService($p, new H2bFakePublishBackend())); }
+    public static function dyndnsApi(PDO $p): DyndnsUpdateService { return new DyndnsUpdateService($p, new BindZoneBuildBackend($p), new PublishService($p, new H2bFakePublishBackend(), null, new FenceContext(self::FENCE_DOMAIN))); }
 
     /** Bearbeitungseingabe einer Zone auf dem aktuellen Stand (wie das Formular), mit Überschreibungen */
     public static function zoneInput(PDO $p, Actor $a, int $zoneId, array $over = []): ZoneUpdateInput

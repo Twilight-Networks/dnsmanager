@@ -6,6 +6,8 @@
  *
  * Aufruf (als root über den MariaDB-Socket): php schemacheck.php <App-Verzeichnis> <Datenbank>
  * Ausgabe: je History-Tabelle "Tabelle<TAB>Zustand", danach je Befund "problem<TAB>Text".
+ * AS4b: Die Zustände entsprechen der Sicht des Migrationswerkzeugs (schema_history-cli evaluate, Journaltabellen vor
+ * oder nach 007 jeweils ok); die Befunde sind die strikte Sicht der Anwendung (SchemaCheck::problems(), nur nach 007).
  */
 
 [$app, $db] = [$argv[1] ?? '', $argv[2] ?? ''];
@@ -16,7 +18,7 @@ if (!preg_match('/^dnsmgr_t21_[a-z0-9_]+$/D', $db) || !is_file("$app/web/inc/app
 require_once "$app/web/inc/app/SchemaCheck.php";
 
 $pdo = new PDO("mysql:unix_socket=/run/mysqld/mysqld.sock;dbname=$db;charset=utf8mb4", 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-foreach (SchemaCheck::evaluateHistory(SchemaCheck::historySignatureRows($pdo)) as $table => $r) {
+foreach (SchemaCheck::evaluateHistory(SchemaCheck::historySignatureRows($pdo), true) as $table => $r) {
     echo "$table\t{$r['state']}\n";
 }
 foreach (SchemaCheck::problems($pdo) as $p) {

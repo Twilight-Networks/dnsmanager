@@ -11,6 +11,8 @@
 #   run.sh matrix  <Commit-SHA>                 Record-Typ-Matrix (U4-Core, tests/ui/records, siehe README)
 #   UIG_RECORDS_MATRIX=1 run.sh serve <SHA>     Testkopie zusätzlich mit der Matrix-Fixture (Erfassung der JS-Daten)
 #   UIG_EXTRA_SQL=<datei> run.sh …              zusätzliches Schema-SQL nach dem Schema des Commits (H2a: alter Code mit neuem Schema)
+#   UIG_FENCE_DOMAIN=<uuid> run.sh …            AS4b: Fencing-Domäne in Testkonfiguration (FENCE_DOMAIN) und Vorlage
+#                                                (system_status.fence_domain) setzen; ohne: Publish fail-closed (AS4b)
 #
 # Ablauf: eigener GitHub-Klon → git archive des Commits nach /tmp/dnsmgr-uig/app; Konfiguration aus
 # web/config/ui_config-sample.php (isolierte DB dnsmgr_uig_*, eigener DB-Benutzer, Log in Datei, Sprache de);
@@ -58,6 +60,15 @@ sed -i -E -e "s/define\('DB_NAME', *'[^']*'\)/define('DB_NAME', 'dnsmgr_uig_app'
   -e "s/define\('DB_PASS', *'[^']*'\)/define('DB_PASS', '$PW')/" -e "s/define\('LOG_TARGET', *'[^']*'\)/define('LOG_TARGET', 'apache')/" \
   -e "s/define\('DEFAULT_LANGUAGE', *'[^']*'\)/define('DEFAULT_LANGUAGE', 'de')/" $c
 for k in "DB_NAME', 'dnsmgr_uig_app" "DB_USER', 'uigweb" "LOG_TARGET', 'apache" "DEFAULT_LANGUAGE', 'de"; do grep -q "define('$k')" $c || { echo "ABBRUCH: Konfiguration ($k)"; exit 1; }; done
+FD=${UIG_FENCE_DOMAIN:-}
+if [ -n "$FD" ]; then
+  # AS4b: Fencing-Domäne nur in der Testkopie (Datenbankteil nach der Fixture)
+  [[ "$FD" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo "ABBRUCH: UIG_FENCE_DOMAIN ungültig"; exit 2; }
+  # Stände vor AS4b kennen den Eintrag nicht (ohne Wirkung); dort vor dem abschließenden ?> ergänzt
+  if grep -q "^// define('FENCE_DOMAIN'" $c; then sed -i -e "s#^// define('FENCE_DOMAIN', '[^']*');#define('FENCE_DOMAIN', '$FD');#" $c
+  else sed -i -e "/^?>\$/i define('FENCE_DOMAIN', '$FD');" $c; fi
+  grep -q "^define('FENCE_DOMAIN', '$FD');" $c || { echo "ABBRUCH: FENCE_DOMAIN in der Testkonfiguration"; exit 1; }
+fi
 if [ -n "$CSPM" ]; then
   # U6: CSP_MODE ausschließlich in dieser Testkopie (generierte Konfiguration), nie in der installierten Anwendung
   sed -i -e "s#^// define('CSP_MODE', 'enforce');#define('CSP_MODE', '$CSPM');#" $c
@@ -97,6 +108,10 @@ if [ -n "${UIG_EXTRA_SQL:-}" ]; then
 fi
 mariadb -e "DROP USER IF EXISTS 'uigweb'@'localhost'; CREATE USER 'uigweb'@'localhost' IDENTIFIED BY '$PW'; GRANT SELECT, INSERT, UPDATE, DELETE ON dnsmgr_uig_app.* TO 'uigweb'@'localhost'"
 php $H/fixture.php | mariadb dnsmgr_uig_tpl || { echo "ABBRUCH: Fixture"; exit 1; }
+if [ -n "$FD" ]; then
+  mariadb dnsmgr_uig_tpl -e "UPDATE system_status SET fence_domain = '$FD' WHERE id = 1" || { echo "ABBRUCH: fence_domain"; exit 1; }
+  echo "Fencing-Domäne (AS4b): Testkonfiguration und Vorlage gesetzt"
+fi
 if [ "$MODE" = matrix ] || [ "${UIG_RECORDS_MATRIX:-0}" = 1 ]; then
   # U4-Core: zusätzliche Records aller Typen (nur Matrix-Läufe und optional Serve zur Erfassung, nie Golden)
   mariadb dnsmgr_uig_tpl < $H/records/matrix_fixture.sql || { echo "ABBRUCH: Matrix-Fixture"; exit 1; }

@@ -225,14 +225,20 @@ foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator("$app/web"
 }
 sort($mentions);
 T::eq(['web/inc/app/publish/PublishLedger.php'], $writersJ, 'R10', 'Journaltabellen werden ausschließlich in PublishLedger geschrieben');
+// AS4b: lesend dazu MonitoringService (Wasserstand MAX(publish_runs.id), Publish-Lock), FenceContext/FenceAdminService
+// (nächste Lauf-ID, Domäne) und ServerVerificationStore (Laufprüfung über PublishLedger) – alle im Core
 T::eq([
     'web/inc/app/SchemaCheck.php',
+    'web/inc/app/monitoring/MonitoringService.php',
+    'web/inc/app/publish/FenceAdminService.php',
+    'web/inc/app/publish/FenceContext.php',
     'web/inc/app/publish/PublishBackend.php',
     'web/inc/app/publish/PublishJournal.php',
     'web/inc/app/publish/PublishJournalReader.php',
     'web/inc/app/publish/PublishLedger.php',
     'web/inc/app/publish/PublishRun.php',
     'web/inc/app/publish/PublishService.php',
+    'web/inc/app/publish/ServerVerificationStore.php',
     'web/inc/deploy/LegacyBindPublishBackend.php',
 ], $mentions, 'R11', 'Journal nur im Publish-Bereich und Backend; kein Fachservice, Adapter oder Skript kennt Journal oder Ledger (R-H9)');
 $ledger = (string)file_get_contents("$app/web/inc/app/publish/PublishLedger.php");
@@ -266,6 +272,22 @@ T::ok(count($updates) >= 8, 'R12', 'UPDATE-Anweisungen des Ledgers gefunden (' .
 T::eq([], $badSet, 'R12b', 'UPDATE ändert ausschließlich Lebenszyklusfelder, nie Registrierungsdaten (J4a)');
 T::eq([], $unguarded, 'R12c', 'jedes UPDATE nur aus dem offenen Zustand (bedingter Übergang, kein Überschreiben eines Endzustands)');
 T::ok(preg_match('/DELETE\s+FROM/i', $ledger) !== 1, 'R12d', 'Ledger löscht nie (append-only, E8)');
+// AS4b: Der dynamische SET-Teil der Agent-Ergebnisfelder (agentSet) schreibt nur Spalten aus AGENT_FIELDS; diese sind
+// ausschließlich die Ergebnisfelder aus 007 (nie Registrierungsdaten, nie Lebenszyklusfelder anderer Kanäle)
+require_once "$app/web/inc/app/publish/PublishLedger.php";
+$agent007 = [
+    'zone' => ['zone_protocol', 'zone_effect', 'zone_installed_serial', 'zone_installed_hash', 'zone_reload', 'zone_fence_decision', 'zone_fence_code'],
+    'conf' => ['conf_protocol', 'conf_effect', 'conf_reload', 'conf_fence_decision', 'conf_fence_code', 'conf_verify_state', 'conf_verify_reason',
+        'conf_verify_file_serial', 'conf_verify_file_hash', 'conf_verify_served_serial'],
+    'cleanup' => ['cleanup_protocol', 'cleanup_effect', 'fence_decision', 'fence_code', 'served_absent_count', 'served_still_count',
+        'served_unknown_count', 'unassigned_count'],
+];
+$af = PublishLedger::AGENT_FIELDS;
+ksort($af);
+ksort($agent007);
+T::eq($agent007, $af, 'R12e', 'AGENT_FIELDS = genau die Agent-Ergebnisfelder aus 007 je Kanal (AS4b, J4a)');
+T::ok(substr_count($ledger, 'self::agentSet(') === 2 && str_contains($ledger, 'in_array($col, self::AGENT_FIELDS[$channel], true)'), 'R12f',
+    'agentSet nur in den zwei bedingten Endzustands-UPDATEs, Spalten nur aus der Whitelist');
 // J2-Reihenfolge im Generator: Registrierung vor dem Serial-Update und vor dem Commit
 $gen = (string)file_get_contents("$app/web/inc/deploy/bind_file_generator.php");
 $posHook = strpos($gen, '$journal_info = $journal([');

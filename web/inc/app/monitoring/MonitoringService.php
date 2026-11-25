@@ -23,6 +23,13 @@
  * FOR UPDATE gelesen; ein gleichzeitig angelegter Eintrag (Unique-Schlüssel) führt zur Aktualisierung statt zu
  * einem Fehler. Zeitstempel in UTC (wie bisher im CLI-Lauf).
  *
+ * AS4b (E76, E109, Ordnungsvertrag Abschnitt 5i/5j): Nach den Zonenprüfungen – nur wenn das Backend ZoneVerifyBackend
+ * implementiert und ein Server die Fähigkeit meldet – eine L3-Runde je Server × Zone über zones/zone_verify. Beginn:
+ * Publish-Lock (0 s) ⇒ Wasserstand W = höchste Lauf-ID (alle Läufe ≤ W beendet) ⇒ Lock frei; Abfragen ohne Lock;
+ * Speicherung: Publish-Lock (0 s) ⇒ MAX(id) = W erneut (aktuelle Lesung) ⇒ ServerVerificationStore ⇒ Lock frei.
+ * Belegter Lock oder geänderter Wasserstand ⇒ alle Beobachtungen des Zyklus verworfen; Transportfehler und nicht
+ * unterstützte Antworten ⇒ keine Beobachtung. Lock-Reihenfolge: dnsmanager_monitoring → dnsmanager_publish_all.
+ * Diagnosen, Meldungen und Benachrichtigungen bleiben unverändert; der Bericht enthält zusätzlich 'l3'.
  * Keine Session, kein HTTP, keine Sprachtexte, kein Logging: Ergebnis als ServiceResult mit ServiceMessages
  * ("monitoring.*"), Rohdaten im Kontext. Die Aufrufer (CLI, Systemstatus-Seite) schreiben Logs bzw. Toasts.
  */
@@ -31,6 +38,10 @@ require_once __DIR__ . '/../ServiceMessage.php';
 require_once __DIR__ . '/../ServiceResult.php';
 require_once __DIR__ . '/MonitoringBackend.php';
 require_once __DIR__ . '/MonitoringNotifier.php';
+require_once __DIR__ . '/ZoneVerifyBackend.php';
+require_once __DIR__ . '/../publish/AgentResponseParser.php';
+require_once __DIR__ . '/../publish/ServerVerificationStore.php';
+require_once __DIR__ . '/../publish/PublishLedger.php';
 
 final class MonitoringService
 {
@@ -123,6 +134,9 @@ final class MonitoringService
                 }
             }
 
+            // AS4b: L3-Beobachtung (zone_verify) nach dem Ordnungsvertrag; Fehler ändern das Monitoring-Ergebnis nicht
+            $report['l3'] = $this->observeL3($rows);
+
             // Verwaiste Zonendiagnosen bereinigen (eine Anweisung statt N+1)
             $report['removedOrphans'] = $this->cleanupOrphanedZoneDiagnostics();
 
@@ -190,6 +204,89 @@ final class MonitoringService
             'Y' => new DateInterval("P{$amount}Y"),
             default => null
         };
+    }
+
+    /**
+     * AS4b: eine L3-Runde je unterstütztem Server × zugewiesener Zone mit Wasserstand (Abschnitt 5j).
+     *
+     * @param array<int, array<string, mixed>> $rows Zonenprüfungen (zone_id, zone_name, server_id, name, api_ip, api_token)
+     * @return array<string, mixed>
+     */
+    private function observeL3(array $rows): array
+    {
+        if (!$this->backend instanceof ZoneVerifyBackend) {
+            return ['status' => 'unsupported'];
+        }
+        $candidates = array_values(array_filter($rows, fn (array $r): bool => $this->backend->supportsZoneVerify((int)$r['server_id'])));
+        if ($candidates === []) {
+            return ['status' => 'no_capable_server'];
+        }
+        try {
+            $watermark = $this->watermarkUnderPublishLock();
+            if ($watermark === null) {
+                return ['status' => 'publish_active', 'queried' => 0];
+            }
+            $items = [];
+            $skipped = 0;
+            $invalid = [];
+            foreach ($candidates as $row) {
+                $r = $this->backend->verifyZone((string)$row['zone_name'], $row);
+                $v = AgentResponseParser::parseZoneVerify($r, (string)$row['zone_name'], $why);
+                if ($v === null) {
+                    // R3: ungültige Verifikation (auch falsche Zone, R2) wird verworfen – nachvollziehbar im Bericht
+                    if ($why === 'invalid') {
+                        $invalid[] = $row['zone_name'] . '@' . $row['name'];
+                    } else {
+                        $skipped++;
+                    }
+                    continue;
+                }
+                $items[] = ['zoneId' => (int)$row['zone_id'], 'zoneName' => (string)$row['zone_name'], 'serverId' => (int)$row['server_id'],
+                    'serverName' => (string)$row['name'], 'obs' => ['state' => $v['state'], 'reason' => $v['reason'],
+                        'served' => $v['servedSerial'], 'fileSerial' => $v['fileSerial'], 'fileHash' => $v['fileHash']]];
+            }
+            $stored = $this->storeUnderPublishLock($watermark, $items);
+
+            return ['status' => $stored === null ? 'discarded' : 'ok', 'watermark' => $watermark, 'queried' => count($candidates),
+                'noObservation' => $skipped, 'invalid' => count($invalid), 'invalidPairs' => $invalid, 'stored' => $stored];
+        } catch (Throwable $e) {
+            $this->rollbackIfActive();
+            return ['status' => 'error', 'detail' => $e->getMessage()];
+        }
+    }
+
+    /** Wasserstand W unter dem Publish-Lock (0 s); null = Lock belegt (Lauf aktiv) */
+    private function watermarkUnderPublishLock(): ?int
+    {
+        if ((int)$this->pdo->query("SELECT GET_LOCK('" . PublishLedger::MAIN_LOCK . "', 0)")->fetchColumn() !== 1) {
+            return null;
+        }
+        try {
+            return (int)$this->pdo->query('SELECT COALESCE(MAX(id), 0) FROM publish_runs')->fetchColumn();
+        } finally {
+            $this->pdo->query("SELECT RELEASE_LOCK('" . PublishLedger::MAIN_LOCK . "')")->fetchColumn();
+        }
+    }
+
+    /**
+     * Speicherung unter dem Publish-Lock nach erneuter Prüfung des Wasserstands; null = verworfen.
+     *
+     * @return array<string, int>|null
+     */
+    private function storeUnderPublishLock(int $watermark, array $items): ?array
+    {
+        if ((int)$this->pdo->query("SELECT GET_LOCK('" . PublishLedger::MAIN_LOCK . "', 0)")->fetchColumn() !== 1) {
+            return null;
+        }
+        try {
+            if ((int)$this->pdo->query('SELECT COALESCE(MAX(id), 0) FROM publish_runs')->fetchColumn() !== $watermark) {
+                return null;
+            }
+
+            return (new ServerVerificationStore($this->pdo))->recordMonitoring($watermark, $items);
+        } finally {
+            $this->pdo->query("SELECT RELEASE_LOCK('" . PublishLedger::MAIN_LOCK . "')")->fetchColumn();
+        }
     }
 
     /**
