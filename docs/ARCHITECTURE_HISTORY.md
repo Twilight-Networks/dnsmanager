@@ -1279,6 +1279,9 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
   - Nachgewiesen werden: HTTP 200 mit vollständigem Grundschema und `verified`, Übernahme durch `parseZoneVerify`, 400
     bei ungültigem Namen, 409 in `off`, Zonenverzeichnis einschließlich H-Datei byte-gleich.
   - Mutationsprobe `tests/agent/as4b_zone_verify_mutation.sh`: ohne die Einbindung von `bind_utils.php` rot.
+  - Harness-Sicherheit (Review PR #109): keine Übernahme von `agent/config/` (installierte Checkouts verweisen dort auf
+    `/etc/dnsmanager/`), nur selbst angelegte reguläre Dateien (0750/0640, root:www-data), Preflight-Abbruch bei
+    Symlinks; Nachweise mit Symlinks auf isolierte Dummy-Dateien (ZM02, ZM03).
 
 **Befund der realen E2E-Abnahme (25.11.2026, ns1 `3db5041`):**
 - **Publish:** Der Publish in `observe` (Lauf 31, Testzone `as4b-e2e.example.test`) bestand vollständig; dieser

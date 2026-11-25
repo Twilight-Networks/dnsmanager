@@ -100,11 +100,22 @@ Endpunkt-Test für `zones/zone_verify.php` (E109).
 
 ```bash
 php tests/agent/as4b_zone_verify_test.php <Checkout> [<Zone>]       # root, z. B. ns1
-bash tests/agent/as4b_zone_verify_mutation.sh <Checkout>            # Einbindung entfernt ⇒ muss rot werden
+bash tests/agent/as4b_zone_verify_mutation.sh <Checkout>            # Mutation und Harness-Sicherheit (ZM00–ZM03)
 ```
+
+**Harness-Sicherheit (Review PR #109):**
+- Installierte Checkouts verweisen mit `agent/config/api_config.php` und `api_tokens.php` per Symlink auf
+  `/etc/dnsmanager/`. Der Harness übernimmt `agent/config/` daher nie und kopiert kein `cp -a`.
+- Er legt nur reguläre Dateien exklusiv an (`fopen(…, 'x')`, Ersetzen über eine Temporärdatei mit `rename`) und bricht
+  bei jedem anderen Symlink oder jeder Sonderdatei im Checkout vor der ersten Schreiboperation ab.
+- Aus der installierten `api_config.php` werden nur ausgewählte, geheimnisfreie Pfad- und Werkzeugangaben gelesen; die
+  installierte Token-Datei wird nie gelesen.
+- Das Mutationsskript prüft dazu: ZM02 Symlinks auf isolierte Dummy-Dateien (Ziele byte-genau, Rechte, mtime, Inode
+  unverändert), ZM03 Symlink in `agent/inc` ⇒ Preflight-Abbruch.
 
 | Fall | Inhalt |
 |---|---|
+| Z00a | Sandbox nur aus regulären Dateien und Verzeichnissen (root:www-data, 0750/0640); `agent/config/` des Checkouts wird nie übernommen; Test-Konfiguration und Token sind eigene reguläre Dateien |
 | Z00 | Harness definiert kein `safeZoneName()` und bindet keine Agent-Datei ein |
 | Z01–Z05 | HTTP 200, kein PHP-Fehler, vollständiges Grundschema (6 Felder), Verifikationslogik erreicht (eine Runde, Konfigurationsnachweis, angefragte Zone), `verified` mit Datei-Serial = ausgelieferter Serial und Hash der verwalteten Datei |
 | Z06 | Core übernimmt die Antwort als gültige Beobachtung (`AgentResponseParser::parseZoneVerify`) |

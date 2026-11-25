@@ -10,8 +10,11 @@
  * - Der ECHTE Endpunkt des geprüften Checkouts läuft in einem eigenen php-cgi-Prozess als www-data. Es gibt keine
  *   Ersatzfunktion, keinen Ersatz-Agenten, kein auto_prepend und keine vom Harness eingebundenen Dateien: Der Endpunkt
  *   muss alle Abhängigkeiten selbst laden.
- * - Eine Kopie von agent/ erhält eine Test-Konfiguration: Kopie der installierten api_config.php mit fencing_mode observe
- *   bzw. off, eigener Token-Datei und ohne IP-Filter. Die installierte Konfiguration bleibt unverändert.
+ * - Eine Kopie von agent/ (nur reguläre Dateien und Verzeichnisse, ohne agent/config/) erhält eine eigene
+ *   Test-Konfiguration: ausgewählte, geheimnisfreie Pfad- und Werkzeugangaben der installierten api_config.php (nur
+ *   gelesen), fencing_mode observe bzw. off, eigene Token-Datei, kein IP-Filter. Installierte Konfiguration und
+ *   Token-Datei werden weder kopiert noch geschrieben; Symlinks im Checkout außerhalb von agent/config/ führen zum
+ *   Abbruch im Preflight (Review PR #109). Sandbox 0750/0640, root:www-data.
  * - Geprüft wird gegen den installierten named und das echte Zonenverzeichnis (CLAUDE.md §5: Fixture ohne eigenen
  *   DNS-Server). Der Endpunkt ist rein lesend; Zonenverzeichnis (inkl. H-Datei, Fehlermarke, Sperrdatei) wird vorher
  *   und nachher byte-genau verglichen.
@@ -48,30 +51,124 @@ foreach (['/usr/bin/php-cgi', '/usr/bin/sudo', '/etc/dnsmanager/api_config.php']
         exit(2);
     }
 }
+// Nur lesend und nur geheimnisfreie Pfad-/Werkzeugangaben aus der installierten Konfiguration; die Datei selbst wird
+// weder kopiert noch geschrieben, die Token-Datei der Installation nie gelesen
 $installed = require '/etc/dnsmanager/api_config.php';
 $zd = rtrim((string)$installed['zone_data_dir'], '/');
+$cfgKeys = ['zone_conf_dir', 'zone_data_dir', 'zones_conf_file', 'bind_named_conf_path', 'bind_named_checkzone', 'bind_named_checkconf', 'bind_rndc', 'l3_control_zone'];
+$wwwGid = posix_getgrnam('www-data')['gid'] ?? null;
+if ($wwwGid === null) {
+    fwrite(STDERR, "ABBRUCH: Gruppe www-data fehlt\n");
+    exit(2);
+}
 
-// Testumgebung: Kopie von agent/ mit eigener Konfiguration (für www-data lesbar, Token nur in der Kopie)
+/**
+ * Harness-Sicherheit (Review PR #109): Die Sandbox enthält ausschließlich reguläre Dateien und Verzeichnisse, die der
+ * Harness selbst anlegt. agent/config/ des Checkouts wird nie übernommen (dort verweisen installierte Checkouts per
+ * Symlink auf /etc/dnsmanager/); jeder andere Symlink im Checkout führt zum Abbruch vor jeder Schreiboperation. Rechte:
+ * Verzeichnisse 0750, Dateien 0640, Eigentümer root, Gruppe www-data (nur root und der php-cgi-Prozess als www-data).
+ */
+$preflightLinks = static function (string $dir) use (&$preflightLinks, $root): array {
+    $bad = [];
+    foreach (scandir($dir) ?: [] as $e) {
+        if ($e === '.' || $e === '..') {
+            continue;
+        }
+        $p = "$dir/$e";
+        if ($p === "$root/agent/config") {
+            continue;   // nie übernommen
+        }
+        if (is_link($p)) {
+            $bad[] = $p;
+        } elseif (is_dir($p)) {
+            $bad = array_merge($bad, $preflightLinks($p));
+        } elseif (!is_file($p)) {
+            $bad[] = $p;
+        }
+    }
+    return $bad;
+};
+$bad = $preflightLinks("$root/agent");
+if ($bad !== []) {
+    fwrite(STDERR, "ABBRUCH (Preflight): Symlinks bzw. Sonderdateien im Checkout außerhalb von agent/config – kein Test: " . implode(', ', $bad) . "\n");
+    exit(2);
+}
+$secure = static function (string $path, int $mode) use ($wwwGid): void {
+    if (is_link($path) || !chown($path, 0) || !chgrp($path, $wwwGid) || !chmod($path, $mode)) {
+        throw new RuntimeException("Rechte nicht setzbar: $path");
+    }
+};
+$copyTree = static function (string $src, string $dst) use (&$copyTree, $secure, $root): void {
+    if (!mkdir($dst, 0700)) {
+        throw new RuntimeException("Verzeichnis nicht anlegbar: $dst");
+    }
+    $secure($dst, 0750);
+    foreach (scandir($src) ?: [] as $e) {
+        if ($e === '.' || $e === '..' || "$src/$e" === "$root/agent/config") {
+            continue;
+        }
+        $s = "$src/$e";
+        if (is_link($s)) {
+            throw new RuntimeException("Symlink während der Kopie: $s");
+        }
+        if (is_dir($s)) {
+            $copyTree($s, "$dst/$e");
+        } else {
+            $in = fopen($s, 'rb');
+            $out = fopen("$dst/$e", 'xb');   // exklusiv: nie über eine vorhandene Datei oder einen Symlink schreiben
+            if ($in === false || $out === false || stream_copy_to_stream($in, $out) === false) {
+                throw new RuntimeException("Kopie fehlgeschlagen: $s");
+            }
+            fclose($in);
+            fclose($out);
+            $secure("$dst/$e", 0640);
+        }
+    }
+};
+/** Reguläre Datei in der Sandbox exklusiv anlegen bzw. ersetzen (Temporärdatei mit 'x', dann rename) */
+$writeRegular = static function (string $path, string $content) use ($secure): void {
+    if (is_link($path)) {
+        throw new RuntimeException("Symlink am Zielpfad: $path");
+    }
+    $tmp = $path . '.tmp-' . bin2hex(random_bytes(4));
+    $h = fopen($tmp, 'xb');
+    if ($h === false || fwrite($h, $content) !== strlen($content)) {
+        throw new RuntimeException("Schreiben fehlgeschlagen: $tmp");
+    }
+    fclose($h);
+    $secure($tmp, 0640);
+    if (!rename($tmp, $path)) {
+        throw new RuntimeException("Ersetzen fehlgeschlagen: $path");
+    }
+};
+
 $sbx = sys_get_temp_dir() . '/dnsmgr-as4b-zv.' . bin2hex(random_bytes(4));
-mkdir($sbx, 0755);
+if (!mkdir($sbx, 0700)) {
+    fwrite(STDERR, "ABBRUCH: Sandbox nicht anlegbar\n");
+    exit(2);
+}
 register_shutdown_function(static function () use ($sbx): void {
-    if (str_starts_with($sbx, sys_get_temp_dir() . '/dnsmgr-as4b-zv.')) {
+    if (str_starts_with($sbx, sys_get_temp_dir() . '/dnsmgr-as4b-zv.') && !is_link($sbx)) {
         exec('rm -rf ' . escapeshellarg($sbx));
     }
 });
-sh('cp -a ' . escapeshellarg("$root/agent") . ' ' . escapeshellarg("$sbx/agent"));
-sh('chmod -R a+rX ' . escapeshellarg($sbx));
+$secure($sbx, 0750);
+$copyTree("$root/agent", "$sbx/agent");
+mkdir("$sbx/agent/config", 0700);
+$secure("$sbx/agent/config", 0750);
 $token = 'zv-test-' . bin2hex(random_bytes(24));
-$writeCfg = static function (string $mode) use ($sbx, $installed): void {
-    $c = $installed;
+$writeCfg = static function (string $mode) use ($sbx, $installed, $cfgKeys, $writeRegular): void {
+    $c = array_intersect_key($installed, array_flip($cfgKeys));
     $c['fencing_mode'] = $mode;
     $c['api_allowed_ips'] = [];
     $c['token_file'] = "$sbx/agent/config/api_tokens.php";
-    file_put_contents("$sbx/agent/config/api_config.php", "<?php\nreturn " . var_export($c, true) . ";\n");
-    chmod("$sbx/agent/config/api_config.php", 0644);
+    $writeRegular("$sbx/agent/config/api_config.php", "<?php\nreturn " . var_export($c, true) . ";\n");
 };
-file_put_contents("$sbx/agent/config/api_tokens.php", "<?php\nreturn " . var_export([$token], true) . ";\n");
-chmod("$sbx/agent/config/api_tokens.php", 0644);
+$writeRegular("$sbx/agent/config/api_tokens.php", "<?php\nreturn " . var_export([$token], true) . ";\n");
+$links = trim(sh('find ' . escapeshellarg($sbx) . ' -type l'));
+$modes = trim(sh('find ' . escapeshellarg($sbx) . ' \( -type d ! -perm 0750 \) -o \( -type f ! -perm 0640 \) -o ! -user root -o ! -group www-data'));
+t('Z00a Sandbox: keine Symlinks, nur root:www-data mit 0750/0640, Konfiguration und Token als reguläre Dateien', $links === '' && $modes === ''
+    && is_file("$sbx/agent/config/api_tokens.php") && !is_link("$sbx/agent/config/api_tokens.php"), "$links $modes");
 
 // Kein Harness-Eingriff in die Abhängigkeiten des Endpunkts
 $own = array_filter(file(__FILE__) ?: [], static fn (string $l): bool => !str_contains($l, 'Z00') && !str_contains($l, 'preg_match'));
