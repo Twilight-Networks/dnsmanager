@@ -17,6 +17,7 @@
 require_once __DIR__ . '/../../../inc/init.php';
 require_once __DIR__ . '/../../../config/api_config.php';
 require_once __DIR__ . '/../../../inc/auth.php';
+require_once __DIR__ . '/../../../inc/bind_utils.php';
 require_once __DIR__ . '/../../../inc/file_utils.php';
 require_once __DIR__ . '/../../../inc/fence.php';
 require_once __DIR__ . '/../../../inc/dns_verify.php';

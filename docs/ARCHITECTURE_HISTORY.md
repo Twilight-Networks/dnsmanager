@@ -1273,6 +1273,25 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
   - X Code × Schema;
   - S statisch.
 - `tests/history/as4b_mutation_test.sh` mit 23 Mutationsproben (B17–B23 für R2/R3).
+- `tests/agent/as4b_zone_verify_test.php` (Z00–Z09): Der echte Endpunkt `zones/zone_verify.php` läuft in einem eigenen
+  `php-cgi`-Prozess als `www-data` gegen den installierten `named` und das echte Zonenverzeichnis, rein lesend.
+  - Ohne Ersatzfunktion, ohne Ersatz-Agent und ohne `auto_prepend`; der Endpunkt lädt seine Abhängigkeiten selbst.
+  - Nachgewiesen werden: HTTP 200 mit vollständigem Grundschema und `verified`, Übernahme durch `parseZoneVerify`, 400
+    bei ungültigem Namen, 409 in `off`, Zonenverzeichnis einschließlich H-Datei byte-gleich.
+  - Mutationsprobe `tests/agent/as4b_zone_verify_mutation.sh`: ohne die Einbindung von `bind_utils.php` rot.
+
+**Befund der realen E2E-Abnahme (25.11.2026, ns1 `3db5041`):**
+- **Publish:** Der Publish in `observe` (Lauf 31, Testzone `as4b-e2e.example.test`) bestand vollständig; dieser
+  Abnahmeteil bleibt gültig. Abgenommen sind Fencing-Token und Domäne, H 30 → 31, Journal-Rohwerte, R1, `verified` mit
+  Hash des Versuchs, positiver Nachweis, Legacy auf ns2 und die Flags.
+- **Monitoring:** Jeder `zone_verify`-Aufruf endete mit HTTP 500 („Call to undefined function `safeZoneName()`“), weil
+  `zone_verify.php` `inc/bind_utils.php` nicht einband; alle anderen Endpunkte binden sie ein.
+  - Der Core verhielt sich fail-safe: 500 bedeutet keine Beobachtung, gespeichert wurde nichts, der Nachweis aus
+    Lauf 31 blieb unverändert.
+- **Testlücke:** `as2b_pure_test.php` definiert `safeZoneName()` für die reinen Tests selbst, und `as4b_test.php`
+  verwendet einen Ersatz-Agenten. Keine Suite rief den Endpunkt als eigenständiges Skript auf.
+- **Korrektur:** fehlende Einbindung ergänzt; Endpunkt-Test ohne Polyfill. Gegen den Fehlerstand war er rot (Z01–Z06),
+  mit der Korrektur ist er grün. Offen bleibt nur der Monitoring-Teil der E2E-Abnahme.
 - Angepasst: Migrationstests 002–007 (strikte Befunde vor 007, Werkzeugsicht), `as3_test.php`, `as4a_test.php`,
   `static_rh8_test.php`.
 
@@ -1715,6 +1734,7 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 25.11.2026 | E2E-Befund AS4b: `zone_verify.php` band `inc/bind_utils.php` nicht ein (HTTP 500 im Monitoring), verdeckt durch Polyfill bzw. Ersatz-Agent in den Tests; Einbindung ergänzt, Endpunkt-Test `tests/agent/as4b_zone_verify_test.php` mit Mutationsprobe; Publish-Abnahme (Lauf 31) bleibt gültig, Monitoring-Teil wird nach Rollout wiederholt (Abschnitt 5j) |
 | 23.11.2026 | Review PR #108, R3-Nachtrag: Vollständigkeit des Verifikationsobjekts (alle sechs Grundfelder vorhanden, fehlend ≠ `null`, `unknown` nur mit gültigem Grund); `conf_sync` unverändert nach E77; Tests P34–P43, Mutationen B22/B23 |
 | 23.11.2026 | Review PR #108: R2 – Zonenidentität des Verifikationsnachweises (`conf_sync` gegen die Zone des Versuchs, `zone_verify` gegen die angefragte Zone, DNS-Namensnormalisierung; fehlend/ungültig/abweichend nie `verified`); R3 – ungültige Monitoring-Verifikation wird verworfen statt als `unknown` gespeichert, vorhandene fehlerhaft geformte Rohwerte machen das Objekt ungültig; Abschnitt 5j, Tests P17–P33, J13/J14, M07–M09, Mutationen B17–B21 |
 | 21.11.2026 | AS4b umgesetzt: Abschnitt 5j (Fencing-Domäne vor J6/J1, Lauf-ID als Token an `zone_sync`/`conf_sync`/`zone_cleanup`, Laufprüfung vor jedem Agent-Aufruf, Restore-Abgleich und Admin-CLI, `AgentResponseParser` mit R1, Journal-Ergebnisfelder, `ServerVerificationStore` mit Ordnungsvertrag und Nachweiserhalt, Cleanup-Zuordnung, `zone_verify` und Monitoring mit Wasserstand, Code verlangt 007 strikt); E74, E76, E81, E83, E87, E109 umgesetzt; Abschnitte 0 und 18 nachgeführt |
