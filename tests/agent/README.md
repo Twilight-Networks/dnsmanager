@@ -87,6 +87,41 @@ neutralisiert, weil die Datei-Sandbox keinen passenden BIND hat):
 bash tests/agent/as2a_as1_regression.sh <Prüfstand> <Referenz-Checkout Basis> <Ergebnisse> [FSICLXGM]
 ```
 
+## AS4b – `as4b_zone_verify_test.php`, `as4b_zone_verify_mutation.sh`
+
+Endpunkt-Test für `zones/zone_verify.php` (E109).
+- **Aufbau:** Der echte Endpunkt des Prüfstands läuft in einem eigenen `php-cgi`-Prozess als `www-data`. Grundlage ist
+  eine Kopie von `agent/` mit Test-Konfiguration: Kopie der installierten `api_config.php` mit `fencing_mode`
+  `observe` bzw. `off`, eigenem Token, ohne IP-Filter.
+- **Umgebung:** gegen den installierten `named` und das echte Zonenverzeichnis, rein lesend. Kein zusätzlicher `named`,
+  keine Änderung an `/etc/dnsmanager`.
+- **Keine Hilfen des Harness:** keine Ersatzfunktion (`safeZoneName()`), kein Ersatz-Agent, kein `auto_prepend`. So wird
+  der E2E-Befund vom 25.11.2026 erkannt, eine fehlende Einbindung von `inc/bind_utils.php`.
+
+```bash
+php tests/agent/as4b_zone_verify_test.php <Checkout> [<Zone>]       # root, z. B. ns1
+bash tests/agent/as4b_zone_verify_mutation.sh <Checkout>            # Mutation und Harness-Sicherheit (ZM00–ZM03)
+```
+
+**Harness-Sicherheit (Review PR #109):**
+- Installierte Checkouts verweisen mit `agent/config/api_config.php` und `api_tokens.php` per Symlink auf
+  `/etc/dnsmanager/`. Der Harness übernimmt `agent/config/` daher nie und kopiert kein `cp -a`.
+- Er legt nur reguläre Dateien exklusiv an (`fopen(…, 'x')`, Ersetzen über eine Temporärdatei mit `rename`) und bricht
+  bei jedem anderen Symlink oder jeder Sonderdatei im Checkout vor der ersten Schreiboperation ab.
+- Aus der installierten `api_config.php` werden nur ausgewählte, geheimnisfreie Pfad- und Werkzeugangaben gelesen; die
+  installierte Token-Datei wird nie gelesen.
+- Das Mutationsskript prüft dazu: ZM02 Symlinks auf isolierte Dummy-Dateien (Ziele byte-genau, Rechte, mtime, Inode
+  unverändert), ZM03 Symlink in `agent/inc` ⇒ Preflight-Abbruch.
+
+| Fall | Inhalt |
+|---|---|
+| Z00a | Sandbox nur aus regulären Dateien und Verzeichnissen (root:www-data, 0750/0640); `agent/config/` des Checkouts wird nie übernommen; Test-Konfiguration und Token sind eigene reguläre Dateien |
+| Z00 | Harness definiert kein `safeZoneName()` und bindet keine Agent-Datei ein |
+| Z01–Z05 | HTTP 200, kein PHP-Fehler, vollständiges Grundschema (6 Felder), Verifikationslogik erreicht (eine Runde, Konfigurationsnachweis, angefragte Zone), `verified` mit Datei-Serial = ausgelieferter Serial und Hash der verwalteten Datei |
+| Z06 | Core übernimmt die Antwort als gültige Beobachtung (`AgentResponseParser::parseZoneVerify`) |
+| Z07, Z08 | ungültiger Zonenname ⇒ 400 `zone_name_invalid`; Modus `off` ⇒ 409 `verification_disabled` |
+| Z09 | Zonenverzeichnis (einschließlich H-Datei und Sperrdatei) byte-gleich, keine Fehlermarke |
+
 ## AS2b – `as2b_pure_test.php`, `as2b_test.py`, `as2b_as1_regression.sh`
 
 Abnahme der Nachverifikation nach dem Reload und des Nachweises der Entfernung (`docs/ARCHITECTURE_HISTORY.md`,
