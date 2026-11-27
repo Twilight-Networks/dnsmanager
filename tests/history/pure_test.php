@@ -273,8 +273,8 @@ foreach (SchemaCheck::HISTORY_TABLES as $t => $lines) {
     }
 }
 $all = static fn (array $res): array => array_map(static fn (array $x): string => $x['state'], $res);
-T::eq(['history_change_sets' => 'ok', 'zone_snapshots' => 'ok', 'zone_revisions' => 'ok', 'zone_history_state' => 'ok', 'history_dependencies' => 'ok', 'audit_events' => 'ok', 'publish_runs' => 'ok', 'zone_publish_attempts' => 'ok', 'zone_publish_targets' => 'ok', 'publish_cleanup_results' => 'ok', 'zone_server_verification' => 'ok'], $all(SchemaCheck::evaluateHistory($rows)), 'C01', 'Erwartung ⇒ alle ok');
-T::eq(['history_change_sets' => 'absent', 'zone_snapshots' => 'absent', 'zone_revisions' => 'absent', 'zone_history_state' => 'absent', 'history_dependencies' => 'absent', 'audit_events' => 'absent', 'publish_runs' => 'absent', 'zone_publish_attempts' => 'absent', 'zone_publish_targets' => 'absent', 'publish_cleanup_results' => 'absent', 'zone_server_verification' => 'absent'], $all(SchemaCheck::evaluateHistory([])), 'C02', 'leer ⇒ alle absent');
+T::eq(['history_change_sets' => 'ok', 'zone_snapshots' => 'ok', 'zone_revisions' => 'ok', 'zone_history_state' => 'ok', 'history_dependencies' => 'ok', 'audit_events' => 'ok', 'publish_runs' => 'ok', 'zone_publish_attempts' => 'ok', 'zone_publish_targets' => 'ok', 'publish_cleanup_results' => 'ok', 'zone_server_verification' => 'ok', 'zone_serial_references' => 'ok'], $all(SchemaCheck::evaluateHistory($rows)), 'C01', 'Erwartung ⇒ alle ok');
+T::eq(['history_change_sets' => 'absent', 'zone_snapshots' => 'absent', 'zone_revisions' => 'absent', 'zone_history_state' => 'absent', 'history_dependencies' => 'absent', 'audit_events' => 'absent', 'publish_runs' => 'absent', 'zone_publish_attempts' => 'absent', 'zone_publish_targets' => 'absent', 'publish_cleanup_results' => 'absent', 'zone_server_verification' => 'absent', 'zone_serial_references' => 'absent'], $all(SchemaCheck::evaluateHistory([])), 'C02', 'leer ⇒ alle absent');
 $mut = $rows;
 $mut[] = ['zone_snapshots', 'idx|idx_extra|1|1|contract|~|BTREE'];
 $res = SchemaCheck::evaluateHistory($mut);

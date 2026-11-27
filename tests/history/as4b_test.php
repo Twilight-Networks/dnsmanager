@@ -291,6 +291,9 @@ if ($group('P')) {
 
 // ---------------------------------------------------------------- J: Journal-Rohwerte, Matrix E77/J8, R1, Mischbetrieb
 if ($group('J')) {
+    // AS5 (Ergänzung 3.1, D22): L03 beendet die Verbindung nach dem Write-ahead vor zone_sync; Zone 2 ist danach bis zur
+    // administrativen Erfassung gesperrt (nachgewiesen in as5_test.php N02). Die folgenden Gruppen starten deshalb frisch.
+    $pdo = H2b::reset(true);
     $pdo->exec('DELETE FROM zone_server_verification');
     $R = static fn (int $h, array $b): array => As4bFakeAgent::resp($h, is_array($b['verification'] ?? null) ? ['verification' => As4bFakeAgent::v($b['verification'])] + $b : $b);
     // Matrix je conf_sync-Antwort für beta (Server 1): [Antwort, Journal conf_sync, conf_protocol, verify, changed, Beobachtung]
@@ -440,6 +443,9 @@ if ($group('O')) {
 
 // ---------------------------------------------------------------- C: Cleanup-Zuordnung und served_serial
 if ($group('C')) {
+    // AS5 (Ergänzung 3.3/3.4): O schreibt den Verification Store direkt bzw. ohne Serial-Referenzen; nach der AS5-Epoche gilt
+    // das als nicht gespiegelte Beobachtung (Lücke, Zone gesperrt; as5_test.php X06/X07). C startet deshalb frisch.
+    $pdo = H2b::reset(true);
     $pdo->exec('DELETE FROM zone_server_verification');
     $ins = static fn (int $z, int $s, string $name) => $pdo->exec("INSERT INTO zone_server_verification (zone_id, server_id, zone_name, server_name, last_state, last_method, last_observed_at)"
         . " VALUES ($z, $s, '$name', 'ns$s.h2b.test', 'unknown', 'monitoring', NOW(6))");
@@ -572,8 +578,11 @@ if ($group('E')) {
     $r = $publish($pdo, $a, 2);
     $t = $target($pdo, $lastAttempt($pdo, 2), 1);
     $pdo->exec('DROP TRIGGER as4b_fail');
-    t('E01 Schreibfehler der Beobachtung: Publish published, Journal mit Rohwerten, keine Beobachtung, Bericht und Logzeile', $r['status'] === 'published'
-        && $t['conf_verify_state'] === 'verified' && $zsv($pdo, 2, 1) === null && ($r['journal']['verification']['failed'] ?? 0) === 1
+    // AS5 (D22, bewusste Abweichung von E64 nur im Fehlerfall): Eine nicht speicherbare Beobachtung setzt eine Verlustmarke
+    // und beendet den Lauf (exception); Journal-Rohwerte bleiben, keine Beobachtung.
+    $loss = (int)H2b::one($pdo, "SELECT COUNT(*) FROM zone_serial_references WHERE source = 'loss' AND reason = 'observation_not_stored' AND zone_id = 2");
+    t('E01 Schreibfehler der Beobachtung: AS5 Verlustmarke und Lauf exception, Journal mit Rohwerten, keine Beobachtung, Bericht und Logzeile', $r['status'] === 'exception'
+        && $loss === 1 && $t['conf_verify_state'] === 'verified' && $zsv($pdo, 2, 1) === null && ($r['journal']['verification']['failed'] ?? 0) === 1
         && array_filter($logs, static fn (string $l): bool => str_contains($l, '[publish] Verifikation:') && str_contains($l, 'as4b_injected')) !== [], json_encode([$r['status'], $r['exception'], $r['journal']['verification'] ?? null, $t['conf_verify_state'] ?? null]));
     t('E02 keine offene Transaktion, Sperren frei', !H2b::hasOpenTrx($pdo) && (int)$pdo->query("SELECT IS_FREE_LOCK('dnsmanager_publish_all')")->fetchColumn() === 1);
 }

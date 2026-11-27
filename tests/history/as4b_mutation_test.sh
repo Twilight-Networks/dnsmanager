@@ -40,9 +40,14 @@ ST=web/inc/app/publish/ServerVerificationStore.php
 P=web/inc/app/publish/AgentResponseParser.php
 MS=web/inc/app/monitoring/MonitoringService.php
 echo "== Mutationsproben AS4b"
-mutate B01 "$J" '        $this->ledger->assertRunAlive($this->run);
-' '' L 'keine Laufprüfung vor dem Agent-Aufruf (E83)'
-mutate B02 "$D" '        $fail($sid, PublishTargetClassifier::localFailure('"'"'run_lock_lost'"'"', $e->getMessage()));
+# AS5: Anker von B01/B02/B10 an den geänderten Code angepasst (Mutation inhaltlich unverändert)
+mutate B01 "$J" '    public function beforeAgentCall(): array
+    {
+        $this->ledger->assertRunAlive($this->run);
+' '    public function beforeAgentCall(): array
+    {
+' L 'keine Laufprüfung vor dem Agent-Aufruf (E83)'
+mutate B02 "$D" '        $fail($sid, PublishTargetClassifier::localFailure($e instanceof SerialReferenceLost ? '"'"'serial_intent_failed'"'"' : '"'"'run_lock_lost'"'"', $e->getMessage()));
         throw $e;' '        return [];' L 'Lock-Verlust verschluckt, Verteilung läuft weiter'
 mutate B03 "$FC" 'if (!hash_equals((string)$db, $this->configuredDomain)) {' 'if (false) {' F 'Domänenvergleich DB/Konfiguration entfernt (E74)'
 mutate B04 "$J" "'fence_token' => \$this->run->id," "'fence_token' => \$this->run->id + 1," F 'Token ≠ registrierte Lauf-ID (F5)'
@@ -55,11 +60,11 @@ mutate B10 "$MS" "        if ((int)\$this->pdo->query(\"SELECT GET_LOCK('\" . Pu
             return null;
         }
         try {
-            if" "        if (false) {
+            \$refs" "        if (false) {
             return null;
         }
         try {
-            if" M 'Speicherung ohne Publish-Lock'
+            \$refs" M 'Speicherung ohne Publish-Lock'
 mutate B11 "$P" '$serial !== null && $hash !== null && $consistent' '$serial !== null && $hash !== null' P 'installierter Stand ohne R1-Konsistenz übernommen'
 mutate B12 "$P" "if (\$classification !== 'ok' || \$fs === null" "if (\$fs === null" P 'verified trotz Einordnung unknown'
 mutate B13 "$ST" '        if (count($ids) !== 1) {' '        if ($ids === []) {' C 'Cleanup-Paar trotz mehrerer Kandidaten zugeordnet'

@@ -42,7 +42,7 @@ mkdb() { # <Name> <base|m2|m3|new>
 has_ae() { [ "$(mariadb -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME = 'audit_events'")" = 1 ]; }
 state() { php "$H/schemacheck.php" "$APP" "$1" | grep "^$2"$'\t' | cut -f2; }
 # AS4b: SchemaCheck::problems() ist strikt nach 007 – Befunde der späteren Migration 007 hier ausgefiltert
-problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -vE '^problem.(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results) fehlt$' | grep -v 'zone_server_verification fehlt$' | grep -v 'zones.soa_serial: Typ int(11) statt int(10) unsigned$' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2- | tr '\n' ';'; }
+problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'zone_serial_references fehlt$' | grep -vE '^problem.(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results) fehlt$' | grep -v 'zone_server_verification fehlt$' | grep -v 'zones.soa_serial: Typ int(11) statt int(10) unsigned$' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2- | tr '\n' ';'; }
 basecount() { mariadb -N -e "SELECT CONCAT_WS('/', (SELECT COUNT(*) FROM $1.history_change_sets), (SELECT COUNT(*) FROM $1.zone_snapshots), (SELECT COUNT(*) FROM $1.zone_revisions), (SELECT COUNT(*) FROM $1.zone_history_state))"; }
 
 echo "== Migration 004 – $(mariadb -N -e 'SELECT VERSION()')"
@@ -109,6 +109,7 @@ sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; 
 bash "$APP/scripts/migrate_005_publish_journal.sh" --db "${H2A_PREFIX}o2" --apply --no-backup > "$W/m5.out" 2>&1 || ok 0 "O07b Vorbereitung: Migration 005 auf o2"
 bash "$APP/scripts/migrate_006_zone_serial_verification.sh" --db "${H2A_PREFIX}o2" --apply --no-backup > "$W/m6.out" 2>&1 || ok 0 "O07b Vorbereitung: Migration 006 auf o2"
 bash "$APP/scripts/migrate_007_journal_agent_results.sh" --db "${H2A_PREFIX}o2" --apply --no-backup > "$W/m7.out" 2>&1 || ok 0 "O07b Vorbereitung: Migration 007 auf o2"
+bash "$APP/scripts/migrate_008_zone_serial_references.sh" --db "${H2A_PREFIX}o2" --apply --no-backup > "$W/m8.out" 2>&1 || ok 0 "O07b Vorbereitung: Migration 008 auf o2"   # AS5
 ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}o2")" ] && echo 1)" "O07b Struktursignatur Neuinstallation = Migration 002 + 003 + 004 + 005 + 006 + 007 (byte-gleich)"
 
 # O08 Skripte 002/003 bleiben nach Migration 004 konsistent; Migration 004 ohne 003 möglich (keine Abhängigkeit)
