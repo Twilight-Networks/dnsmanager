@@ -168,7 +168,7 @@ sudo -u www-data php /usr/share/dnsmanager/web/scripts/fence_admin-cli.php raise
 Anwendungsbenutzer das Recht `ALTER`, endet der Befehl mit Exit 3 ohne Änderung; dann als Datenbank-Administrator
 `ALTER TABLE publish_runs AUTO_INCREMENT = <max(H) + 1>` unter dem Publish-Lock ausführen und mit `status` prüfen. Agenten in `off`, ältere
 Agenten und nicht erreichbare Agenten melden keinen Höchststand und blockieren nicht; `status` listet sie. Agenten senken
-H nie.
+H nie. Seit AS5 gehört zum Restore zusätzlich der Serial-Abgleich und die Publish-Sperre (Abschnitt 10).
 
 ## 8. Zustandsprüfung vor der Übernahme (AS2a)
 
@@ -289,3 +289,48 @@ enthält und die zunächst im bisherigen Verhalten bleiben sollen, setzen ihn **
 Wird der Code ohne diesen Schritt aktualisiert, lehnen alle vier Endpunkte jeden Aufruf mit `fence_misconfigured` (503) ab:
 Veröffentlichung und Cleanup stehen, das Monitoring meldet den Server als fehlerhaft. Behebung: Schritt 2 nachholen; ein
 Neustart ist nicht nötig (die Konfiguration wird je Anfrage gelesen).
+
+## 10. Publish-Sperre, Datenbank-Restore und Code-Rückfall (AS5, E152)
+
+Die Sperre ist **global** (alle Zonen); eine zonenspezifische Sperre gibt es nicht. Sie greift für Code ab AS4b
+(`156f934`) einschließlich AS5 und unterbindet Publish All, Publish Zone, den DynDNS-Publish und
+`docs/agent-tls/s42-publish-zone.php`: Fehlt `FENCE_DOMAIN` in `/etc/dnsmanager/ui_config.php`, bricht jeder Lauf unter
+dem Publish-Lock vor J6/J1 ab (`exception`, kein Journal-Eintrag, kein Agent-Aufruf, Flags unverändert). DynDNS-Änderungen
+werden weiter festgeschrieben und bleiben ausstehend (`publish_pending`). Die Admin-CLIs `fence_admin-cli.php` und
+`serial_admin-cli.php` setzen die Domäne der Web-Konfiguration nicht voraus und bleiben nutzbar.
+
+**Sperre setzen**
+1. Sicherung: `cp -a /etc/dnsmanager/ui_config.php /root/dnsmanager-backup/ui_config.php.vor-sperre` (Verzeichnis 700).
+2. In `ui_config.php` die Zeile `define('FENCE_DOMAIN', …)` auskommentieren; Rechte danach ausdrücklich `0640 root:www-data`
+   setzen und Lesbarkeit prüfen: `sudo -u www-data php -l /etc/dnsmanager/ui_config.php`.
+3. Nachweis: `sudo -u www-data php /usr/share/dnsmanager/web/scripts/serial_admin-cli.php status | head -1` meldet
+   „Publish-Sperre: AKTIV – Fencing: Domäne in der Web-Konfiguration nicht gesetzt (FENCE_DOMAIN)“.
+4. **Laufende Veröffentlichungen:** `mariadb -N -e "SELECT IS_USED_LOCK('dnsmanager_publish_all')"` muss NULL liefern.
+   Sonst höchstens 10 Minuten warten (ein Lauf endet regulär); hängt er, die gemeldete Verbindung mit `KILL <id>` beenden
+   (Lock-Verlust ⇒ kein weiterer Agent-Aufruf, E83) und danach **mindestens 35 s** warten (bereits gesendete Anfragen:
+   cURL-Frist 30 s). Erst dann gilt die Sperre als wirksam.
+
+**Datenbank-Restore**
+1. Sperre setzen (oben) **vor** dem Restore. Während des Restores zusätzlich jede Fachänderung unterbinden: Webserver
+   der Oberfläche und der DynDNS-API anhalten (`systemctl stop apache2`; auf ns1 betrifft das auch den lokalen Agenten)
+   und den Monitoring-Cron aussetzen. Danach Restore einspielen.
+2. Webserver wieder starten (Sperre bleibt aktiv), Fencing-Abgleich nach Abschnitt 7 (`raise-runs`).
+3. Serial-Abgleich: für Agenten in `observe`/`enforce` eine gespeicherte Monitoring-Runde abwarten; für Agenten in `off`
+   je Zone und Zielserver Datei- und ausgelieferte Serial erheben (`dig +norec @127.0.0.1 <zone> SOA`,
+   `named-checkzone <zone> <datei>` auf dem Server) und mit
+   `serial_admin-cli.php record --zone-id=… --zone=… --server-id=… --server=… --file=<n>|--served=<n> --evidence=…`
+   erfassen (je Bestandteil ein Aufruf).
+4. `serial_admin-cli.php status` muss Exit 0 liefern (keine Sperre, jede Zone auflösbar). Erst dann `FENCE_DOMAIN`
+   zurückspielen (Rechte wie oben), mit `fence_admin-cli.php status` die Gleichheit der Domänen prüfen und einen ersten
+   Publish kontrolliert ausführen.
+
+**Code-Rückfall auf AS4b (`156f934`)**
+- Technisch ist der AS4b-Code auf Schema 008 lauffähig (die Tabelle bleibt und wird ignoriert). Sein Publish-Betrieb ist
+  damit **nicht** freigegeben: Sperre vor der Installation setzen und bestehen lassen, bis die sichere Wiederaufnahme
+  ausdrücklich freigegeben ist.
+- Vorher (noch mit AS5) `serial_admin-cli.php status` sichern: Zonen, deren nächste Serial nach AS5 von der Altregel
+  (`generate_next_serial(DB-Serial)`) abweicht oder die gesperrt sind, sind nach dem Rückfall gefährdet. Der AS4b-Code
+  kennt keine zonenbezogene Sperre: Solange eine solche Zone nicht bereinigt ist, bleibt der gesamte Publish-Betrieb
+  global gesperrt.
+- Nach der Rückkehr zu AS5 erkennt der Core Läufe ohne Laufmarke mit `as2`-zone_sync und nicht gespiegelte Beobachtungen
+  als Lücke (Sperre bis zur Erfassung beider Bestandteile).

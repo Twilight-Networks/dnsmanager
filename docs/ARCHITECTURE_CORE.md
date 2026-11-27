@@ -152,6 +152,10 @@ Keine neuen Core-Baustellen; als Nächstes folgt die UI-Modernisierung.
     nur über `ServerVerificationStore`, je Paar eigene kurze Transaktion mit `FOR UPDATE`, nie in einer Fachtransaktion.
     Monitoring: `dnsmanager_monitoring` → `dnsmanager_publish_all` (nur Try-Lock 0 s für Wasserstand und Speicherung;
     die Agent-Abfragen laufen ohne Publish-Lock). Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5j.
+  - Serial-Strategie (AS5): Laufmarke nach J1, intent vor jedem `zone_sync` (Autocommit); Serial-Auswahl in der
+    Generator-Transaktion nach `zones` (X) nur lesend; Beobachtungen in `zone_serial_references` in derselben kurzen
+    Transaktion wie `zone_server_verification`; administrative Erfassung unter dem Publish-Try-Lock in eigener
+    Transaktion mit Audit. Einzelheiten: `ARCHITECTURE_HISTORY.md`, Abschnitt 5k.
 - **Ziel:** Web-UI und ein späterer MCP-Adapter rufen dieselben Services auf, ohne Geschäftslogik zu duplizieren.
 
 ## 2. Stand je Fachbereich
@@ -339,7 +343,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 2. **Web-Schicht:** keine SQL-, Transaktions-, Shell-, cURL- oder Agent-Aufrufe. Zwei bewusst akzeptierte Bootstrap-Stellen: Die CLI-Skripte übernehmen die Verbindung aus `$GLOBALS['pdo']` (`inc/db.php`), `pages/records.php` nutzt `global $zone, $LANG` in einer lokalen Darstellungsfunktion.
 3. **Core/Infrastruktur:** frei von Session, HTTP, `$LANG`, Web-Bootstrap und `global`/`$GLOBALS`. Unveränderliche Konfigurationskonstanten (z. B. `PASSWORD_MIN_LENGTH`, `MAILER_*`, `REMOTE_API_BASE`, `CURL_SSL_*`, `BIND_BASE_DIR`) werden direkt gelesen; jeder Aufrufkanal lädt sie über `AppBootstrap`/`ui_config.php`.
 4. **Legacy-Helfer eindeutig zugeordnet:**
-   - Core-Helfer: `validators.php` (rein), `dyndns_guard.php`, `glue_check.php`, `soa_serial.php`;
+   - Core-Helfer: `validators.php` (rein), `dyndns_guard.php`, `glue_check.php` (seit AS5 entfällt `soa_serial.php`; die Serial wählt `inc/app/publish/SerialPolicy.php`);
    - Infrastruktur (🔧): `inc/deploy/*`;
    - Web (🌐): `helpers.php`, `session.php`, `auth.php`, `ttl_defaults.php`, `dkim_helpers.php`, `asset_registry.php`, `inc/web/*`;
    - Bootstrap: `inc/db.php` (S37-Teil offen), CLI: `helpers_cli.php`;
@@ -368,7 +372,7 @@ Authentifizierung per Bearer-Token. Der Agent ist nicht Teil der Core-Trennung; 
 - **Historie (H2a–H2c):** `ZoneStateSnapshot` (kanonischer Snapshot, Vertrag `zs1`), `ZoneSnapshotDiff`, `ZoneSnapshotReader`, `HistoryBaselineService` (Abschnitt 5a), `ZoneHistoryRecorder`, `HistoryContext`, `HistoryWriter` (5b), `AuditPolicy`, `AuditRecorder` (5c) – siehe `ARCHITECTURE_HISTORY.md`.
 - **Validierung** (rein): `validators.php` – `validateDnsRecord`, `validateZoneInput`, `isValidFqdn`, `isValidSoaName`, `validateDyndnsHostname`, `normalizeDyndnsHostname`; `isDuplicateRecord` liest die DB.
 - **DynDNS:** `dyndns_guard.php` (siehe 3.2).
-- **Records:** `glue_check.php` (`isGlueRecord`, `isNsRecordReferencedByGlue` rein; `isProtectedNsRecord` liest), `ttl_defaults.php`, `soa_serial.php`, `dkim_helpers.php`, `AutoPtr`.
+- **Records:** `glue_check.php` (`isGlueRecord`, `isNsRecordReferencedByGlue` rein; `isProtectedNsRecord` liest), `ttl_defaults.php`, `dkim_helpers.php`, `AutoPtr`; Serial: `SerialNumber`/`SerialPolicy` (AS5).
 - **Schnittstellen:** `ZoneBuildBackend`, `PublishBackend`, `ServerControlBackend`, `MonitoringBackend`, `MonitoringNotifier`, `UpdateFeed` mit ihren Adaptern.
 - **Logging** (transportunabhängig): `appLog`, `logAccessDeniedEvent`, `logLoginFailureEvent` (`inc/logging.php`).
 - **Diagnose-Auswertung (Paket 6):** `ZoneReadService::getZoneStatusOverview()`, `ZoneReadService::zoneDisplayStatus()`, `ServerReadService::getServerDiagnosticChecks()`, `ServerReadService::getServerStatusOverview()`, `DiagnosticReadService::getOverview()` (`summary`, `problems`).

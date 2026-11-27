@@ -575,3 +575,49 @@ SELECT (SELECT COUNT(*) FROM zone_publish_targets WHERE COALESCE(zone_protocol, 
   Danach unter dem Publish-Lock je Tabelle ein `ALTER TABLE … DROP CONSTRAINT …, DROP COLUMN …` für alle CHECKs und
   Spalten aus 007a–c, in umgekehrter Reihenfolge c, b, a (Befehlsfolge wie in `tests/history/migration007_test.sh`,
   `RB_A`/`RB_B`/`RB_C`). Danach ist auch der Code vor AS4a wieder zulässig.
+
+## 008 – Serial-Referenzen (AS5)
+
+| Datei | Zweck |
+|---|---|
+| `008_zone_serial_references.sql` | Tabelle `zone_serial_references` (eine atomare `CREATE TABLE`) |
+| `../../scripts/migrate_008_zone_serial_references.sh` | Preflight, Sicherung, geschützte Sitzung unter dem Publish-Lock, Nachprüfung |
+
+**Inhalt** (`docs/ARCHITECTURE_HISTORY.md`, Abschnitt 5k): nur anhängende Serial-Referenzereignisse je normalisiertem
+Zonennamen und Server (`epoch`, `run`, `intent`, `agent_check`, `no_report`, `loss`, `conf_sync`, `cleanup`,
+`monitoring`, `admin`) mit Ordnungsschlüssel `run_key`, `order_certain` und NULL-sicheren CHECKs je Quelle (K1).
+Fremdschlüssel (RESTRICT) auf `zone_publish_targets (attempt_id, server_id)` und `history_change_sets (id)`. Bestehende
+Tabellen bleiben unverändert. Einziger Schreiber und Leser ist `SerialReferenceStore`.
+
+**Kompatibilität:**
+- Der AS5-Code verlangt 008 strikt (`SchemaCheck::HISTORY_TABLES`): vor 008 Login fail-closed (`zone_serial_references
+  fehlt`) und Publish ohne Agent-Aufruf (die Laufmarke ist nicht speicherbar).
+- Der AS4b-Code (`156f934`) prüft nur seine eigenen Tabellen und ist auf Schema 008 technisch lauffähig. Sein
+  Publish-Betrieb nach einem Rückfall ist dennoch nicht freigegeben (Publish-Sperre, `docs/AGENT_FENCING.md` Abschnitt 10).
+- Die Skripte 002–007 bewerten nur ihre eigenen Tabellen; ihr `--check` gilt vor und nach 008.
+
+### Verbindliche Reihenfolge und Rückfall
+
+| Phase | Schritt | Zulässiger Code | Rückfall |
+|---|---|---|---|
+| 1 | Sicherung und Migration 008 (ruhiges Zeitfenster) | AS4b | – |
+| 2 | Code AS5 | AS5 | Code → AS4b nur mit Publish-Sperre (technisch lauffähig, Betrieb nicht freigegeben) |
+
+### Ablauf
+
+```bash
+bash scripts/migrate_008_zone_serial_references.sh --db dnsmanager --check
+#    Exit 1 = Migration erforderlich, 0 = vollständig, 2 = 002–007 fehlen/abweichend oder Struktur abweichend
+bash scripts/migrate_008_zone_serial_references.sh --db dnsmanager --apply --backup-dir /root/dnsmanager-backup/as5-<Zeit>
+bash scripts/migrate_008_zone_serial_references.sh --db dnsmanager --check
+```
+
+- **Preflight ohne Lock:** 002–007 exakt wie erwartet (einschließlich `system_status.fence_domain`); die Tabelle fehlt
+  oder entspricht exakt der Erwartung; jede andere Struktur ⇒ Exit 2 ohne DDL.
+- **Geschützte Sitzung (eine Verbindung):** strikter `sql_mode`, `lock_wait_timeout = 10`, `GET_LOCK('dnsmanager_publish_all',
+  0)` mit Besitznachweis, Tabelle unter dem Lock weiterhin nicht vorhanden, Kennwerte (Versuche, Ziele, Beobachtungen,
+  Prüfwert, Änderungsmengen) vor und nach der DDL, Lock-Besitz vor und nach der DDL.
+- **Nachprüfung:** vollständige Struktur über `SchemaCheck`, Tabelle leer, Kennwerte gleich.
+- **Notfall-Rückbau** (nur solange keine AS5-Zeilen benötigt werden, d. h. vor dem ersten AS5-Schreibvorgang oder mit
+  ausdrücklicher Freigabe): `DROP TABLE zone_serial_references` unter dem Publish-Lock. Danach ist nur der AS4b-Code
+  zulässig. Mit Daten ist ein Rückbau eine freigabepflichtige Sondermaßnahme (E27): Die Referenzen gingen verloren.
