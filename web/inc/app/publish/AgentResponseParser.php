@@ -30,6 +30,11 @@
  * - Cleanup (AS2b): Ergebnis je Zone (Name aus dem Konfigurationsnachweis des Agenten, served, served_reason,
  *   served_serial nur bei still_served aus einer konkreten DNS-Beobachtung) und Zähler.
  * Ungültige Einzelangaben werden verworfen (NULL) und unter "invalid" benannt.
+ *
+ * AS5 (D20/D21, docs/ARCHITECTURE_HISTORY.md Abschnitt 5k): serialCheck() wertet den Vorher-Bericht serial_check einer
+ * zone_sync-Antwort (agent/inc/dns_state.php, E103) streng aus – nur vollständig gültige Berichte (alle Pflichtfelder
+ * vorhanden, Zustände aus den Wertemengen, Serials nur bei valid bzw. served, new_serial = Serial des Versuchs) sind
+ * Referenzwerte; sie sind nie ein positiver Nachweis. Ein vorhandener, aber ungültiger Bericht ist ein Referenzverlust.
  */
 
 final class AgentResponseParser
@@ -206,6 +211,88 @@ final class AgentResponseParser
     /**
      * Verbindliche DNS-Namensnormalisierung (wie dnsNormName() des Agenten, agent/inc/dns_state.php).
      */
+    /** Pflichtfelder des serial_check-Berichts (agent/inc/dns_state.php dnsPreTransferCheck) */
+    public const SERIAL_CHECK_FIELDS = ['decision', 'code', 'new_serial', 'file_state', 'file_serial', 'file_sha256', 'config_state',
+        'served_state', 'served_serial'];
+
+    /**
+     * AS5: serial_check einer zone_sync-Antwort.
+     *
+     * @param array<string, mixed>|null $r              Ergebnis von postJson() (null = kein Request)
+     * @param int                       $expectedSerial Serial des registrierten Versuchs (Identität des Berichts)
+     * @return array{state: string, report: ?array{decision: string, code: ?string, fileState: string, fileSerial: ?int,
+     *               fileHash: ?string, configState: string, servedState: string, servedSerial: ?int}, why: ?string}
+     *         state: absent (kein Bericht, keine JSON-Antwort) | valid | invalid
+     */
+    public static function serialCheck(?array $r, int $expectedSerial): array
+    {
+        $none = ['state' => 'absent', 'report' => null, 'why' => null];
+        if ($r === null) {
+            return $none;
+        }
+        $body = $r['body'] ?? false;
+        $json = is_string($body) ? json_decode($body, true) : null;
+        if (!is_array($json) || !array_key_exists('serial_check', $json)) {
+            return $none;
+        }
+        $sc = $json['serial_check'];
+        $bad = static fn (string $why): array => ['state' => 'invalid', 'report' => null, 'why' => $why];
+        if (!is_array($sc)) {
+            return $bad('kein Objekt');
+        }
+        foreach (self::SERIAL_CHECK_FIELDS as $k) {
+            if (!array_key_exists($k, $sc)) {
+                return $bad("Feld $k fehlt");
+            }
+        }
+        $decision = $sc['decision'];
+        if (!is_string($decision) || !in_array($decision, self::DECISIONS, true)) {
+            return $bad('decision');
+        }
+        $code = $sc['code'];
+        if ($code !== null && (!is_string($code) || preg_match('/^[a-z_]{1,32}$/D', $code) !== 1)) {
+            return $bad('code');
+        }
+        if (($decision === 'accept') !== ($code === null)) {
+            return $bad('decision/code');
+        }
+        if (self::serial($sc['new_serial']) !== $expectedSerial) {
+            return $bad('new_serial');
+        }
+        $fileState = $sc['file_state'];
+        if (!is_string($fileState) || !in_array($fileState, ['missing', 'valid', 'invalid', 'unreadable'], true)) {
+            return $bad('file_state');
+        }
+        $fileSerial = $sc['file_serial'] === null ? null : self::serial($sc['file_serial']);
+        if (($fileState === 'valid') !== ($fileSerial !== null) || ($sc['file_serial'] !== null && $fileSerial === null)) {
+            return $bad('file_serial');
+        }
+        $fileHash = $sc['file_sha256'] === null ? null : self::hash($sc['file_sha256']);
+        if ($sc['file_sha256'] !== null && $fileHash === null) {
+            return $bad('file_sha256');
+        }
+        $configState = $sc['config_state'];
+        if (!is_string($configState) || !in_array($configState, ['yes', 'no', 'undeterminable'], true)) {
+            return $bad('config_state');
+        }
+        $servedState = $sc['served_state'];
+        if (!is_string($servedState) || !in_array($servedState, ['served', 'not_auth', 'unknown'], true)) {
+            return $bad('served_state');
+        }
+        $servedSerial = $sc['served_serial'] === null ? null : self::serial($sc['served_serial']);
+        if (($servedState === 'served') !== ($servedSerial !== null) || ($sc['served_serial'] !== null && $servedSerial === null)) {
+            return $bad('served_serial');
+        }
+        if ($servedState === 'not_auth' && $configState !== 'no') {
+            // Der Agent bildet not_auth nur bei K = nein; ein Widerspruch ist kein Messergebnis
+            return $bad('not_auth ohne K = nein');
+        }
+
+        return ['state' => 'valid', 'why' => null, 'report' => ['decision' => $decision, 'code' => $code, 'fileState' => $fileState,
+            'fileSerial' => $fileSerial, 'fileHash' => $fileHash, 'configState' => $configState, 'servedState' => $servedState,
+            'servedSerial' => $servedSerial]];
+    }
+
     public static function zoneName(mixed $name): ?string
     {
         if (!is_string($name)) {

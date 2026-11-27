@@ -68,6 +68,11 @@
  * davon, endet der Lauf mit 'exception' ohne Journal-Eintrag und ohne Seiteneffekt. Danach bildet die Lauf-ID das
  * Fencing-Token; vor jedem Agent-Aufruf prüft das Backend über PublishJournal::beforeAgentCall() Publish-Lock und
  * laufeigene Sperre (fail-closed, RunLockLost). changed/bind_dirty und Web-Verträge bleiben unverändert (J8).
+ *
+ * AS5 (D20–D24; docs/ARCHITECTURE_HISTORY.md Abschnitt 5k): Nach J1 und vor jedem Agent-Aufruf schreibt openJournal() die
+ * Laufmarke (und ggf. die AS5-Epoche) in zone_serial_references; scheitert das, endet der Lauf wie bei einem Fehler der
+ * Backend-Bindung (exception, Lauf abgeschlossen, laufeigene Sperre frei, kein Seiteneffekt). Die Serial wählt der Core im
+ * Generator (SerialReferenceReader/SerialPolicy); nicht speicherbare Serial-Referenzen beenden den Lauf (SerialReferenceLost).
  */
 
 require_once __DIR__ . '/../Actor.php';
@@ -81,6 +86,7 @@ require_once __DIR__ . '/PublishJournal.php';
 require_once __DIR__ . '/FenceContext.php';
 require_once __DIR__ . '/FenceStatusProvider.php';
 require_once __DIR__ . '/ServerVerificationStore.php';
+require_once __DIR__ . '/SerialReferenceStore.php';
 
 final class PublishService
 {
@@ -842,7 +848,11 @@ final class PublishService
         // Lauf wird deshalb hier abgeschlossen (exception) und seine laufeigene Sperre auf dieser – ggf. weiterverwendeten –
         // Verbindung freigegeben; danach Abbruch wie J1 ohne Seiteneffekt.
         try {
-            $journal = new PublishJournal($ledger, $run, $this->logger, $domain, new ServerVerificationStore($this->pdo, $this->logger), $restore);
+            // AS5 (D22): Laufmarke vor dem ersten Agent-Aufruf (Write-ahead; Grundlage der Lückenerkennung, Ergänzung 3.3)
+            $refs = new SerialReferenceStore($this->pdo);
+            $refs->recordRun($run->id);
+            $journal = new PublishJournal($ledger, $run, $this->logger, $domain, new ServerVerificationStore($this->pdo, $this->logger, $refs),
+                $restore, $refs);
             $this->backend->bindJournal($journal);
         } catch (Throwable $e) {
             try {

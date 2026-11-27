@@ -64,7 +64,7 @@ function zoneEval(PDO $pdo, int $zoneId, string $outDir = ''): array
     $name = (string)$GLOBALS['root']->query('SELECT name FROM `' . DB . "`.zones WHERE id = $zoneId")->fetchColumn();
     $dir = T . '/ns-apex-zf';
     if (!is_dir($dir)) { mkdir($dir, 0700); }
-    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo);
+    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     if (($r['status'] ?? '') !== 'ok') { return ['ok' => false, 'error' => trim((string)($r['output'] ?? ''))]; }
     $dump = (string)shell_exec('named-checkzone -q -D -o - ' . escapeshellarg($name) . ' ' . escapeshellarg($r['path']) . ' 2>/dev/null');
     if ($outDir !== '') { copy($r['path'], "$outDir/db.$name"); chmod("$outDir/db.$name", 0600); }
@@ -185,7 +185,7 @@ $apex = function () use ($pdo, $za): array {
         ->fetchAll(PDO::FETCH_NUM);
     $dir = T . '/ns-apex-zf';
     if (!is_dir($dir)) { mkdir($dir, 0700); }
-    $r = generate_zone_file($za, $dir, 'publish', $pdo);
+    $r = generate_zone_file($za, $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     if (($r['status'] ?? '') !== 'ok') { return ['ok' => false, 'db' => $db, 'error' => (string)($r['output'] ?? '')]; }
     $raw = (string)file_get_contents($r['path']);
     $check = (string)shell_exec('named-checkzone apex.test ' . escapeshellarg($r['path']) . ' 2>&1');

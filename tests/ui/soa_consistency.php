@@ -82,7 +82,7 @@ function fileMname(PDO $pdo, int $zoneId): ?string
     $r = generate_zone_file($zoneId, $dir, 'validate', $pdo);
     if (($r['status'] ?? '') === 'error') { return null; }
     // validate löscht die Datei: Inhalt neu erzeugen (gleiche Funktion, eigenes Verzeichnis) und auswerten
-    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo);
+    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     $dump = (string)shell_exec('named-checkzone -q -D -o - ' . escapeshellarg($z['name']) . ' ' . escapeshellarg($r['path']) . ' 2>/dev/null');
     unlink($r['path']);
     foreach (explode("\n", $dump) as $line) {

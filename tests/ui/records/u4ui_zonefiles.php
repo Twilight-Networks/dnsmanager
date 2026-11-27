@@ -13,7 +13,7 @@ $dir = sys_get_temp_dir() . '/dnsmgr-uig-e3-' . getmypid();
 mkdir($dir, 0700);
 $out = [];
 foreach ($pdo->query('SELECT id, name FROM zones ORDER BY id')->fetchAll(PDO::FETCH_ASSOC) as $z) {
-    $r = generate_zone_file((int)$z['id'], $dir, 'publish', $pdo);
+    $r = generate_zone_file((int)$z['id'], $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     $content = isset($r['path']) && is_file($r['path']) ? (string)file_get_contents($r['path']) : '';
     if (isset($r['path']) && is_file($r['path'])) { unlink($r['path']); }
     $out[$z['name']] = ['status' => $r['status'] ?? '?', 'content' => $content];

@@ -21,6 +21,8 @@
  *   secret   nur über $secrets und nur als Kennzeichen (set, changed, rotated, cleared) – nie ein Wert
  *   count    Fakt: Ganzzahl ≥ 0 (z. B. Kaskadenzähler der Zonenlöschung, E53)
  *   result   Fakt: ok | failed (BIND-Reload, E51); kein Antworttext des Agenten
+ *   ref      Fakt: Ganzzahl ≥ 1 (AS5, D17: Server-ID einer administrativen Serial-Referenz)
+ *   serial   Fakt: SOA-Serial 0 … 4294967295 (AS5, D17: administrativ erfasste Datei- bzw. ausgelieferte Serial)
  *
  * Ausgabe: JSON-Objekt mit Feldern in der Reihenfolge der Whitelist; Wertfelder als {"old":…,"new":…} (Anlage nur
  * "new", Löschung nur "old"), Geheimnisse als Kennzeichen-Zeichenkette, Fakten als Skalar. Deterministisch
@@ -46,6 +48,10 @@ final class AuditPolicy
             'allow_dyndns'             => 'bool',
             'dyndns_accounts_removed'  => 'count',
             'user_assignments_removed' => 'count',
+            // AS5 (D17): administrative Serial-Referenz (SerialReferenceAdminService); nur Fakten, keine Vorher-/Nachher-Werte
+            'serial_reference_server'  => 'ref',
+            'serial_reference_file'    => 'serial',
+            'serial_reference_served'  => 'serial',
         ],
         'server' => [
             'name'      => 'name',
@@ -73,7 +79,7 @@ final class AuditPolicy
     ];
 
     /** Fakten (keine Vorher-/Nachher-Werte) */
-    private const FACT_CLASSES = ['count', 'result'];
+    private const FACT_CLASSES = ['count', 'result', 'ref', 'serial'];
 
     /**
      * Muster, die in Freitext als Geheimnis gelten (Schwärzung). Passwort-Hashes (bcrypt, argon2, crypt), private
@@ -353,6 +359,18 @@ final class AuditPolicy
         if ($class === 'count') {
             if (!is_int($v) || $v < 0) {
                 throw new LogicException("Audit: '$field' ist keine Anzahl");
+            }
+            return $v;
+        }
+        if ($class === 'ref') {
+            if (!is_int($v) || $v < 1) {
+                throw new LogicException("Audit: '$field' ist keine gültige ID");
+            }
+            return $v;
+        }
+        if ($class === 'serial') {
+            if (!is_int($v) || $v < 0 || $v > 4294967295) {
+                throw new LogicException("Audit: '$field' ist keine gültige Serial");
             }
             return $v;
         }

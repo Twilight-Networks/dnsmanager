@@ -41,6 +41,7 @@ require_once __DIR__ . '/MonitoringNotifier.php';
 require_once __DIR__ . '/ZoneVerifyBackend.php';
 require_once __DIR__ . '/../publish/AgentResponseParser.php';
 require_once __DIR__ . '/../publish/ServerVerificationStore.php';
+require_once __DIR__ . '/../publish/SerialReferenceStore.php';
 require_once __DIR__ . '/../publish/PublishLedger.php';
 
 final class MonitoringService
@@ -279,14 +280,35 @@ final class MonitoringService
             return null;
         }
         try {
+            $refs = new SerialReferenceStore($this->pdo);
             if ((int)$this->pdo->query('SELECT COALESCE(MAX(id), 0) FROM publish_runs')->fetchColumn() !== $watermark) {
+                // AS5 (D23): Messwerte ohne gesicherte Ordnung festhalten (lösen nichts ab); Fehler nur im Bericht
+                foreach ($items as $it) {
+                    try {
+                        $refs->recordUncertain('monitoring', $watermark, null, (int)$it['zoneId'], (string)$it['zoneName'],
+                            (int)$it['serverId'], (string)$it['serverName'], self::refObs($it['obs']));
+                    } catch (Throwable $e) {
+                        // Beobachtung war nie gespeichert; kein Referenzverlust gegenüber dem Stand ohne Monitoring
+                    }
+                }
                 return null;
             }
+            $refs->ensureEpoch($watermark);   // AS5: Epoche beim ersten AS5-Schreibvorgang
 
-            return (new ServerVerificationStore($this->pdo))->recordMonitoring($watermark, $items);
+            return (new ServerVerificationStore($this->pdo, null, $refs))->recordMonitoring($watermark, $items);
         } finally {
             $this->pdo->query("SELECT RELEASE_LOCK('" . PublishLedger::MAIN_LOCK . "')")->fetchColumn();
         }
+    }
+
+    /** AS5: Beobachtung im Format des SerialReferenceStore (Felder wie im Verification Store) */
+    private static function refObs(array $obs): array
+    {
+        $state = (string)$obs['state'];
+
+        return ['state' => $state, 'reason' => $obs['reason'] ?? null, 'served' => $obs['served'] ?? null,
+            'fileSerial' => in_array($state, ['still_served', 'absent'], true) ? null : ($obs['fileSerial'] ?? null),
+            'fileHash' => in_array($state, ['still_served', 'absent'], true) ? null : ($obs['fileHash'] ?? null)];
     }
 
     /**

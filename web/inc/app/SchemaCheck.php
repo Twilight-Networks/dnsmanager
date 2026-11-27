@@ -38,6 +38,10 @@
  * (schema_history-cli.php evaluate) kennen zusätzlich den Zwischenstand vor 007 (HISTORY_TABLES_PRE007), den die
  * Migrationen 005/006 erzeugen und 007 überführt.
  *
+ * AS5 (D20, Migration 008): zusätzlich zone_serial_references (sql/migrations/008_zone_serial_references.sql) strikt;
+ * vor 008 ist Login und Publish fail-closed. Das Migrationsskript 008 bewertet nur diese Tabelle (Voraussetzung:
+ * 002–007 unverändert). Der AS4b-Code prüft nur seine Tabellen und bleibt auf Schema 008 lauffähig.
+ *
  * Es werden niemals Schemaänderungen vorgenommen (keine automatische Migration beim Seitenaufruf).
  * Das Ergebnis wird je Prozess zwischengespeichert (eine Prüfung je Anfrage).
  */
@@ -389,6 +393,54 @@ final class SchemaCheck
             'chk|chk_zsv_verified_bundle|Table|`verified_serial` is null and `verified_file_hash` is null and `verified_at` is null and `verified_run_id` is null or `verified_serial` is not null and `verified_file_hash` is not null and `verified_at` is not null',
             "chk|chk_zsv_verified_current|Table|`last_state` <> 'verified' or `verified_serial` is not null and `verified_file_hash` is not null and `verified_at` is not null and `last_served_serial` is not null and `last_file_hash` is not null and `verified_serial` = `last_served_serial` and `verified_file_hash` = `last_file_hash` and `verified_at` = `last_observed_at`",
             'chk|chk_zsv_verified_order|Table|`verified_at` is null or `verified_at` <= `last_observed_at`',
+        ],
+        // AS5 (D20, Migration 008): Serial-Referenzereignisse je Zone × Server (nur anhängend, SerialReferenceStore)
+        'zone_serial_references' => [
+            'table|BASE TABLE|InnoDB',
+            'col|id|bigint(20) unsigned|NO|~|auto_increment|~|~',
+            "col|source|enum('epoch','run','intent','agent_check','no_report','loss','conf_sync','cleanup','monitoring','admin')|NO|~||ascii|ascii_bin",
+            'col|zone_id|int(11)|YES|NULL||~|~',
+            'col|zone_name|varchar(255)|YES|NULL||ascii|ascii_bin',
+            'col|server_id|int(11)|YES|NULL||~|~',
+            'col|server_name|varchar(255)|YES|NULL||utf8mb4|utf8mb4_unicode_ci',
+            'col|run_key|bigint(20) unsigned|YES|NULL||~|~',
+            'col|attempt_id|bigint(20) unsigned|YES|NULL||~|~',
+            'col|order_certain|tinyint(1)|NO|1||~|~',
+            "col|obs_state|enum('verified','serial_differs','still_served','absent','unknown')|YES|NULL||ascii|ascii_bin",
+            'col|reason|varchar(64)|YES|NULL||ascii|ascii_bin',
+            "col|decision|enum('accept','would_reject','reject')|YES|NULL||ascii|ascii_bin",
+            'col|code|varchar(32)|YES|NULL||ascii|ascii_bin',
+            "col|file_state|enum('missing','valid','invalid','unreadable')|YES|NULL||ascii|ascii_bin",
+            'col|file_serial|int(10) unsigned|YES|NULL||~|~',
+            'col|file_hash|char(64)|YES|NULL||ascii|ascii_bin',
+            "col|config_state|enum('yes','no','undeterminable')|YES|NULL||ascii|ascii_bin",
+            "col|served_state|enum('served','not_auth','unknown')|YES|NULL||ascii|ascii_bin",
+            'col|served_serial|int(10) unsigned|YES|NULL||~|~',
+            'col|evidence|varchar(500)|YES|NULL||utf8mb4|utf8mb4_bin',
+            'col|change_set_id|bigint(20) unsigned|YES|NULL||~|~',
+            'col|recorded_at|datetime(6)|NO|current_timestamp(6)||~|~',
+            'idx|idx_zsr_change_set|1|1|change_set_id|~|BTREE',
+            'idx|idx_zsr_pair|1|1|zone_name|~|BTREE',
+            'idx|idx_zsr_pair|1|2|server_id|~|BTREE',
+            'idx|idx_zsr_pair|1|3|id|~|BTREE',
+            'idx|idx_zsr_source|1|1|source|~|BTREE',
+            'idx|idx_zsr_source|1|2|run_key|~|BTREE',
+            'idx|idx_zsr_zone|1|1|zone_id|~|BTREE',
+            'idx|idx_zsr_zone|1|2|server_id|~|BTREE',
+            'idx|idx_zsr_zone|1|3|id|~|BTREE',
+            'idx|PRIMARY|0|1|id|~|BTREE',
+            'idx|uq_zsr_report|0|1|attempt_id|~|BTREE',
+            'idx|uq_zsr_report|0|2|server_id|~|BTREE',
+            'idx|uq_zsr_report|0|3|source|~|BTREE',
+            'fk|fk_zsr_change_set|1|change_set_id|history_change_sets|id|RESTRICT|RESTRICT',
+            'fk|fk_zsr_target|1|attempt_id|zone_publish_targets|attempt_id|RESTRICT|RESTRICT',
+            'fk|fk_zsr_target|2|server_id|zone_publish_targets|server_id|RESTRICT|RESTRICT',
+            "chk|chk_zsr_formats|Table|(`reason` is null or `reason` regexp '^[a-z0-9_:]{1,64}\$') and (`code` is null or `code` regexp '^[a-z_]{1,32}\$') and (`file_hash` is null or `file_hash` regexp '^[0-9a-f]{64}\$') and (`evidence` is null or char_length(`evidence`) >= 1)",
+            "chk|chk_zsr_identity|Table|`source` in ('epoch','run') and `zone_id` is null and `zone_name` is null and `server_id` is null and `server_name` is null and `run_key` is not null and `attempt_id` is null and `order_certain` = 1 or `source` in ('intent','agent_check','no_report','conf_sync') and `zone_id` is not null and `zone_id` >= 1 and `zone_name` is not null and `server_id` is not null and `server_id` >= 1 and `run_key` is not null and `attempt_id` is not null or `source` = 'loss' and `zone_id` is not null and `zone_id` >= 1 and `zone_name` is not null and `server_id` is not null and `server_id` >= 1 and `run_key` is not null or `source` in ('cleanup','monitoring','admin') and `zone_id` is not null and `zone_id` >= 1 and `zone_name` is not null and `server_id` is not null and `server_id` >= 1 and `run_key` is not null and `attempt_id` is null",
+            "chk|chk_zsr_name|Table|`zone_name` is null or `zone_name` regexp '^[a-z0-9_][a-z0-9._-]{0,252}\$'",
+            "chk|chk_zsr_obs|Table|`obs_state` is null or `obs_state` = 'verified' and `served_serial` is not null and `file_serial` is not null and `file_hash` is not null and `served_serial` = `file_serial` or `obs_state` = 'serial_differs' and `served_serial` is not null and `file_serial` is not null and `served_serial` <> `file_serial` or `obs_state` = 'still_served' and `served_serial` is not null and `file_serial` is null and `file_hash` is null or `obs_state` = 'absent' and `served_serial` is null and `file_serial` is null and `file_hash` is null or `obs_state` = 'unknown'",
+            'chk|chk_zsr_order|Table|`order_certain` in (0,1)',
+            "chk|chk_zsr_values|Table|`source` in ('epoch','run','intent') and `obs_state` is null and `reason` is null and `decision` is null and `code` is null and `file_state` is null and `file_serial` is null and `file_hash` is null and `config_state` is null and `served_state` is null and `served_serial` is null and `evidence` is null and `change_set_id` is null or `source` in ('no_report','loss') and `reason` is not null and `obs_state` is null and `decision` is null and `code` is null and `file_state` is null and `file_serial` is null and `file_hash` is null and `config_state` is null and `served_state` is null and `served_serial` is null and `evidence` is null and `change_set_id` is null or `source` = 'agent_check' and `decision` is not null and `file_state` is not null and `config_state` is not null and `served_state` is not null and `obs_state` is null and `evidence` is null and `change_set_id` is null and (`file_state` = 'valid' and `file_serial` is not null or `file_state` <> 'valid' and `file_serial` is null) and (`served_state` = 'served' and `served_serial` is not null or `served_state` <> 'served' and `served_serial` is null) and (`decision` = 'accept' and `code` is null or `decision` <> 'accept' and `code` is not null) or `source` in ('conf_sync','cleanup','monitoring') and `obs_state` is not null and `decision` is null and `code` is null and `file_state` is null and `config_state` is null and `served_state` is null and `evidence` is null and `change_set_id` is null or `source` = 'admin' and `evidence` is not null and `change_set_id` is not null and `obs_state` is null and `reason` is null and `decision` is null and `code` is null and `file_state` is null and `file_hash` is null and `config_state` is null and `served_state` is null and `order_certain` = 1 and (`file_serial` is not null and `served_serial` is null or `file_serial` is null and `served_serial` is not null)",
         ],
     ];
 

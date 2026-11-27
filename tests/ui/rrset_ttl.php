@@ -51,7 +51,7 @@ function ttlEval(PDO $pdo, int $zoneId, string $outDir = '', string $tag = ''): 
     $name = (string)$GLOBALS['root']->query('SELECT name FROM `' . DB . "`.zones WHERE id = $zoneId")->fetchColumn();
     $dir = T . '/rrset-ttl-zf';
     if (!is_dir($dir)) { mkdir($dir, 0700); }
-    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo);
+    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     if (($r['status'] ?? '') !== 'ok') { return ['ok' => false, 'error' => trim((string)($r['output'] ?? ''))]; }
     $raw = (string)file_get_contents($r['path']);
     $check = (string)shell_exec('named-checkzone ' . escapeshellarg($name) . ' ' . escapeshellarg($r['path']) . ' 2>&1');
