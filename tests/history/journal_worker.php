@@ -35,7 +35,7 @@ if ($cmd === 'render') {
     require_once "$app/web/inc/deploy/bind_file_generator.php";
     $dir = sys_get_temp_dir() . '/dnsmgr-h2d-render.' . bin2hex(random_bytes(4));
     mkdir($dir, 0700);
-    $r = generate_zone_file((int)$args[0], $dir, 'publish', $pdo);
+    $r = generate_zone_file((int)$args[0], $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Test-Hook, kein Versuch
     $ok = ($r['status'] ?? '') === 'ok';
     if ($ok) {
         copy($r['path'], $args[1]);

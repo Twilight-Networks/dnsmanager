@@ -238,6 +238,8 @@ T::eq([
     'web/inc/app/publish/PublishLedger.php',
     'web/inc/app/publish/PublishRun.php',
     'web/inc/app/publish/PublishService.php',
+    'web/inc/app/publish/SerialReferenceAdminService.php',   // AS5: Publish-Lock und Wasserstand (lesend)
+    'web/inc/app/publish/SerialReferenceReader.php',         // AS5: Versuche und Zielzeilen (lesend, E78)
     'web/inc/app/publish/ServerVerificationStore.php',
     'web/inc/deploy/LegacyBindPublishBackend.php',
 ], $mentions, 'R11', 'Journal nur im Publish-Bereich und Backend; kein Fachservice, Adapter oder Skript kennt Journal oder Ledger (R-H9)');

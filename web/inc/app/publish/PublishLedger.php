@@ -37,6 +37,7 @@ require_once __DIR__ . '/../history/ZoneStateSnapshot.php';
 require_once __DIR__ . '/PublishRun.php';
 require_once __DIR__ . '/PublishHashContract.php';
 require_once __DIR__ . '/RunLockLost.php';
+require_once __DIR__ . '/SerialNumber.php';
 
 final class PublishLedger
 {
@@ -196,6 +197,11 @@ final class PublishLedger
         $this->assertRunLocks($run);
         if ($serial < 0 || $serial > PublishHashContract::SERIAL_MAX) {
             throw new RuntimeException('Serial außerhalb von 0 … 2^32-1');
+        }
+        // AS5 (D9): Verteidigung in der Tiefe – die neue Serial muss nach RFC 1982 neuer sein als die gesperrte DB-Serial
+        $dbSerial = SerialNumber::parse(is_int($zoneRow['soa_serial'] ?? null) ? $zoneRow['soa_serial'] : (string)($zoneRow['soa_serial'] ?? ''));
+        if ($dbSerial === null || SerialNumber::compare($serial, $dbSerial) !== SerialNumber::NEWER) {
+            throw new RuntimeException('Serial nicht nach RFC 1982 neuer als die DB-Serial (D9)');
         }
 
         // Zone (bereits vom Generator gesperrt) erneut sperren – No-op, belegt die Sperre unabhängig vom Aufrufer

@@ -20,6 +20,9 @@
  * Versuch in der Generator-Transaktion vor dem Serial-Commit (J2); distributeZone() und distributeZoneConf() verteilen
  * an die registrierte Zielmenge dieses Versuchs und melden jede Agentenantwort (J4); cleanupOrphans() registriert
  * vorab alle Server. Ohne Journal bleibt das Verhalten unverändert.
+ *
+ * AS5 (D8, G2): generateZone() verlangt ein gebundenes Journal (kein produktiver Publish ohne Versuchsregistrierung J2).
+ * Vor jedem zone_sync schreibt PublishJournal::beforeZoneSync() das Write-ahead (intent); das Ergebnis schließt es ab.
  */
 
 require_once __DIR__ . '/../app/publish/PublishBackend.php';
@@ -78,7 +81,11 @@ final class LegacyBindPublishBackend implements PublishBackend, FenceStatusProvi
     {
         $this->attempt = null;
         $journal = $this->journal;
-        $hook = $journal === null ? null : static function (array $g) use ($journal, $zoneId): array {
+        if ($journal === null) {
+            // AS5 (D8, G2): produktive Publish-Pfade nur mit Journal (J2)
+            throw new LogicException('LegacyBindPublishBackend::generateZone() ohne gebundenes Journal');
+        }
+        $hook = static function (array $g) use ($journal, $zoneId): array {
             return $journal->registerAttempt($zoneId, $g['zone'], $g['records'], $g['serial'], $g['file'],
                 ($g['render'])(PublishHashContract::SERIAL_PLACEHOLDER));
         };
@@ -114,8 +121,8 @@ final class LegacyBindPublishBackend implements PublishBackend, FenceStatusProvi
             $opts = [
                 'targets'  => $attempt['targets'],
                 'fileHash' => $attempt['fileHash'],
-                'onResult' => static fn (int $sid, array $c, ?array $raw = null) => $journal->zoneResult($attemptId, $sid, $c, $raw),
-                'beforeCall' => static fn (int $sid): array => $journal->beforeAgentCall(),
+                'onResult' => static fn (int $sid, array $c, ?array $raw = null) => $journal->zoneResult($attemptId, $sid, $c, $raw, $attempt),
+                'beforeCall' => static fn (int $sid): array => $journal->beforeZoneSync($attempt, $sid),
             ];
         }
         try {

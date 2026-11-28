@@ -42,7 +42,7 @@ function zoneLines(PDO $pdo, int $zoneId): array
 {
     $dir = T . '/u4ui-zf';
     if (!is_dir($dir)) { mkdir($dir, 0700); }
-    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo);
+    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     if (($r['status'] ?? '') !== 'ok') { return ['__error' => (string)($r['output'] ?? 'Fehler')]; }
     $lines = explode("\n", (string)file_get_contents($r['path']));
     unlink($r['path']);

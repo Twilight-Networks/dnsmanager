@@ -41,6 +41,7 @@ require_once __DIR__ . '/MonitoringNotifier.php';
 require_once __DIR__ . '/ZoneVerifyBackend.php';
 require_once __DIR__ . '/../publish/AgentResponseParser.php';
 require_once __DIR__ . '/../publish/ServerVerificationStore.php';
+require_once __DIR__ . '/../publish/SerialReferenceStore.php';
 require_once __DIR__ . '/../publish/PublishLedger.php';
 
 final class MonitoringService
@@ -136,6 +137,14 @@ final class MonitoringService
 
             // AS4b: L3-Beobachtung (zone_verify) nach dem Ordnungsvertrag; Fehler ändern das Monitoring-Ergebnis nicht
             $report['l3'] = $this->observeL3($rows);
+            // AS5 (Review Punkt 3): nicht gespeicherte Serial-Referenzen nie still – eigene Meldung (Logzeile im Adapter)
+            $l3s = $report['l3']['stored'] ?? null;
+            if (($report['l3']['status'] ?? '') === 'error' || (is_array($l3s) && (($l3s['lossMarked'] ?? 0) > 0 || ($l3s['lost'] ?? 0) > 0))) {
+                $m[] = new ServiceMessage('error', 'monitoring.serial_reference_lost', [
+                    'lossMarked' => (int)($l3s['lossMarked'] ?? 0), 'lost' => (int)($l3s['lost'] ?? 0),
+                    'detail' => (string)($report['l3']['detail'] ?? ''),
+                ]);
+            }
 
             // Verwaiste Zonendiagnosen bereinigen (eine Anweisung statt N+1)
             $report['removedOrphans'] = $this->cleanupOrphanedZoneDiagnostics();
@@ -247,7 +256,7 @@ final class MonitoringService
             }
             $stored = $this->storeUnderPublishLock($watermark, $items);
 
-            return ['status' => $stored === null ? 'discarded' : 'ok', 'watermark' => $watermark, 'queried' => count($candidates),
+            return ['status' => $stored['discarded'] ? 'discarded' : 'ok', 'watermark' => $watermark, 'queried' => count($candidates),
                 'noObservation' => $skipped, 'invalid' => count($invalid), 'invalidPairs' => $invalid, 'stored' => $stored];
         } catch (Throwable $e) {
             $this->rollbackIfActive();
@@ -269,24 +278,72 @@ final class MonitoringService
     }
 
     /**
-     * Speicherung unter dem Publish-Lock nach erneuter Prüfung des Wasserstands; null = verworfen.
+     * Speicherung unter dem Publish-Lock nach erneuter Prüfung des Wasserstands.
      *
-     * @return array<string, int>|null
+     * AS5 (Review Punkt 3): Die Epoche entsteht vor beiden Zweigen (erster AS5-Schreibvorgang, Wasserstand W). Bei
+     * verändertem Wasserstand bzw. belegtem Publish-Lock werden die Messwerte ungeordnet festgehalten (D23); scheitert das,
+     * wird je Paar eine Verlustmarke geschrieben; scheitert auch diese, wird der Verlust gezählt und vom Monitoring als
+     * Fehler gemeldet (Logzeile, nie still). Im Normalzweig gelten dieselben Regeln über den ServerVerificationStore.
+     *
+     * @return array{discarded: bool, stored?: int, stale?: int, failed?: int, uncertain: int, lossMarked: int, lost: int}
      */
-    private function storeUnderPublishLock(int $watermark, array $items): ?array
+    private function storeUnderPublishLock(int $watermark, array $items): array
     {
-        if ((int)$this->pdo->query("SELECT GET_LOCK('" . PublishLedger::MAIN_LOCK . "', 0)")->fetchColumn() !== 1) {
-            return null;
-        }
+        $refs = new SerialReferenceStore($this->pdo);
+        $locked = (int)$this->pdo->query("SELECT GET_LOCK('" . PublishLedger::MAIN_LOCK . "', 0)")->fetchColumn() === 1;
         try {
-            if ((int)$this->pdo->query('SELECT COALESCE(MAX(id), 0) FROM publish_runs')->fetchColumn() !== $watermark) {
-                return null;
+            if ($locked) {
+                $refs->ensureEpoch($watermark);   // AS5: Epoche vor beiden Zweigen
             }
+            if (!$locked || (int)$this->pdo->query('SELECT COALESCE(MAX(id), 0) FROM publish_runs')->fetchColumn() !== $watermark) {
+                return ['discarded' => true] + $this->keepUncertain($refs, $watermark, $items);
+            }
+            $r = (new ServerVerificationStore($this->pdo, null, $refs))->recordMonitoring($watermark, $items);
 
-            return (new ServerVerificationStore($this->pdo))->recordMonitoring($watermark, $items);
+            return ['discarded' => false, 'stored' => $r['stored'], 'stale' => $r['stale'], 'failed' => $r['failed'],
+                'uncertain' => 0, 'lossMarked' => $r['failed'], 'lost' => $r['lost']];
         } finally {
-            $this->pdo->query("SELECT RELEASE_LOCK('" . PublishLedger::MAIN_LOCK . "')")->fetchColumn();
+            if ($locked) {
+                $this->pdo->query("SELECT RELEASE_LOCK('" . PublishLedger::MAIN_LOCK . "')")->fetchColumn();
+            }
         }
+    }
+
+    /**
+     * AS5 (D23, Review Punkt 3): Messwerte ohne gesicherte Ordnung festhalten; je Paar Verlustmarke, falls das scheitert.
+     *
+     * @return array{uncertain: int, lossMarked: int, lost: int}
+     */
+    private function keepUncertain(SerialReferenceStore $refs, int $watermark, array $items): array
+    {
+        $n = ['uncertain' => 0, 'lossMarked' => 0, 'lost' => 0];
+        foreach ($items as $it) {
+            try {
+                $refs->recordUncertain('monitoring', $watermark, null, (int)$it['zoneId'], (string)$it['zoneName'],
+                    (int)$it['serverId'], (string)$it['serverName'], self::refObs($it['obs']));
+                $n['uncertain']++;
+            } catch (Throwable $e) {
+                try {
+                    $refs->recordLoss($watermark, null, (int)$it['zoneId'], (string)$it['zoneName'], (int)$it['serverId'],
+                        (string)$it['serverName'], 'monitoring_not_stored', false);
+                    $n['lossMarked']++;
+                } catch (Throwable $e2) {
+                    $n['lost']++;
+                }
+            }
+        }
+
+        return $n;
+    }
+
+    /** AS5: Beobachtung im Format des SerialReferenceStore (Felder wie im Verification Store) */
+    private static function refObs(array $obs): array
+    {
+        $state = (string)$obs['state'];
+
+        return ['state' => $state, 'reason' => $obs['reason'] ?? null, 'served' => $obs['served'] ?? null,
+            'fileSerial' => in_array($state, ['still_served', 'absent'], true) ? null : ($obs['fileSerial'] ?? null),
+            'fileHash' => in_array($state, ['still_served', 'absent'], true) ? null : ($obs['fileHash'] ?? null)];
     }
 
     /**

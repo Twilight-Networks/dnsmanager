@@ -30,7 +30,9 @@
  * - generate_zone_conf_file(): Erstellt gezielt `.conf`-Dateien für eine Zone und einen Zielserver.
  */
 
-require_once __DIR__ . '/../soa_serial.php';
+// AS5 (E78/E110, D2, D8): SOA-Serial nach RFC 1982 aus der Referenzmenge des Core (ersetzt generate_next_serial())
+require_once __DIR__ . '/../app/publish/SerialReferenceReader.php';
+require_once __DIR__ . '/../app/publish/SerialPolicy.php';
 
 /**
  * Zeile eines Records in der Zonendatei (U4-UI, E3): "<Name>\t<TTL>\tIN\t<TYP>\t<Inhalt>".
@@ -200,7 +202,14 @@ ZONE;
  * Verhalten:
  * - Im Modus 'validate' wird die Datei nur temporär erzeugt und nach der Prüfung gelöscht.
  * - Im Modus 'publish' bleibt die Datei bestehen und wird zur weiteren Verarbeitung (z. B. Verteilung per API) verwendet.
- * - Die SOA-Serialnummer wird im Modus 'publish' erhöht und in der Datenbank gespeichert.
+ * - Die SOA-Serialnummer wird im Modus 'publish' erhöht und in der Datenbank gespeichert. AS5 (E78, D2, D8): Die neue
+ *   Serial bestimmt ausschließlich der Core (SerialReferenceReader::selectSerial() mit SerialPolicy) in dieser
+ *   Transaktion unter der Zonensperre – RFC 1982 gegenüber jeder verbindlichen Referenz (DB-Serial, zuletzt registrierte
+ *   Serial unter demselben Zonennamen, Referenzen je Zielserver). Ist keine sichere Auswahl möglich
+ *   (serial_unresolvable, serial_reference_lost, serial_reference_gap), endet der Aufruf mit status 'error' vor der
+ *   Zonendatei: Rollback, keine Serial verbraucht, kein Versuch, kein Agent-Aufruf.
+ * - AS5 (D8, G1): Der Modus 'publish' verlangt die Journal-Anbindung ($journal); ohne sie wird der Aufruf vor jeder
+ *   Transaktion abgewiesen (InvalidArgumentException). Produktive Publish-Pfade umgehen J2 damit nie.
  * - Den früheren Modus 'dyndns' (Serial in der Transaktion des Aufrufers) gibt es seit Paket 4b nicht mehr;
  *   DynDNS veröffentlicht über PublishService::publishZone() im Modus 'publish'.
  *
@@ -231,6 +240,10 @@ function generate_zone_file(int $zone_id, string $output_dir, string $mode, PDO 
     }
     if ($journal !== null && $mode !== 'publish') {
         throw new InvalidArgumentException('generate_zone_file: Journal nur im Modus publish.');
+    }
+    if ($journal === null && $mode === 'publish') {
+        // AS5 (D8, G1): kein Publish ohne Versuchsregistrierung (J2)
+        throw new InvalidArgumentException('generate_zone_file: Modus publish nur mit Journal-Anbindung (J2).');
     }
 
 
@@ -351,9 +364,22 @@ function generate_zone_file(int $zone_id, string $output_dir, string $mode, PDO 
     // Neue Serialnummer nur bei publish (eigene Transaktion unter Zonensperre) erzeugen
     $serial = $zone['soa_serial'];
     if ($mode === 'publish') {
-        // Transaktion und Zonen-Lock bestehen bereits; $serial stammt aus dem unter Lock gelesenen Stand.
+        // Transaktion und Zonen-Lock bestehen bereits; die Referenzen werden unter dieser Sperre gelesen (AS5, D2/D8).
         try {
-            $serial = generate_next_serial($serial);
+            $choice = SerialReferenceReader::selectSerial($pdo, $zone, date('Ymd'));
+            if (!$choice['ok']) {
+                if ($tx_started && $pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $why = $choice['reason'] . ($choice['detail'] !== '' ? ': ' . $choice['detail'] : '');
+                return [
+                    'status' => 'error',
+                    'output' => "Serial: keine sichere Auswahl für $zone_name ($why) – Zonendatei wird nicht erzeugt.",
+                    'errors' => ["Serial: " . $choice['reason']],
+                    'serial' => ['reason' => $choice['reason'], 'blocks' => $choice['blocks']],
+                ];
+            }
+            $serial = $choice['serial'];
         } catch (Throwable $e) {
             if ($tx_started && $pdo->inTransaction()) {
                 $pdo->rollBack();

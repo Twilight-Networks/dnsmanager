@@ -1,6 +1,6 @@
 #!/bin/bash
 # Datei: tests/history/run.sh
-# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c, H2d), AS3, AS4a und AS4b reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
+# Zweck: Alle History-Tests (AP1/H2a, H2b, H2c, H2d), AS3, AS4a, AS4b und AS5 reproduzierbar auf einem festen Commit ausführen (Testsystem ns1, als root).
 #
 #   bash run.sh <App-SHA> <Basis-SHA> [<Generator-Basis-SHA>]
 #     <App-SHA>   zu prüfender Commit (40 Zeichen)
@@ -26,9 +26,12 @@
 #      Schema und Journalablauf vor/nach 007 (as4a_test.php, RR und RC)
 #  10. AS4b: Fencing im Core, Antwortauswertung, zone_server_verification, Monitoring (as4b_test.php, RR und RC) und
 #      Mutationsproben (as4b_mutation_test.sh)
+#  11. AS5: reine Tests (RFC-1982- und Policy-Vektoren, Brute-Force im reduzierten Modell, Referenzmodell, Parser),
+#      Migration 008 (migration008_test.sh), Serial-Strategie gegen den Ersatz-Agenten (as5_test.php, RR und RC) und
+#      Mutationsproben (as5_mutation_test.sh); Rückfallstand für Code × Schema und Lücken ist der AS4b-Code (AS5_BASE)
 # Vergleichsstände der Code-×-Schema-Gruppen sind feste Commits auf main (unabhängig von <Generator-Basis-SHA>):
 #   as3_test.php  ← Stand vor AS3  (AS3_BASE),  as4a_test.php ← Stand vor AS4a (AS4A_BASE = AS3-Code),
-#   as4b_test.php ← Stand vor AS4b (AS4B_BASE = AS4a-Code, operativer Rückfallstand)
+#   as4b_test.php ← Stand vor AS4b (AS4B_BASE = AS4a-Code), as5_test.php ← Stand vor AS5 (AS5_BASE = AS4b-Code, Rückfallstand)
 # Nur isolierte Datenbanken dnsmgr_t21_r<RUN>_* und der Benutzer h2a<RUN> (Lauf-Kennung H2A_RUN, 8 Hex-Zeichen; optional
 # vorgebbar, sonst zufällig). Eigentum nach tests/history/owned.sh: Jede Suite legt ihre Ressourcen ohne IF NOT EXISTS an
 # und trägt sie danach in das gemeinsame Register dieses Laufs ein; aufgeräumt werden ausschließlich registrierte
@@ -45,7 +48,8 @@ REPO="${REPO:-https://github.com/Twilight-Networks/dnsmanager.git}"
 AS3_BASE=2b5a854c4d083f903d498b789962e4dc6ac5b0e4
 AS4A_BASE=abf8361546516de3e7ff875acafeef36657a2813
 AS4B_BASE=17241fb90360cef2add3453603f4d9c1b8149ee2
-echo "History-Tests H2a/H2b/H2c/H2d/AS3/AS4a/AS4b – $(hostname) $(date '+%F %T')"
+AS5_BASE=156f9344ea3d57a9ee89ae414fc9a69031b8d983
+echo "History-Tests H2a/H2b/H2c/H2d/AS3/AS4a/AS4b/AS5 – $(hostname) $(date '+%F %T')"
 export H2A_RUN="${H2A_RUN:-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 [[ "$H2A_RUN" =~ ^[0-9a-f]{8}$ ]] || { echo "ABBRUCH: ungültige Lauf-Kennung H2A_RUN"; exit 2; }
 echo "Lauf-Kennung: $H2A_RUN (Datenbanken dnsmgr_t21_r${H2A_RUN}_*, Benutzer h2a${H2A_RUN})"
@@ -63,11 +67,11 @@ cleanup() {
 trap cleanup EXIT
 
 git clone -q "$REPO" "$T/repo" || { echo "ABBRUCH: Klon"; exit 1; }
-for s in "$SHA" "$BASE" "$GBASE" "$AS3_BASE" "$AS4A_BASE" "$AS4B_BASE"; do git -C "$T/repo" cat-file -e "$s^{commit}" || { echo "ABBRUCH: Commit $s unbekannt"; exit 1; }; done
+for s in "$SHA" "$BASE" "$GBASE" "$AS3_BASE" "$AS4A_BASE" "$AS4B_BASE" "$AS5_BASE"; do git -C "$T/repo" cat-file -e "$s^{commit}" || { echo "ABBRUCH: Commit $s unbekannt"; exit 1; }; done
 mkdir -m 750 "$T/app"; git -C "$T/repo" archive "$SHA" | tar -x -C "$T/app"
 git -C "$T/repo" show "$BASE:sql/dnsmanager_schema.sql" | grep -vE '^(CREATE DATABASE|USE )' > "$T/base_schema.sql"
 mkdir -m 750 "$T/base"; git -C "$T/repo" archive "$GBASE" | tar -x -C "$T/base"
-for b in "as3:$AS3_BASE" "as4a:$AS4A_BASE" "as4b:$AS4B_BASE"; do
+for b in "as3:$AS3_BASE" "as4a:$AS4A_BASE" "as4b:$AS4B_BASE" "as5:$AS5_BASE"; do
     mkdir -m 750 "$T/base_${b%%:*}"; git -C "$T/repo" archive "${b#*:}" | tar -x -C "$T/base_${b%%:*}"
 done
 echo "Anwendung: Commit $SHA Tree $(git -C "$T/repo" rev-parse "$SHA^{tree}")"
@@ -116,6 +120,12 @@ php "$H/as4a_test.php" "$T/app" RC "$T/base_as4a" || RC=1
 php "$H/as4b_test.php" "$T/app" RR "$T/base_as4b" || RC=1
 php "$H/as4b_test.php" "$T/app" RC "$T/base_as4b" || RC=1
 bash "$H/as4b_mutation_test.sh" "$T/app" "$T/base_as4b" || RC=1
+# AS5: Serial-Strategie (rein, Migration 008, Datenbank unter RR und RC gegen den Ersatz-Agenten, Mutationsproben)
+php "$H/as5_pure_test.php" "$T/app" || RC=1
+bash "$H/migration008_test.sh" "$T/app" "$T/base_schema.sql" "$T/base_as5" || RC=1
+php "$H/as5_test.php" "$T/app" RR "$T/base_as5" || RC=1
+php "$H/as5_test.php" "$T/app" RC "$T/base_as5" || RC=1
+bash "$H/as5_mutation_test.sh" "$T/app" "$T/base_as5" || RC=1
 [ "${H2B_SKIP_MUTATION:-0}" = 1 ] && echo "Hinweis: Mutationsproben übersprungen (H2B_SKIP_MUTATION=1)" || bash "$H/mutation_test.sh" "$T/app" || RC=1
 
 echo "GESAMT: $([ $RC = 0 ] && echo 'alle Suiten bestanden' || echo 'FEHLER')"

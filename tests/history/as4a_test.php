@@ -299,10 +299,13 @@ try {
     foreach (['a', 'b', 'c'] as $s) {
         $pdo->exec($rb[$s]);
     }
-    $before = $flow($pdo);
-    t('V03 derselbe Ablauf auf dem Schema vor 007 liefert dieselben Journalwerte', $before['status'] === 'ok'
-        && [$before['run'], $before['attempt'], $before['targets'], $before['cleanup']] === [$after['run'], $after['attempt'], $after['targets'], $after['cleanup']],
-        json_encode(array_diff_assoc(array_map('json_encode', $before['targets'][0] ?? []), array_map('json_encode', $after['targets'][0] ?? []))));
+    // AS5: Die Serial-Auswahl liest die Journal-Rohwerte aus 007 (Referenzermittlung); der AS5-Code ist auf dem Schema vor
+    // 007 deshalb fail-closed (Generator error, keine Serial verbraucht) statt den AS4a-Ablauf zu wiederholen.
+    $s0 = (int)$pdo->query('SELECT soa_serial FROM zones WHERE id = 2')->fetchColumn();
+    $g = generate_zone_file(2, $dir, 'publish', $pdo, static fn (array $j): array => []);
+    t('V03 AS5-Code auf dem Schema vor 007: Generator fail-closed, Serial unverändert', ($g['status'] ?? '') === 'error'
+        && str_contains((string)($g['output'] ?? ''), 'Serialnummer') && (int)$pdo->query('SELECT soa_serial FROM zones WHERE id = 2')->fetchColumn() === $s0,
+        substr((string)($g['output'] ?? ''), 0, 160));
     t('V04 keine offene Transaktion, Sperren frei', !H2b::hasOpenTrx($pdo) && (int)$pdo->query("SELECT IS_FREE_LOCK('dnsmanager_publish_all')")->fetchColumn() === 1);
 } catch (Throwable $e) {
     t('V01–V04 Journalablauf', false, get_class($e) . ': ' . $e->getMessage());
@@ -346,15 +349,16 @@ $constOf = static fn (string $appDir, string $expr): string => trim((string)shel
 $pre2 = 'array_intersect_key(SchemaCheck::HISTORY_TABLES, array_flip(["zone_publish_targets", "publish_cleanup_results"]))';
 t('S02 HISTORY_TABLES_PRE007 = Signatur der zwei Journaltabellen der Basis (Stand vor 007 exakt erhalten)', $constOf($app, 'SchemaCheck::HISTORY_TABLES_PRE007') === $constOf($baseApp, $pre2)
     && strlen($constOf($app, 'SchemaCheck::HISTORY_TABLES_PRE007')) === 64);
-t('S02c übrige History-Tabellen unverändert gegenüber der Basis', $constOf($app, 'array_diff_key(SchemaCheck::HISTORY_TABLES, SchemaCheck::HISTORY_TABLES_PRE007)')
+t('S02c übrige History-Tabellen unverändert gegenüber der Basis (AS5: ohne die neue Tabelle aus 008)', $constOf($app, 'array_diff_key(SchemaCheck::HISTORY_TABLES, SchemaCheck::HISTORY_TABLES_PRE007, ["zone_serial_references" => 1])')
     === $constOf($baseApp, 'array_diff_key(SchemaCheck::HISTORY_TABLES, array_flip(["zone_publish_targets", "publish_cleanup_results"]))'));
 t('S02b REQUIRED = Basis plus system_status.fence_domain', $constOf($app, '(function () { $r = SchemaCheck::REQUIRED; unset($r["system_status"]["fence_domain"]); return array_filter($r); })()')
     === $constOf($baseApp, 'array_filter(SchemaCheck::REQUIRED)')
     && $constOf($app, 'SchemaCheck::REQUIRED["system_status"]["fence_domain"]') === hash('sha256', serialize(['char(36)', 'YES', 'NULL'])));
 $cols = 'zone_protocol|zone_effect|zone_installed_|zone_reload|zone_fence_|conf_protocol|conf_effect|conf_reload|conf_fence_|conf_verify_|cleanup_protocol|cleanup_effect|served_absent|served_still|served_unknown|unassigned_count';
 $hits = trim((string)shell_exec('grep -rlE ' . escapeshellarg($cols) . ' ' . escapeshellarg("$app/web") . ' 2>/dev/null | LC_ALL=C sort'));
-$want = implode("\n", ["$app/web/inc/app/SchemaCheck.php", "$app/web/inc/app/publish/AgentResponseParser.php", "$app/web/inc/app/publish/PublishLedger.php"]);
-t('S03 neue Journalspalten in web/ nur in SchemaCheck, PublishLedger (Schreiber) und AgentResponseParser (Zuordnung)', $hits === $want, $hits);
+$want = implode("\n", ["$app/web/inc/app/SchemaCheck.php", "$app/web/inc/app/publish/AgentResponseParser.php", "$app/web/inc/app/publish/PublishLedger.php",
+    "$app/web/inc/app/publish/SerialReferenceReader.php"]);   // AS5: lesend für die Referenzermittlung (E78)
+t('S03 neue Journalspalten in web/ nur in SchemaCheck, PublishLedger (Schreiber), AgentResponseParser (Zuordnung) und SerialReferenceReader (lesend, AS5)', $hits === $want, $hits);
 
 echo "ERGEBNIS as4a ($iso): $pass bestanden, $fail fehlgeschlagen\n";
 exit($fail === 0 ? 0 : 1);

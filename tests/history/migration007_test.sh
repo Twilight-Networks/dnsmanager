@@ -76,9 +76,9 @@ gen() { # <db> ⇒ "a b c" mit 1 = Schritt ausgeführt
 }
 ctime() { mariadb -N -e "SELECT IFNULL(CREATE_TIME, '-') FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME = '$2'"; }
 state() { php "$H/schemacheck.php" "$APP" "$1" | grep "^$2"$'\t' | cut -f2; }
-problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | cut -f2- | tr '\n' ';'; }
+problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'zone_serial_references fehlt$' | cut -f2- | tr '\n' ';'; }   # AS5: 008 ausgefiltert
 # AS4b: Befunde in Kurzform (Journaltabellen vor 007 ⇒ "<Tabelle>:vor007") und die nach gen() erwarteten Befunde
-problems7() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | cut -f2- \
+problems7() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'zone_serial_references fehlt$' | cut -f2- \
     | sed -E 's/^(zone_publish_targets): Struktur weicht ab \(erwartet col\|zone_protocol\|.*$/\1:vor007/; s/^(publish_cleanup_results): Struktur weicht ab \(erwartet col\|cleanup_protocol\|.*$/\1:vor007/' | tr '\n' ';'; }
 expect7() { # <db> ⇒ erwartete Befunde der offenen Schritte (Reihenfolge wie SchemaCheck: system_status, dann Journaltabellen)
     local a b c; read -r a b c <<< "$(gen "$1")"
@@ -253,6 +253,7 @@ expect_exit 0 "R11c Wiederanlauf mit unverändertem Skript" bash "$MIG7" --db "$
 D=$(mkdb r12 new)
 expect_exit 0 "R12 Neuinstallation: --check ohne Migration" bash "$MIG7" --db "$D" --check
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
+bash "$APP/scripts/migrate_008_zone_serial_references.sh" --db "${H2A_PREFIX}r2" --apply --no-backup > "$W/m8.out" 2>&1 || ok 0 "R12b Vorbereitung: Migration 008 auf r2"   # AS5
 ss() { mariadb -N -B -e "SELECT COLUMN_NAME, ORDINAL_POSITION, COLUMN_TYPE, IS_NULLABLE, IFNULL(COLUMN_DEFAULT, '~'), IFNULL(COLLATION_NAME, '~') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME = 'system_status' ORDER BY ORDINAL_POSITION; SELECT CONSTRAINT_NAME, CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '$1' AND TABLE_NAME = 'system_status' ORDER BY CONSTRAINT_NAME"; }
 ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}r2")" ] && [ "$(ss "$D")" = "$(ss "${H2A_PREFIX}r2")" ] && [ -z "$(problems "$D")" ] && echo 1)" "R12b Neuinstallation = Migration 002–007 (Signatur und system_status byte-gleich), SchemaCheck ohne Befund"
 

@@ -51,7 +51,7 @@ ctime() { mariadb -N -e "SELECT IFNULL(CREATE_TIME, '-') FROM information_schema
 serials() { mariadb -N -B "$1" -e "SELECT id, soa_serial FROM zones ORDER BY id" | sha256sum | cut -c1-64; }
 state() { php "$H/schemacheck.php" "$APP" "$1" | grep "^$2"$'\t' | cut -f2; }
 # AS4b: SchemaCheck::problems() ist strikt nach 007 – Befunde der späteren Migration 007 hier ausgefiltert
-problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2- | tr '\n' ';'; }
+problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'zone_serial_references fehlt$' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2- | tr '\n' ';'; }
 lockfree() { mariadb -N -e "SELECT IS_FREE_LOCK('$LOCK')"; }
 OLD="int(11)|NO|2025010101"; NEW="int(10) unsigned|NO|2025010101"
 
@@ -198,6 +198,7 @@ D=$(mkdb q14 new)
 expect_exit 0 "Q14 Neuinstallation: --check ohne Migration" bash "$MIG6" --db "$D" --check
 sig() { php "$APP/web/scripts/schema_history-cli.php" sql | mariadb -N -B "$1"; }
 bash "$APP/scripts/migrate_007_journal_agent_results.sh" --db "${H2A_PREFIX}q2" --apply --no-backup > "$W/m7.out" 2>&1 || ok 0 "Q14b Vorbereitung: Migration 007 auf q2"
+bash "$APP/scripts/migrate_008_zone_serial_references.sh" --db "${H2A_PREFIX}q2" --apply --no-backup > "$W/m8.out" 2>&1 || ok 0 "Q14b Vorbereitung: Migration 008 auf q2"   # AS5
 ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}q2")" ] && [ "$(col "$D")" = "$(col "${H2A_PREFIX}q2")" ] && [ -z "$(problems "$D")" ] && echo 1)" "Q14b Struktursignatur und Spalte Neuinstallation = Migration 002–007 (byte-gleich), SchemaCheck ohne Befund"
 
 # Q15 frühere Skripte bleiben nach Migration 006 konsistent

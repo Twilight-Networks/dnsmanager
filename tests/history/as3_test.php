@@ -7,7 +7,9 @@
  *      verified_run_id, unvollständige Nachweise und widersprüchliche Zustände abgewiesen (mit Name der verletzten
  *      Bedingung), NULL-Semantik (keine Bedingung wird durch UNKNOWN erfüllt), unbekannte Beobachtung lässt den
  *      positiven Nachweis bestehen
- *   S  32-Bit-Serials mit dem echten Generator (generate_zone_file, Modus publish): 2147483647 → 2147483648,
+ *   S  32-Bit-Serials mit dem echten Generator (generate_zone_file, Modus publish; seit AS5 mit Test-Hook, G1 – der Hook
+ *      registriert keinen Versuch): 2147483647 → 2147483648, seit AS5 4294967294/4294967295 → RFC-Wrap auf den
+ *      Kalenderkandidaten statt Abbruch (docs/ARCHITECTURE_HISTORY.md Abschnitt 5k; Vektoren in as5_pure_test.php),
  *      4294967294 → 4294967295, 4294967295 → Abbruch mit vollständigem Rollback (Grenze bis AS5); Historie unverändert
  *   O  altes Schema (zones.soa_serial mit Vorzeichen): 2147483647 → Abbruch wie bisher; neuer Code meldet SchemaCheck-Befund
  *   K  alter Code (Basis-Commit) auf neuem Schema: SchemaCheck ohne Befund, Generator schreibt Serials > 2³¹−1
@@ -137,7 +139,7 @@ $head = static fn (PDO $p): string => (string)$p->query("SELECT CONCAT(head_revi
 $revCount = static fn (PDO $p): int => (int)$p->query('SELECT COUNT(*) FROM zone_revisions')->fetchColumn();
 $gen = static function (PDO $p, int $start) use ($zoneId, $dir, $serialOf): array {
     $p->exec("UPDATE zones SET soa_serial = $start WHERE id = $zoneId");
-    $r = generate_zone_file($zoneId, $dir, 'publish', $p);
+    $r = generate_zone_file($zoneId, $dir, 'publish', $p, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     $file = $r['path'] ?? null;
     $text = is_string($file) && is_file($file) ? (string)file_get_contents($file) : '';
     return ['status' => $r['status'] ?? '?', 'serial' => $serialOf($p), 'text' => $text, 'output' => (string)($r['output'] ?? ''),
@@ -148,13 +150,16 @@ $n0 = $revCount($pdo);
 $r = $gen($pdo, 2147483647);
 t('S01 2147483647 → 2147483648 (neues Schema)', $r['status'] === 'ok' && $r['serial'] === 2147483648 && str_contains($r['text'], "\n            2147483648   ; Serial\n"),
     "status={$r['status']} serial={$r['serial']}");
+// AS5 (D2): Bisher endete 4294967295 mit einem Abbruch (Grenze bis AS5); jetzt RFC-1982-Wrap auf den Kalenderkandidaten
+$kal = (int)date('Ymd') * 100 + 1;
 $r = $gen($pdo, 4294967294);
-t('S02 4294967294 → 4294967295', $r['status'] === 'ok' && $r['serial'] === 4294967295 && str_contains($r['text'], "2147483648") === false
-    && str_contains($r['text'], "\n            4294967295   ; Serial\n"), "status={$r['status']} serial={$r['serial']}");
+t('S02 AS5: 4294967294 → Kalenderkandidat (RFC-Wrap)', $r['status'] === 'ok' && $r['serial'] === $kal
+    && str_contains($r['text'], "\n            $kal   ; Serial\n"), "status={$r['status']} serial={$r['serial']}");
 array_map('unlink', glob("$dir/*") ?: []);
 $r = $gen($pdo, 4294967295);
-t('S03 4294967295 → Abbruch, Serial unverändert, keine Datei, keine offene Transaktion (Grenze bis AS5)', $r['status'] === 'error' && $r['serial'] === 4294967295
-    && $r['files'] === [] && $r['tx'] === false, "status={$r['status']} serial={$r['serial']} " . substr($r['output'], 0, 120));
+t('S03 AS5: 4294967295 → Kalenderkandidat statt Abbruch, keine offene Transaktion', $r['status'] === 'ok' && $r['serial'] === $kal
+    && $r['tx'] === false, "status={$r['status']} serial={$r['serial']} " . substr($r['output'], 0, 120));
+$pdo->exec("UPDATE zones SET soa_serial = 4294967295 WHERE id = $zoneId");
 $ps = $pdo->query("SELECT soa_serial FROM zones WHERE id = $zoneId")->fetch(PDO::FETCH_NUM)[0];
 t('S04 PDO liefert Werte > 2³¹−1 unverfälscht', (string)$ps === '4294967295' && PHP_INT_SIZE === 8, var_export($ps, true));
 t('S05 Historie unverändert (kein Head-Wechsel, keine Revision durch Serial-Änderungen)', $head($pdo) === $h0 && $revCount($pdo) === $n0);
@@ -210,7 +215,8 @@ array_map('unlink', glob("$dir/*") ?: []);
 
 // ---------------------------------------------------------------- T: statische Nachweise
 // AS4b: PublishLedger.php und PublishService.php sind seit AS4b geändert (Agent-Ergebnisfelder, Fencing) und entfallen hier.
-foreach (['web/inc/soa_serial.php', 'web/inc/deploy/bind_file_generator.php', 'web/inc/app/zones/ZoneService.php', 'web/inc/app/history/ZoneStateSnapshot.php',
+// AS5: soa_serial.php entfällt (generate_next_serial() durch SerialPolicy ersetzt), bind_file_generator.php ist geändert.
+foreach (['web/inc/app/zones/ZoneService.php', 'web/inc/app/history/ZoneStateSnapshot.php',
     'web/inc/app/history/ZoneHistoryRecorder.php', 'web/inc/app/zones/ZoneReadService.php'] as $f) {
     t("T01 unverändert gegenüber Basis: $f", is_file("$app/$f") && hash_file('sha256', "$app/$f") === hash_file('sha256', "$baseApp/$f"));
 }
@@ -218,7 +224,8 @@ foreach (['web/inc/soa_serial.php', 'web/inc/deploy/bind_file_generator.php', 'w
 // seit AS4b (Core- und Agent-Integration); die Schreiber von zone_server_verification prüfen T02 und as4b_test.php S01.
 $hits = trim((string)shell_exec('grep -rl zone_server_verification ' . escapeshellarg("$app/web") . ' ' . escapeshellarg("$app/agent") . ' ' . escapeshellarg("$app/scripts") . ' 2>/dev/null'));
 $allowed = ["$app/web/inc/app/SchemaCheck.php", "$app/scripts/migrate_006_zone_serial_verification.sh", "$app/scripts/migrate_007_journal_agent_results.sh",   // 007: nur Strukturprüfung (AS4a)
-    "$app/web/inc/app/publish/ServerVerificationStore.php"];   // AS4b: einziger Schreiber und Leser
+    "$app/scripts/migrate_008_zone_serial_references.sh",   // AS5: nur Kennwerte vor/nach der DDL
+    "$app/web/inc/app/publish/ServerVerificationStore.php"];   // AS4b: einziger Schreiber und Leser (AS5: auch für die Referenzermittlung)
 $extra = array_diff(array_filter(explode("\n", $hits)), $allowed);
 t('T02 zone_server_verification nur in SchemaCheck, Migrationsskripten und ServerVerificationStore (AS4b)', $extra === [], implode(', ', $extra));
 

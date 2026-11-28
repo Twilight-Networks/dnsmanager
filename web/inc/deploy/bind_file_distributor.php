@@ -47,6 +47,7 @@ require_once __DIR__ . '/BindAgentClient.php';
 require_once __DIR__ . '/BindWorkDir.php';
 require_once __DIR__ . '/../app/publish/PublishTargetClassifier.php';
 require_once __DIR__ . '/../app/publish/PublishHashContract.php';
+require_once __DIR__ . '/../app/publish/SerialReferenceLost.php';
 
 /**
  * Filtert die aktuell geladenen Server auf die registrierte Zielmenge (AP1/H2d, E62).
@@ -87,7 +88,8 @@ function distribute_before_call(?array $journal, int $sid, callable $fail): arra
     try {
         return ($journal['beforeCall'])($sid);
     } catch (Throwable $e) {
-        $fail($sid, PublishTargetClassifier::localFailure('run_lock_lost', $e->getMessage()));
+        // AS5 (D22): gescheitertes Write-ahead vor zone_sync ⇒ sicher nicht gesendet, eigener Code
+        $fail($sid, PublishTargetClassifier::localFailure($e instanceof SerialReferenceLost ? 'serial_intent_failed' : 'run_lock_lost', $e->getMessage()));
         throw $e;
     }
 }

@@ -70,7 +70,7 @@ function zoneFile(PDO $pdo, int $zoneId, string $zoneName, string $outDir): arra
 {
     $dir = T . '/soa-zf';
     if (!is_dir($dir)) { mkdir($dir, 0700); }
-    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo);
+    $r = generate_zone_file($zoneId, $dir, 'publish', $pdo, static fn (array $g): array => []);   // AS5 (G1): Publish nur mit Journal-Hook
     if (($r['status'] ?? '') !== 'ok') { return ['error' => (string)($r['output'] ?? 'Fehler')]; }
     $raw = (string)file_get_contents($r['path']);
     $check = (string)shell_exec('named-checkzone ' . escapeshellarg($zoneName) . ' ' . escapeshellarg($r['path']) . ' 2>&1');

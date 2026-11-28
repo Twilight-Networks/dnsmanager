@@ -1,6 +1,6 @@
 # DNS Manager – Änderungshistorie, Versionsstände, Discard und Restore: Architektur
 
-Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt, AS2b (Nachverifikation, Nachweis der Entfernung) umgesetzt, AS3 (Migration 006) umgesetzt, AS4a (Migration 007, Kompatibilitätsbrücke) umgesetzt
+Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meilenstein H2d (Basis `14a4018`) · AS0 geprüft, AS1 (Agent-Fencing) umgesetzt, AS2a (Serial-Regel, Zustandsprüfung) umgesetzt, AS2b (Nachverifikation, Nachweis der Entfernung) umgesetzt, AS3 (Migration 006) umgesetzt, AS4a (Migration 007, Kompatibilitätsbrücke) umgesetzt, AS4b umgesetzt, AS5 (Serial-Strategie, Migration 008) umgesetzt
 
 ## 0. Status und Geltung
 
@@ -17,9 +17,10 @@ Stand: 20.11.2026 · Architektur AP1/H1 (Basis `6e8133c`) · umgesetzt bis Meile
   (Abschnitt 5g: Nachverifikation nach dem Reload in `conf_sync`, Nachweis der Entfernung im Cleanup, Polling mit
   Zeitbudget), **AS3** (Abschnitt 5h: Migration 006), **AS4a** (Abschnitt 5i: Migration 007) und **AS4b** (Abschnitt 5j:
   Fencing-Domäne und -Token im Core, Laufprüfung vor jedem Agent-Aufruf, Restore-Abgleich, Auswertung der Agent-Antworten,
-  `zone_server_verification`, `zone_verify` im Monitoring). Alle übrigen hier beschriebenen Tabellen, Klassen,
-  Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere sind die Serial-Strategie im Core (AS5) und
-  die Einführung von `observe`/`enforce` (AS6) offen.
+  `zone_server_verification`, `zone_verify` im Monitoring) und **AS5** (Abschnitt 5k: RFC-1982-Serial-Strategie im
+  Core, Serial-Referenzen mit Migration 008, Write-ahead, administrative Referenzen). Alle übrigen hier beschriebenen
+  Tabellen, Klassen, Agent-Erweiterungen und Abläufe existieren im Code noch nicht; insbesondere ist die Einführung von
+  `observe`/`enforce` (AS6) offen.
 - Freigabe: AP1/H1 am 18.11.2026 durch Thomas – Variante C (Hybridmodell aus Audit-Historie, unveränderlichen
   Zonenrevisionen mit Snapshots und separatem Publish-Journal) einschließlich der im H1-Review vereinbarten Korrekturen
   (Abschnitte 8–13) und der Entscheidungen E8, E10 und E17. Zu E15/E16 ist nur die Anforderung festgelegt, 32-Bit-Serials
@@ -1298,6 +1299,153 @@ Code aktiviert nichts von selbst. Datenbankschema unverändert (keine Migration 
 - Angepasst: Migrationstests 002–007 (strikte Befunde vor 007, Werkzeugsicht), `as3_test.php`, `as4a_test.php`,
   `static_rh8_test.php`.
 
+## 5k. Festlegungen AS5 (umgesetzt)
+
+**Umfang:** RFC-1982-konforme Serial-Strategie im Core auf Grundlage des Konzepts, der Architekturpräzisierung und des
+abschließenden Nachtrags (Entscheidungen D1–D25, Register E129–E153, Freigabe vom 27.11.2026). Bestandteile:
+`SerialNumber` (E110), `SerialPolicy`, `SerialReferenceStore`, `SerialReferenceReader`, `SerialReferenceAdminService` mit
+`web/scripts/serial_admin-cli.php`, Migration 008 (`zone_serial_references`), Integration in Generator, `PublishJournal`,
+`AgentResponseParser`, `PublishLedger`, `ServerVerificationStore` und Monitoring. Nicht enthalten: Agent, Fencing-Modi
+(AS6), E128, B-M1-1, Rollout. Fencing-Token, Höchststand H und Lauf-IDs bleiben von der Serial vollständig getrennt.
+
+**Arithmetik (E110, E131):** `SerialNumber::compare()` mit vier Ergebnissen wie der Agent (E102), nur echte Ganzzahlen;
+dieselben Vektoren `rfc1982-v1`. Serial 0 ist gültig.
+
+**Auswahl (E130, E138, E139):** Kandidaten sind der Kalenderkandidat K = `Ymd·100 + 1` (Uhr des Webservers) und
+(r + 1) mod 2³² für jedes r ∈ R. Gültig ist ein Kandidat nur, wenn er gegenüber **jeder** Referenz ausdrücklich
+`newer` ist; K hat Vorrang, sonst der (höchstens eine) gültige Nachfolger, sonst `serial_unresolvable`. Keine
+Sortierung, kein numerisches Maximum; eine abschließende Prüfung gegen alle Referenzen (mehr als ein gültiger
+Nachfolger oder ein ungültiges Ergebnis ⇒ `LogicException`). Bei R = {c} ist das Ergebnis für c ∈ [0, K + 2³¹] gleich
+der bisherigen Regel; darüber RFC-Wrap auf K statt des bisherigen Abbruchs bei 4294967295 (bewusste Änderung der
+AS3-Grenze, Abschnitt 5h). Vektoren: `tests/serial_policy_vectors.json` (`serial-policy-v1`, V1–V30).
+
+**Referenzmenge (E129, E133, E147):** R = {DB-Serial, Serial des zuletzt registrierten Versuchs unter demselben
+normalisierten Zonennamen (über alle Zonen-IDs, D19)} ∪ Ref_F ∪ Ref_D je Paar (normalisierter Name × Server) mit
+**aktuellem oder ehemaligem** Zielserver (D5). Ehemalige Ziele sind alle Server, für die unter demselben normalisierten
+Namen Journal-Ziele, Referenzzeilen oder Zeilen des Verification Store bestehen – auch über gelöschte Vorgänger gleichen
+Namens. Ihre Werte bleiben **bindend** (ein früher ausgelieferter Stand kann bei Wiederzuweisung, über sekundäre
+Nameserver oder Caches wieder sichtbar werden). Sperren (offenes intent, Verlustmarke, Lücke) wirken dagegen nur für
+**aktuelle** Ziele: Ein offener Block eines ehemaligen Ziels hält keine Zone an, die dort nicht mehr veröffentlicht wird;
+bei Wiederzuweisung wird er wieder wirksam. `serial_admin-cli.php status` kennzeichnet solche Paare als „ehemaliges Ziel
+(bindend, D5)“; Paare anderer Namen ohne aktuelle Zone bleiben ruhend (gespeichert, nicht bindend).
+
+| Quelle | Ereignis (Phase) | F | D |
+|---|---|---|---|
+| `zone_serial_references.agent_check` (1) | `file_state` valid/missing; `served_state` served bzw. not_auth **nur** bei K = nein | Anker {f} bzw. ∅ | Anker {s} bzw. ∅ |
+| dto., `reject`/`would_reject` mit `stale_serial`/`serial_conflict`/`serial_undefined` | Konfliktreferenz je Bestandteil | {f} | {s} |
+| Journal `zone_sync` (2) | `ok` as2 mit installiertem Stand / `unknown` mit installiertem Stand (R1, gescheiterter Reload) | Anker {i} | möglich {i} |
+| dto. | `ok` legacy | Anker {x} | angenommen {x} (D18) |
+| dto. | `sending`/`unknown`/`abandoned`, as2 ohne installierten Stand | möglich {x} | möglich {x} |
+| Journal bzw. Referenz `conf_sync` (3), `cleanup` (4), `monitoring` (5) | `verified`/`serial_differs` | Anker {file} | Anker {served} |
+| dto. | `still_served` / `absent` (Cleanup, E92) | – | Anker {served} / ∅ |
+| dto. | `unknown` mit gültigen Rohwerten | additiv | additiv |
+| `admin` (6) | erfasste Datei- bzw. ausgelieferte Serial | admin | admin |
+| jede Zeile mit `order_certain = 0` | verspätete Antwort, verworfener Wasserstand | ungeordnet | ungeordnet |
+| Verification Store, nicht gespiegelt | `last_*` wie Beobachtung; `verified_*` mit Lauf als Anker, ohne Lauf ungeordnet | | |
+
+Ablöseregeln (Review AS5, Punkt 1; Ordnung über (Lauf, Phase, Folge), nie über die Serial): **S1** Ein früherer bindender
+Wert v – gleich welcher Art (Anker, möglich, additiv, angenommen, Konflikt, Admin, ungeordnet) – wird nur abgelöst durch
+einen **späteren gemessenen Anker desselben Bestandteils** mit einem Wert w, für den `compare(w, v) = newer` gilt.
+**S2** `equal`: der Wert bleibt einmal enthalten, ohne zusätzliche Referenzwirkung; `older`: der frühere Wert bleibt
+bindend; `undefined` (Abstand genau 2^31): beide bleiben bindend. **S3** Ein leerer Anker (Datei fehlt, nicht
+ausgeliefert, `absent`) löst nichts ab; F und D sind unabhängig. Für ungeordnete Werte gilt „später“ nach dem
+Aufzeichnungszeitpunkt. **S4/E144** Nicht sicher geordnete Ereignisse lösen nie ab. **D18** Eine Annahme wird außerdem
+durch eine spätere Annahme mit `newer`-Wert abgelöst; gemessene D-Anker lösen nach S1 ab. Folge: Die Policy liefert nie
+einen Kandidaten, der nicht `newer` als jeder noch bindende frühere Wert ist (z. B. F/D 4.000.000.000, später gemessen
+3.000.000.000 ⇒ beide bindend ⇒ 4.000.000.001). Die Werte zwischen zwei Ankern werden nicht verdichtet (RFC 1982 ist
+nicht transitiv). Dieselbe Implementierung (`SerialReferenceReader`) dient Auswahl, Status und künftigem
+Retentionsschutz (`contributors`).
+
+**Persistenz (E148, Migration 008):** `zone_serial_references` ist nur anhängend; einziger Schreiber und Leser ist
+`SerialReferenceStore` (statisch nachgewiesen). Quellen `epoch`, `run`, `intent`, `agent_check`, `no_report`, `loss`,
+`conf_sync`, `cleanup`, `monitoring`, `admin`; NULL-sichere CHECKs je Quelle (K1). `ServerVerificationStore` schreibt
+jede angenommene Beobachtung in **derselben** Transaktion zusätzlich als Referenzzeile; eine nicht gespiegelte
+Vorgängerzeile wird vor dem Überschreiben gesichert, nach der Epoche zusätzlich mit Verlustmarke
+`unmirrored_observation`. Deduplizierung nur für eine unmittelbar vorangehende, geordnete Monitoring-Zeile des Paars
+mit gleichem Wasserstand und gleichen Werten – jede Zwischenzeile (Journal-Lauf ⇒ neuer Wasserstand, Admin, Verlust,
+Ordnungswechsel) verhindert sie. Der Verification Store wird für die Referenzermittlung ausschließlich über
+`ServerVerificationStore::rowsForName()` gelesen (E87).
+
+**Write-ahead und Persistenzfehler (E150, E151):**
+- `openJournal()` schreibt nach J1 die Laufmarke (und beim ersten AS5-Schreibvorgang die Epoche). Scheitert das, endet
+  der Lauf ohne Agent-Aufruf (wie eine gescheiterte Backend-Bindung).
+- `PublishJournal::beforeZoneSync()` schreibt vor **jedem** `zone_sync` ein `intent`; scheitert das, unterbleibt der
+  Aufruf (Ziel `failed`/`serial_intent_failed`, Lauf `exception`, Flags 2 → 1). Reihenfolge (E83, Review AS5 Punkt 4):
+  Laufprüfung → intent → **erneute** Laufprüfung → Agent-Aufruf. Geht die Laufberechtigung zwischen intent und Aufruf
+  verloren, unterbleibt der Aufruf (`run_lock_lost`); das intent wird mit `no_report`/`not_sent` (`order_certain = 0`)
+  abgeschlossen, soweit möglich, sonst bleibt es offen (Sperre).
+- Die Antwort schließt das intent ab: gültiger `serial_check` ⇒ `agent_check` (Rohwerte, nie ein Nachweis); kein
+  Bericht ⇒ `no_report` (`legacy`, `no_agent_response`, `no_serial_check`, `not_sent`); vorhandener, aber ungültiger
+  Bericht ⇒ Verlustmarke `serial_check_invalid`. `order_certain` ist 1 nur, wenn der Lauf nach der Antwort noch beide
+  Sperren hält (sonst verspätete Antwort, D23).
+- Scheitert die Speicherung des Abschlusses bzw. einer Beobachtung, wird eine Verlustmarke geschrieben und der Lauf nach
+  dem J4-Eintrag beendet (`SerialReferenceLost`, bewusste Abweichung von E64 nur im Fehlerfall). Scheitert auch die
+  Marke, bleibt das intent ohne Abschluss – der Verlust ist dauerhaft erkennbar (Prozessabbruch, Verbindungsverlust,
+  Datenbankneustart und Lock-Verlust wirken gleich).
+- Sperren: Verlustmarke, intent ohne Abschluss, Lauf nach der Epoche ohne Laufmarke mit `as2`-zone_sync (Rückfall auf
+  AS4b), nicht gespiegelte Beobachtung nach der Epoche. Aufgelöst **nur** durch administrative Erfassung beider
+  Bestandteile nach dem sperrenden Ereignis – nie durch eine automatische Messung; der verlorene historische Wert gilt
+  dadurch nicht als wiederhergestellt.
+
+**Monitoring-Persistenz (Review AS5, Punkt 3):** `MonitoringService::storeUnderPublishLock()` bezieht den Publish-Lock
+und schreibt – sofern bezogen – **vor** beiden Zweigen die Epoche (`ensureEpoch`). Gilt der Wasserstand W noch
+(`MAX(publish_runs.id) = W`), werden die Messungen geordnet gespeichert (`recordMonitoring`, je Zeile mit Verlustmarke bei
+Fehlschlag). Sonst (Lock nicht bezogen oder neuer Lauf seit W, etwa ein paralleler AS4b-Lauf) werden sie ungeordnet
+gespeichert (`recordUncertain`, nie verworfen). Scheitert diese Speicherung, wird je Zeile eine Verlustmarke
+`monitoring_not_stored` geschrieben (Sperre des Paars bis zur Admin-Erfassung). Scheitert auch die Marke, meldet der Lauf
+`monitoring.serial_reference_lost` (Fehler-Log mit Anzahl gespeicherter und fehlender Marken); der Wert ist dann
+verloren, der Verlust aber gemeldet. Ein zusätzliches Write-ahead im Monitoring entfällt: Monitoring ändert keinen
+Zustand; der nächste ändernde Zugriff (`zone_sync`) misst unter Write-ahead erneut (Vorher-Prüfung des Agenten).
+
+**Übergang (Ergänzung 3.3):** AS4-Historie vor der Epoche sperrt nie (sie fließt als Referenz ein). Antworten ohne
+`serial_check` (Legacy, Ablehnung vor der Vorher-Prüfung) sind legitim (`no_report`). AS5-Publishes ohne Abschluss sind
+Verluste. Läufe nach der Epoche ohne Laufmarke stammen von einem anderen Codestand: nur `as2`-Ziele sperren (dort fehlt
+ein möglicher Bericht); deren Beobachtungen sind über die Spiegelungsprüfung erkannt.
+
+**Generator und Journal (E136, E137):** `generate_zone_file(…, 'publish')` verlangt den Journal-Hook (G1), das Backend
+ein gebundenes Journal (G2); die Auswahl (`SerialReferenceReader::selectSerial()`) läuft in der Generator-Transaktion
+nach `zones … FOR UPDATE`, nur lesend. `serial_unresolvable`, `serial_reference_lost` und `serial_reference_gap` enden
+mit `status = error` vor der Datei (Rollback, kein Versuch, keine Serial, kein Aufruf; Publish All wie bisher bei
+Generierungsfehlern, E134). `registerAttempt()` weist eine Serial ab, die nicht `newer` als die gesperrte DB-Serial ist
+(D9). `generate_next_serial()` und `web/inc/soa_serial.php` entfallen.
+
+**Administrative Referenzen (E145, E135):** `serial_admin-cli.php status` (lesend; Entscheidung, Referenzen, Sperren,
+ehemalige Ziele (bindend, D5), ruhende Paare, Publish-Sperre) und `record` (nur hinzufügend, Publish-Try-Lock, Zonen- und Serveridentität über ID und
+Namen, genau F oder D, strenges Parsen, Herkunftsangabe ohne Geheimnismuster, Audit-Ereignis `zone`/`update` mit den
+Fakten `serial_reference_*` in derselben Transaktion, Operation `serial.reference_record`, Kanal `cli`). Keine Änderung
+der DB-Serial, kein Löschen, kein L3-Nachweis, kein Publish; `serial_unresolvable` bleibt bestehen.
+
+**Publish-Sperre (E152):** Betriebsverfahren in [`AGENT_FENCING.md`](AGENT_FENCING.md) Abschnitt 10.
+
+**Erhaltene Verträge:** E57 (Ledger unverändert Autocommit, `registerAttempt` einzige transaktionale Methode), J1–J8
+(Laufmarke nach J1, Auswahl vor J2, keine neuen Journalspalten, J4a, Ordnung nur über IDs, Flags unverändert), E74/E81/E83
+(Fencing unabhängig), E76/E77 (`unknown` ⇒ möglich), E87 (einziger Schreiber und Leser des Verification Store), E109,
+R1 (installierter Stand nur Referenz), R2/R3 (nur gültige Berichte), E113 (Klassifizierung unverändert).
+
+**Bewusste Abweichungen:** (1) RFC-Wrap statt Abbruch bei 4294967295 (AS3-Grenze, `as3_test.php` S02/S03 angepasst);
+(2) im Fehlerfall Laufabbruch bei nicht speicherbaren Serial-Referenzen (E64); (3) neuer lokaler Zielcode
+`serial_intent_failed`; (4) neuer Ausgabetext „Serial: keine sichere Auswahl …“ in der bestehenden Meldung
+`publish.zone_generation_failed`; (5) G1: `generate_zone_file()` im Modus publish ohne Journal wird abgewiesen
+(Testaufrufe verwenden einen eigenen Hook). Normale Serials und Web-Verträge sind unverändert.
+
+**Schutzgrenzen:** Agenten in `off` prüfen keine Serial und liefern weder Bericht noch L3; ihr Auslieferungsstand ist nur
+angenommen (D18). In `observe` ist eine einmalige Regression möglich, aber dauerhaft belegt. Monitoring bietet keinen
+garantierten Korrekturzeitpunkt. Scheitern Abschluss und Verlustmarke gleichzeitig, ist ein fremder Wert dieser Antwort
+verloren; erkennbar bleibt der Verlust (offenes intent). Scheitern im Monitoring Speicherung und Verlustmarke, ist der
+Messwert verloren und nur über Fehlermeldung und Log erkennbar (keine dauerhafte Sperre); er ist ein Beobachtungswert
+ohne Zustandsänderung und wird beim nächsten `zone_sync` erneut gemessen. Ein Datenbank-Restore ist nur bei Agenten in `observe`/`enforce`
+über E81 erkennbar; sonst gilt das Verfahren in `AGENT_FENCING.md` Abschnitt 10. Während eines Rückfalls auf AS4b
+überschriebene Zwischenbeobachtungen sind nur als Lücke erkennbar, ihr Wert ist verloren.
+
+**Retention (E143):** Meilenstein R ermittelt die geschützte Menge über `SerialReferenceReader` (RET-S1: R(z) und alle
+Ref_c(n, s) vor und nach einer Bereinigung identisch); zusätzlich bleiben alle Zeilen von `zone_serial_references`, deren
+Lauf-, Versuchs- und Änderungsmengenbezüge (Fremdschlüssel RESTRICT) und der jüngste Versuch je Name erhalten.
+
+**Tests (Stufe 1):** `as5_pure_test.php` (R, V, B Brute-Force 8 Bit vollständig |R| ≤ 2, 6 Bit vollständig |R| = 3,
+zufällig 8 Bit |R| ≤ 6; M Referenzmodell, E Ereignisabbildung, P Parser, A Audit, C Policy),
+`as5_test.php` unter RR und RC (G, W, P, L, X, N, A, S, C), `migration008_test.sh` (T01–T08), `as5_mutation_test.sh`
+(C01–C31); angepasst: `as3_test.php`, `journal_worker.php`, `as4b_mutation_test.sh` (B16), Generator-Aufrufe in `tests/ui`.
+
 ## 6. Atomare History-Erfassung
 
 | ID | Regel |
@@ -1407,8 +1555,8 @@ Synchronität wird ausschließlich über Hashes und Bestätigungen bestimmt, nie
   „nicht größer“. Gleiche Serial nur bei byte-identischer Datei (idempotente Wiederholung).
 - Die nächste Serial muss nach RFC 1982 größer sein als die DB-Serial und als jede zuletzt bestätigte Serial aller
   aktuellen Ziele (auch aus Vorgängen unter demselben Zonennamen); existiert kein solcher Wert, wird gesperrt.
-  **[offen – E15/E16, Meilenstein AS]**: Umstellung von `generate_next_serial()` (heute numerischer Vergleich; AS5).
-  Der Spaltentyp `zones.soa_serial` ist seit AS3 `INT UNSIGNED` (E79, Abschnitt 5h).
+  Umgesetzt in AS5 (Abschnitt 5k): Referenzmenge je Zone und Zielserver, RFC-Nachfolger ohne Sortierung, 0 gültig,
+  Sperre `serial_unresolvable`. Der Spaltentyp `zones.soa_serial` ist seit AS3 `INT UNSIGNED` (E79, Abschnitt 5h).
 - Testumgebung: kein AXFR (`allow-transfer { none; }`), keine externen Secondaries; Serial-Regeln dienen dort dem
   Agent-Schutz.
 
@@ -1572,13 +1720,13 @@ Schnittstellenerweiterungen (additiv, bestehende Ergebnisfelder unverändert):
 | **H2b** | `ZoneHistoryRecorder` in allen Schreibpfaden, Drift, Zonenlöschung, `history_dependencies` – **umgesetzt** (Abschnitt 5b, Migration 003, Tests `tests/history`) | R-H1–R-H9 nachgewiesen; Rollback ohne Rückstände; REPEATABLE READ (mit Snapshot-Isolation) und READ COMMITTED; Web-Golden identisch |
 | **H2c** | `audit_events` für Operationen ohne DNS-Wirkung – **umgesetzt** (Abschnitt 5c, Migration 004, Tests `tests/history`) | keine Geheimnisse (Suchtest); atomar mit Fachänderung; RR und RC; Web-Golden identisch |
 | **H2d** | Publish-Journal J1–J8, Hashes, strukturierte Zielergebnisse, `unknown` bei Reaktivierung – **umgesetzt** (Abschnitt 5d, Migration 005, Tests `tests/history`) | Fehlerinjektion (Registrierung, Ergebniseintrag, Prozessende); vollständige Publish-Regression auf ns1/ns2 (ok, partial, Abbruch, Cleanup-Fehler, Full Rebuild); `changed`/`bind_dirty` unverändert |
-| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16); Arbeitspakete AS0 (Vorprüfung, geprüft), AS1 (Agent-Fencing, umgesetzt, Abschnitt 5e), AS2 (Serial-Regel, L3), AS3 (Migration 006, umgesetzt, Abschnitt 5h), AS4 (AS4a Migration 007, umgesetzt, Abschnitt 5i; AS4b Core-Integration, umgesetzt, Abschnitt 5j), AS5 (Serial-Strategie), AS6 (Einführung), AS7 (Doku) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
+| **AS** | Fencing F1–F5, I-A1–I-A5, L3 nach E17, Serial-Wahl (E15/E16); Arbeitspakete AS0 (Vorprüfung, geprüft), AS1 (Agent-Fencing, umgesetzt, Abschnitt 5e), AS2 (Serial-Regel, L3), AS3 (Migration 006, umgesetzt, Abschnitt 5h), AS4 (AS4a Migration 007, umgesetzt, Abschnitt 5i; AS4b Core-Integration, umgesetzt, Abschnitt 5j), AS5 (Serial-Strategie, umgesetzt, Abschnitt 5k), AS6 (Einführung), AS7 (Doku) | Lock-Verlust mit zwei Verbindungen; veraltete Konfiguration/Cleanup; Neuanlage gleichen Namens; Agent-Neustart; Absturzsicherheit von H (F4) und fail-closed bei Persistenzfehlern (Fehlerinjektion je Datei- und Verzeichnisoperation); gestufte Einführung |
 | **H3** | Historienoberfläche: Core-Read-Services (`ZoneHistoryReadService`, `ZoneSyncReadService`) **und** Weboberfläche mit Historienliste, Filtern, Detailansichten, Vorher-/Nachher-Vergleich, Berechtigungen und Paginierung | Berechtigung in derselben Anweisung, E10, Pagination, keine Geheimnisse; Oberfläche nach `docs/UI_GUIDELINES.md` und `docs/UI_ROLE_MATRIX.md`, Web-Golden für bestehende Seiten unverändert |
 | **H4** | abgeleitete Zustände, `ZoneDiscardService` | alle Sperrgründe; Race-Tests (Lock-Wait, Gegenprobe, Mutationsprobe); Discard nur aus `pending_clean` |
 | **H4b** | Gruppen-Discard | Abhängigkeitshülle, Vorschau, Berechtigung für alle Zonen |
 | **H5** | `ZoneRestoreService`, Wiederherstellen und neu verteilen | Serial monoton; DynDNS-/Systemrecords geschützt; Revalidierung; Rollback |
 
-| **R** | Retention (eigener Meilenstein nach H5, nicht Teil von AS): drei unabhängig konfigurierbare Fristen für DNS-Revisionen mit Snapshots, Audit-Historie und Publish-Journal; Konfiguration und administrative Bereinigung ausschließlich für Admins über einen Core-Service | erhalten bleiben aktuelle Heads und nötige Snapshots, die letzten verifizierten Agent-Zustände, alle für die Serial-Strategie (E78) nötigen Höchststände und die monotone Fencing-Token-Folge (`publish_runs` nie per `TRUNCATE`); Web, MCP und CLI nur als Adapter |
+| **R** | Retention (eigener Meilenstein nach H5, nicht Teil von AS): drei unabhängig konfigurierbare Fristen für DNS-Revisionen mit Snapshots, Audit-Historie und Publish-Journal; Konfiguration und administrative Bereinigung ausschließlich für Admins über einen Core-Service | erhalten bleiben aktuelle Heads und nötige Snapshots, die letzten verifizierten Agent-Zustände, alle für die Serial-Strategie (E78) nötigen Referenzen (AS5, E143: Ermittlung über `SerialReferenceReader`, RET-S1; `zone_serial_references` vollständig) und die monotone Fencing-Token-Folge (`publish_runs` nie per `TRUNCATE`); Web, MCP und CLI nur als Adapter |
 
 Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H3 → H4 → H4b → H5 → R.
 
@@ -1676,7 +1824,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E75 | `system/control reload` ohne Fencing, unter demselben `flock` | entschieden (AS1) |
 | E76 | L3 im Agenten nach dem Reload mit begrenztem Polling, zusätzlich periodisch im Monitoring | entschieden; Polling umgesetzt (AS2b: nur `conf_sync` und `zone_cleanup`, Fenster 10 s, gemeinsames Budget je Cleanup); Monitoring umgesetzt (AS4b, `zone_verify`, Abschnitt 5j) |
 | E77 | Reload-Fehler oder `not_loaded` ⇒ Ziel nicht veröffentlicht, Zone bleibt ausstehend; **Timeout ⇒ immer `unknown`** (nie `not_loaded`/`rejected`), Zone unbestätigt und ausstehend bis zur tatsächlichen Verifikation | entschieden, Umsetzung AS2/AS4 |
-| E78 | Serial-Wahl nach RFC 1982 vollständig (Abstand 2³¹ undefiniert ⇒ nicht größer), Referenzmenge aus DB-Serial, bestätigten, zuletzt verifizierten und gemeldeten Serials je Zone und Server; keine numerische Sortierung; sonst Sperre `serial_unresolvable` | entschieden (= E15), Umsetzung AS5 |
+| E78 | Serial-Wahl nach RFC 1982 vollständig (Abstand 2³¹ undefiniert ⇒ nicht größer), Referenzmenge aus DB-Serial, bestätigten, zuletzt verifizierten und gemeldeten Serials je Zone und Server; keine numerische Sortierung; sonst Sperre `serial_unresolvable` | entschieden (= E15); umgesetzt (AS5, Abschnitt 5k, präzisiert durch E129–E153) |
 | E79 | `zones.soa_serial` → `INT UNSIGNED` | umgesetzt (AS3, Abschnitt 5h) |
 | E80 | Agent: fehlende Zonendatei ⇒ Installation unter gültigem Fencing; lesbar, aber ungültig ⇒ kontrollierter Reparaturpfad (nur mit ausdrücklichem Kennzeichen aus einer Admin-Core-Operation); nicht lesbar ⇒ fail-closed; kein Überschreiben unbekannter Zustände | umgesetzt (AS2a, präzisiert durch E103: fehlende Datei nur bei nachweislich nicht konfigurierter und nicht ausgelieferter Zone bzw. gegenüber der ausgelieferten Serial) |
 | E81 | Agent senkt H nie; kein API-Reset; lokale CLI nur `init` (ohne H) und `raise`; nach DB-Restore kontrollierter Abgleich durch den Core (AS4) | umgesetzt (CLI AS1; Core-Abgleich vor J6/J1 und `fence_admin-cli.php raise-runs` AS4b, Abschnitt 5j) |
@@ -1708,7 +1856,7 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E107 | `verified` = autoritative SOA mit der Serial der verwalteten Datei bei K = ja; belegt Serial-Übereinstimmung, nicht Inhaltsgleichheit; ändert nie den HTTP-Status | umgesetzt (AS2b) |
 | E108 | `zone_sync` ohne Polling; Nachverifikation einer neuen Zone über `conf_sync` | umgesetzt (AS2b) |
 | E109 | Lesender Endpunkt `zone_verify` | umgesetzt (AS4b: eine Runde ohne Polling unter `LOCK_SH`, nur `observe`/`enforce`, Abschnitt 5j) |
-| E110 | RFC-1982-Klasse im Core | verschoben nach AS5 (muss die Vektoren aus E102 bestehen) |
+| E110 | RFC-1982-Klasse im Core | umgesetzt (AS5, `SerialNumber`, Vektoren `rfc1982-v1`) |
 | E111 | Aufteilung AS2a (Grundlage, Schutz) / AS2b (Polling, Nachverifikation, E92); AS2b nur mit AS2a-Bausteinen | entschieden |
 | E112 | Tests gegen die installierten BIND-Instanzen und Agenten auf ns1/ns2; keine zusätzliche BIND-Testumgebung; Fixtures ohne eigenen DNS-Server zulässig (`CLAUDE.md` §5) | entschieden |
 | E113 | Klassifizierung nach HTTP × Agent-Status × `effect` (Tabelle Abschnitt 5f); ohne `effect` unverändert E63; operative Auswertung unverändert | umgesetzt (AS2a) |
@@ -1727,6 +1875,31 @@ Reihenfolge: H2a → H2b → H2c (parallel zu H2b möglich) → H2d → AS → H
 | E126 | Tests: rein, Ersatzprogramme ohne BIND, Live gegen den installierten `named` auf ns2, Mutationsproben, AS1-/AS2a-Regression, `off`-Vergleich, Stufentest über den installierten Core | umgesetzt (AS2b) |
 | E127 | Messung M1 (Verzögerung von Zonenzahl, K und D nach dem Reload) vor der Implementierung | durchgeführt 20.11.2026 (Abschnitt 5g) |
 | E128 | Folgepaket: AS2a-`zone_sync` (und AS2b) lehnen Zonennamen mit Großbuchstaben bzw. abschließendem Punkt fail-closed ab bzw. verifizieren sie nicht (normalisierter Name ↔ verwalteter Pfad) | offen, eigenes Paket vor AS6; nicht Teil von AS2b |
+| E129 | (D1) Referenzmodell je Paar (normalisierter Name × Server) mit Bestandteilen F/D, Klassen Anker/möglich/Konflikt/additiv/angenommen/Admin/ungeordnet und Ablöseregeln S1–S5; verbindlich nur für aktuelle Ziele zuzüglich zonenweiter Referenz | umgesetzt (AS5, Abschnitt 5k) |
+| E130 | (D2) Auswahl K → RFC-Nachfolger → `serial_unresolvable`, ohne Sortierung, abschließende Prüfung gegen jede Referenz | umgesetzt (AS5) |
+| E131 | (D3) Serial 0 gültig, nie übersprungen | umgesetzt (AS5) |
+| E132 | (D4) keine Live-Abfrage vor dem Publish; Schutzgrenzen und Abgleichverfahren | umgesetzt (AS5; Verfahren `AGENT_FENCING.md` Abschnitt 10) |
+| E133 | (D5) Werte ehemaliger Zielserver desselben normalisierten Namens bleiben bindend; Sperren (offene Blöcke) nur für aktuelle Ziele, bei Wiederzuweisung wieder wirksam; Paare ohne aktuelle Zone ruhend; `absent` setzt nur D = ∅ (präzisiert im Review AS5, Punkt 2: zuvor „Nicht-Ziele ruhend“) | umgesetzt (AS5) |
+| E134 | (D6) Sperren als bestehender `generation_failed` | umgesetzt (AS5) |
+| E135 | (D7) Admin-Status lesend, Erfassung nach E145 | umgesetzt (AS5) |
+| E136 | (D8) zentraler Auswahlpunkt im Generator; Publish nur mit Journal (G1/G2) | umgesetzt (AS5) |
+| E137 | (D9) `registerAttempt` weist nicht neuere Serial ab | umgesetzt (AS5) |
+| E138 | (D10) Vektordatei `serial-policy-v1`, `rfc1982-v1` unverändert | umgesetzt (AS5) |
+| E139 | (D11) Kalenderdatum aus der Uhr des Webservers | umgesetzt (AS5) |
+| E140 | (D12, revidiert) Migration 008 mit genau einer neuen Tabelle; bestehende Tabellen unverändert | umgesetzt (AS5) |
+| E141 | (D13) Abnahmestufen 1–4; Stufen 2–4 gesondert freizugeben | Stufe 1 umgesetzt (AS5) |
+| E142 | (D14) E128 und B-M1-1 außerhalb von AS5 | entschieden |
+| E143 | (D15) Retentionsschutz über `SerialReferenceReader` (RET-S1) | entschieden, Umsetzung Meilenstein R |
+| E144 | (D16) nicht sicher geordnete Ereignisse lösen nie ab, auch bei unbestimmbarem Messzeitpunkt | umgesetzt (AS5) |
+| E145 | (D17) administrative Referenzen nur hinzufügend mit Audit; kein Override | umgesetzt (AS5) |
+| E146 | (D18) Legacy-Auslieferung nur angenommen; Ablösung nach D18 | umgesetzt (AS5) |
+| E147 | (D19) zonenweite Referenz: DB-Serial und zuletzt registrierter Versuch unter dem Namen | umgesetzt (AS5) |
+| E148 | (D20) `zone_serial_references` mit Spiegelung in der Store-Transaktion und Deduplizierung nur ohne Zwischenereignis | umgesetzt (AS5) |
+| E149 | (D21) Rohwerte aus `unknown` additiv, R1 bei gescheitertem Reload als F-Anker, S3 je Bestandteil, `not_auth` nur bei K = nein | umgesetzt (AS5) |
+| E150 | (D22) Write-ahead (Laufmarke, intent), Verlustmarke, Laufabbruch, Lückenerkennung | umgesetzt (AS5) |
+| E151 | (D23) `order_certain` für verspätete bzw. verworfene Messungen | umgesetzt (AS5) |
+| E152 | (D24) betriebliche Publish-Sperre über fehlende `FENCE_DOMAIN` | umgesetzt (AS5, `AGENT_FENCING.md` Abschnitt 10) |
+| E153 | (D25) Umsetzung von D17 und D18 nach dem abschließenden Nachtrag | umgesetzt (AS5) |
 | B-M1-1 | Befund: Während BIND eine große Zone lädt, können Abfragen an unbeteiligte Zonen ausbleiben; AS2a-`zone_sync` kann dann nach E103 Zeile 3 mit `served_state_unknown` ablehnen (fail-closed, Teilverteilung) | dokumentiert; bei der Planung von AS4 ausdrücklich zu berücksichtigen, sonst vor AS6 gesondert beheben |
 
 **Weitere offene Implementierungsdetails:** genaue Tabellen-/Spaltennamen und Codes;
@@ -1737,6 +1910,8 @@ Generators für `render_hash`; Entfernung der ungenutzten Tabelle `deployments` 
 
 | Datum | Änderung |
 |---|---|
+| 28.11.2026 | Review AS5: Ablösung nur durch späteren gemessenen Anker mit RFC-`newer`-Wert (S1–S4, D18 präzisiert), ehemalige Zielserver bindend (D5, Sperren nur für aktuelle Ziele), Monitoring-Persistenz (Epoche vor beiden Zweigen, Verlustmarke `monitoring_not_stored`, Meldung `monitoring.serial_reference_lost`), E83-Reihenfolge im Write-ahead; Publish-Sperre: Web-OPcache und Nachweis aus dem Webkontext (`AGENT_FENCING.md` Abschnitt 10); Write-ahead für alle Agent-Modi einschließlich `off` bestätigt |
+| 27.11.2026 | AS5 umgesetzt: Abschnitt 5k (SerialNumber, SerialPolicy, Serial-Referenzen mit Migration 008, Write-ahead, Verlustmarken, Lückenerkennung, administrative Referenzen, Publish-Sperre); E78 und E110 umgesetzt, E129–E153; Abschnitte 0, 10 und 18 nachgeführt |
 | 25.11.2026 | E2E-Befund AS4b: `zone_verify.php` band `inc/bind_utils.php` nicht ein (HTTP 500 im Monitoring), verdeckt durch Polyfill bzw. Ersatz-Agent in den Tests; Einbindung ergänzt, Endpunkt-Test `tests/agent/as4b_zone_verify_test.php` mit Mutationsprobe; Publish-Abnahme (Lauf 31) bleibt gültig, Monitoring-Teil wird nach Rollout wiederholt (Abschnitt 5j) |
 | 23.11.2026 | Review PR #108, R3-Nachtrag: Vollständigkeit des Verifikationsobjekts (alle sechs Grundfelder vorhanden, fehlend ≠ `null`, `unknown` nur mit gültigem Grund); `conf_sync` unverändert nach E77; Tests P34–P43, Mutationen B22/B23 |
 | 23.11.2026 | Review PR #108: R2 – Zonenidentität des Verifikationsnachweises (`conf_sync` gegen die Zone des Versuchs, `zone_verify` gegen die angefragte Zone, DNS-Namensnormalisierung; fehlend/ungültig/abweichend nie `verified`); R3 – ungültige Monitoring-Verifikation wird verworfen statt als `unknown` gespeichert, vorhandene fehlerhaft geformte Rohwerte machen das Objekt ungültig; Abschnitt 5j, Tests P17–P33, J13/J14, M07–M09, Mutationen B17–B21 |

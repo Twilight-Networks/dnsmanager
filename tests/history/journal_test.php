@@ -497,9 +497,21 @@ if ($run('L')) {
         sleep(9);   // verzögerter Agent schließt ab
         $rep = J::publishAll($p);
         $a = J::targets($p, $aid);
-        T::eq(['success', 'abandoned', 'abandoned', 'ok', 'abandoned', 'abandoned', '1:0'],
-            [$rep['status'], J::runs($p)[0]['status'], $a[2]['zone_sync'], $a[1]['zone_sync'], $a[2]['conf_sync'], H2b::one($p, 'SELECT outcome FROM zone_publish_attempts WHERE id = ?', [$aid]), J::flags($p)['changed'][0]],
-            "{$id}e", 'nächster Lauf: J6 abandoned (Endzustand von Server 1 bleibt), Zone erneut veröffentlicht');
+        // AS5 (Ergänzung 3.1, D22): Das Write-ahead für Server 2 blieb ohne Abschluss ⇒ Zone gesperrt (serial_reference_lost);
+        // ein automatischer Wiederanlauf erfolgt nicht. Auflösung nur durch administrative Erfassung von F und D.
+        T::eq(['error', 'abandoned', 'abandoned', 'ok', 'abandoned', 'abandoned', true],
+            [$rep['status'], J::runs($p)[0]['status'], $a[2]['zone_sync'], $a[1]['zone_sync'], $a[2]['conf_sync'], H2b::one($p, 'SELECT outcome FROM zone_publish_attempts WHERE id = ?', [$aid]),
+                str_contains(json_encode($rep), 'serial_reference_lost')],
+            "{$id}e", 'nächster Lauf: J6 abandoned (Endzustand von Server 1 bleibt); AS5: offenes Write-ahead von Server 2 sperrt die Zone');
+        require_once H2b::$app . '/web/inc/app/publish/SerialReferenceAdminService.php';
+        $zn = (string)H2b::one($p, 'SELECT name FROM zones WHERE id = 1');
+        $sn = (string)H2b::one($p, 'SELECT name FROM servers WHERE id = 2');
+        $sv = (string)H2b::one($p, 'SELECT soa_serial FROM zones WHERE id = 1');
+        $adm = new SerialReferenceAdminService($p);
+        $adm->record(1, $zn, 2, $sn, $sv, null, 'Test: Datei-Serial nach Abbruch erhoben');
+        $adm->record(1, $zn, 2, $sn, null, $sv, 'Test: ausgelieferte Serial nach Abbruch erhoben');
+        $rep = J::publishAll($p);
+        T::eq(['success', '1:0'], [$rep['status'], J::flags($p)['changed'][0]], "{$id}f", 'AS5: nach administrativer Erfassung von F und D erneut veröffentlicht');
         $clean($p, $id);
     };
     $abort('L01', 'kill_connection');

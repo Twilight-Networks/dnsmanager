@@ -52,9 +52,9 @@ bizsum() {
 tables() { mariadb -N -B -e "SELECT IFNULL(GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME), '') FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_NAME IN ('history_change_sets','zone_snapshots','zone_revisions','zone_history_state')"; }
 # Bewertung der vier Tabellen aus Migration 002; history_dependencies (Migration 003, AP1/H2b) prüft migration003_test.sh,
 # audit_events (Migration 004, AP1/H2c) migration004_test.sh
-php_states() { php "$H/schemacheck.php" "$APP" "$1" | grep -v '^problem' | grep -v '^history_dependencies' | grep -v '^audit_events' | grep -vE '^(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results|zone_server_verification)' | cut -f2 | tr '\n' ' ' | sed 's/ $//'; }
-# AS4b: SchemaCheck::problems() ist strikt nach 007 – Befunde der späteren Migration 007 hier ausgefiltert
-php_problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -vE '^problem.(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results) fehlt$' | grep -v 'history_dependencies fehlt$' | grep -v 'audit_events fehlt$' | grep -v 'zone_server_verification fehlt$' | grep -v 'zones.soa_serial: Typ int(11) statt int(10) unsigned$' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2-; }
+php_states() { php "$H/schemacheck.php" "$APP" "$1" | grep -v '^problem' | grep -v '^history_dependencies' | grep -v '^audit_events' | grep -vE '^(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results|zone_server_verification|zone_serial_references)' | cut -f2 | tr '\n' ' ' | sed 's/ $//'; }
+# AS4b: SchemaCheck::problems() ist strikt nach 007 – Befunde der späteren Migration 007 hier ausgefiltert (AS5: ebenso 008)
+php_problems() { php "$H/schemacheck.php" "$APP" "$1" | grep '^problem' | grep -v 'zone_serial_references fehlt$' | grep -vE '^problem.(publish_runs|zone_publish_attempts|zone_publish_targets|publish_cleanup_results) fehlt$' | grep -v 'history_dependencies fehlt$' | grep -v 'audit_events fehlt$' | grep -v 'zone_server_verification fehlt$' | grep -v 'zones.soa_serial: Typ int(11) statt int(10) unsigned$' | grep -v 'system_status.fence_domain fehlt$' | grep -vE '(zone_publish_targets: Struktur weicht ab \(erwartet col\|zone_protocol\||publish_cleanup_results: Struktur weicht ab \(erwartet col\|cleanup_protocol\|)' | cut -f2-; }
 
 echo "== Migration 002 – $(mariadb -N -e 'SELECT VERSION()'), PHP $(php -r 'echo PHP_VERSION;')"
 
@@ -162,6 +162,7 @@ bash "$APP/scripts/migrate_004_audit_events.sh" --db "${H2A_PREFIX}m1" --apply -
 bash "$APP/scripts/migrate_005_publish_journal.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 005 auf m1"
 bash "$APP/scripts/migrate_006_zone_serial_verification.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 006 auf m1"
 bash "$APP/scripts/migrate_007_journal_agent_results.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/m7.out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 007 auf m1"
+bash "$APP/scripts/migrate_008_zone_serial_references.sh" --db "${H2A_PREFIX}m1" --apply --no-backup > "$W/m8.out" 2>&1 || ok 0 "M08c Vorbereitung: Migration 008 auf m1"   # AS5
 ok "$([ "$(sig "$D")" = "$(sig "${H2A_PREFIX}m1")" ] && echo 1)" "M08c Struktursignatur Neuinstallation = Migration 002 + 003 + 004 + 005 + 006 + 007 (byte-gleich)"
 
 echo "ERGEBNIS migration: $PASS bestanden, $FAIL fehlgeschlagen"

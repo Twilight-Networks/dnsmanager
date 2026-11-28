@@ -22,11 +22,19 @@
  * chk_zsv_verified_order). Die CHECKs aus AS3 bleiben unverändert wirksam. Fehler sind nicht sicherheitsrelevant (wie
  * J4): Rollback, Logzeile "[publish] Verifikation: …", Bericht; 1020/1213 einmal erneut, sonst keine Wiederholung. Das
  * operative Ergebnis bleibt unverändert.
+ *
+ * AS5 (D20–D23, docs/ARCHITECTURE_HISTORY.md Abschnitt 5k): Mit SerialReferenceStore wird jede angenommene Beobachtung in
+ * DERSELBEN Transaktion zusätzlich in zone_serial_references gespiegelt (mit Historie; der Datenvertrag dieser Tabelle und
+ * die Regeln oben bleiben unverändert). Eine nach dem Ordnungsvertrag abgewiesene oder ohne Laufberechtigung eingehende
+ * Beobachtung wird dort ohne gesicherte Ordnung (order_certain 0) festgehalten. Scheitert die Speicherung, wird eine
+ * Verlustmarke geschrieben (Ergebnis failed); scheitert auch diese, lautet das Ergebnis lost. Ob ein Lauf daraufhin endet,
+ * entscheidet der Aufrufer (PublishJournal: Abbruch, D22).
  */
 
 require_once __DIR__ . '/PublishLedger.php';
 require_once __DIR__ . '/PublishRun.php';
 require_once __DIR__ . '/RunLockLost.php';
+require_once __DIR__ . '/SerialReferenceStore.php';
 
 final class ServerVerificationStore
 {
@@ -43,11 +51,11 @@ final class ServerVerificationStore
     private PDO $pdo;
     private Closure $log;
     /** @var array<string, int> */
-    private array $counts = ['stored' => 0, 'stale' => 0, 'failed' => 0];
+    private array $counts = ['stored' => 0, 'stale' => 0, 'failed' => 0, 'lost' => 0];
     /** @var string[] */
     private array $errors = [];
 
-    public function __construct(PDO $pdo, ?callable $log = null)
+    public function __construct(PDO $pdo, ?callable $log = null, private readonly ?SerialReferenceStore $refs = null)
     {
         $this->pdo = $pdo;
         $this->log = $log !== null ? Closure::fromCallable($log) : static function (string $l, string $m): void {
@@ -72,7 +80,7 @@ final class ServerVerificationStore
      * Publish-Beobachtung (conf_sync, cleanup) im laufenden Lauf.
      *
      * @param array{state: string, reason?: ?string, served?: ?int, fileSerial?: ?int, fileHash?: ?string} $obs
-     * @return string stored | stale | failed
+     * @return string stored | stale | failed | lost (AS5: auch die Verlustmarke nicht speicherbar)
      */
     public function recordPublish(PublishLedger $ledger, PublishRun $run, string $method, int $zoneId, string $zoneName,
         int $serverId, string $serverName, array $obs, ?int $attemptId): string
@@ -94,7 +102,7 @@ final class ServerVerificationStore
     public function recordMonitoring(int $watermark, array $items): array
     {
         usort($items, static fn (array $a, array $b): int => [$a['zoneId'], $a['serverId']] <=> [$b['zoneId'], $b['serverId']]);
-        $n = ['stored' => 0, 'stale' => 0, 'failed' => 0];
+        $n = ['stored' => 0, 'stale' => 0, 'failed' => 0, 'lost' => 0];
         foreach ($items as $it) {
             $r = $this->write('monitoring', $watermark, null, null, (int)$it['zoneId'], (string)$it['zoneName'],
                 (int)$it['serverId'], (string)$it['serverName'], $it['obs'], null);
@@ -102,6 +110,39 @@ final class ServerVerificationStore
         }
 
         return $n;
+    }
+
+    /**
+     * AS5 (E87): Lesemethode für die Serial-Referenzermittlung (SerialReferenceReader) – alle Zeilen eines normalisierten
+     * Zonennamens (auch gelöschter Vorgänger) für die gegebenen Server. Nicht sperrend.
+     *
+     * @param list<int> $serverIds
+     * @return list<array<string, mixed>>
+     */
+    public function rowsForName(string $normName, array $serverIds): array
+    {
+        if ($serverIds === []) {
+            return [];
+        }
+        $in = implode(',', array_fill(0, count($serverIds), '?'));
+        $stmt = $this->pdo->prepare("SELECT * FROM zone_server_verification WHERE LOWER(TRIM(TRAILING '.' FROM zone_name)) = ?"
+            . " AND server_id IN ($in) ORDER BY zone_id, server_id");
+        $stmt->execute(array_merge([$normName], array_map('intval', $serverIds)));
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
+
+        return $rows;
+    }
+
+    /** AS5 (D5, E87): Server mit Zeilen für einen normalisierten Zonennamen */
+    public function serverIdsForName(string $normName): array
+    {
+        $stmt = $this->pdo->prepare("SELECT DISTINCT server_id FROM zone_server_verification WHERE LOWER(TRIM(TRAILING '.' FROM zone_name)) = ?");
+        $stmt->execute([$normName]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $stmt->closeCursor();
+
+        return $ids;
     }
 
     /**
@@ -190,8 +231,7 @@ final class ServerVerificationStore
                     $reason = null;
                 }
                 $this->pdo->beginTransaction();
-                $stmt = $this->pdo->prepare('SELECT last_run_id, last_method, last_observed_at FROM zone_server_verification'
-                    . ' WHERE zone_id = ? AND server_id = ? FOR UPDATE');
+                $stmt = $this->pdo->prepare('SELECT * FROM zone_server_verification WHERE zone_id = ? AND server_id = ? FOR UPDATE');
                 $stmt->execute([$zoneId, $serverId]);
                 $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
                 $stmt->closeCursor();
@@ -203,6 +243,7 @@ final class ServerVerificationStore
                     $this->counts['stale']++;
                     ($this->log)('info', "[publish] Verifikation: $what veraltet (Schlüssel $orderKey/$method, vorhanden "
                         . ($row['last_run_id'] ?? 0) . '/' . $row['last_method'] . ') – nicht gespeichert');
+                    $this->uncertain($method, $orderKey, $attemptId, $zoneId, $zoneName, $serverId, $serverName, $obs, $what);
                     return 'stale';
                 }
                 $stmt = $this->pdo->prepare('SELECT GREATEST(NOW(6), COALESCE(?, NOW(6)))');
@@ -217,6 +258,9 @@ final class ServerVerificationStore
                     // positiver Nachweis = genau diese Beobachtung (chk_zsv_verified_current)
                     $last += ['verified_serial' => $served, 'verified_file_hash' => $fh, 'verified_run_id' => $proofRunId, 'verified_at' => $at];
                 }
+                // AS5 (D20): dieselbe Beobachtung mit Historie in zone_serial_references (gleiche Transaktion)
+                $this->refs?->mirrorObservation($row, $method, $orderKey, $attemptId, $zoneId, $zoneName, $serverId, $serverName,
+                    ['state' => $obs['state'], 'reason' => $reason, 'served' => $served, 'fileSerial' => $fs, 'fileHash' => $fh]);
                 if ($row === null) {
                     $cols = array_merge(['zone_id', 'server_id'], array_keys($last));
                     $this->pdo->prepare('INSERT INTO zone_server_verification (' . implode(', ', $cols) . ') VALUES ('
@@ -233,6 +277,7 @@ final class ServerVerificationStore
                 $this->rollbackQuietly();
                 $this->counts['stale']++;
                 ($this->log)('warning', "[publish] Verifikation: $what ohne Laufberechtigung – nicht gespeichert");
+                $this->uncertain($method, $orderKey, $attemptId, $zoneId, $zoneName, $serverId, $serverName, $obs, $what);
                 return 'stale';
             } catch (Throwable $e) {
                 $this->rollbackQuietly();
@@ -243,11 +288,55 @@ final class ServerVerificationStore
                 $this->counts['failed']++;
                 $this->errors[] = "$what: " . $e->getMessage();
                 ($this->log)('warning', "[publish] Verifikation: $what – " . $e->getMessage());
-                return 'failed';
+                return $this->loss($orderKey, $method === 'conf_sync' ? $attemptId : null, $zoneId, $zoneName, $serverId, $serverName,
+                    'observation_not_stored', $what);
             }
         }
 
         return 'failed';
+    }
+
+    /**
+     * AS5 (D23): nicht angenommene Beobachtung ohne gesicherte Ordnung festhalten (Messwerte gehen nicht verloren, lösen
+     * aber nichts ab). Scheitert das, Verlustmarke.
+     */
+    private function uncertain(string $method, int $orderKey, ?int $attemptId, int $zoneId, string $zoneName, int $serverId,
+        string $serverName, array $obs, string $what): void
+    {
+        if ($this->refs === null) {
+            return;
+        }
+        try {
+            [$served, $fs, $fh] = self::lastFields($obs);
+            $reason = $obs['reason'] ?? null;
+            if ($reason !== null && preg_match('/^[a-z0-9_:]{1,64}$/D', $reason) !== 1) {
+                $reason = null;
+            }
+            $this->refs->recordUncertain($method, $orderKey, $attemptId, $zoneId, $zoneName, $serverId, $serverName,
+                ['state' => $obs['state'], 'reason' => $reason, 'served' => $served, 'fileSerial' => $fs, 'fileHash' => $fh]);
+        } catch (Throwable $e) {
+            ($this->log)('warning', "[publish] Verifikation: $what – ungeordnete Serial-Referenz nicht gespeichert: " . $e->getMessage());
+            $this->loss($orderKey, $method === 'conf_sync' ? $attemptId : null, $zoneId, $zoneName, $serverId, $serverName,
+                'uncertain_not_stored', $what);
+        }
+    }
+
+    /** AS5 (D22): Verlustmarke; Ergebnis failed (Marke gespeichert) bzw. lost (auch die Marke fehlt) */
+    private function loss(int $runKey, ?int $attemptId, int $zoneId, string $zoneName, int $serverId, string $serverName,
+        string $reason, string $what): string
+    {
+        if ($this->refs === null) {
+            return 'failed';
+        }
+        try {
+            $this->refs->recordLoss($runKey, $attemptId, $zoneId, $zoneName, $serverId, $serverName, $reason);
+            return 'failed';
+        } catch (Throwable $e) {
+            $this->counts['lost']++;
+            $this->errors[] = "$what: Verlustmarke nicht gespeichert: " . $e->getMessage();
+            ($this->log)('error', "[publish] Verifikation: $what – Verlustmarke nicht gespeichert: " . $e->getMessage());
+            return 'lost';
+        }
     }
 
     private function rollbackQuietly(): void
