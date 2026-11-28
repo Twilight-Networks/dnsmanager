@@ -25,8 +25,9 @@
  *   erzeugen keine Beobachtung. Schreibfehler ändern das operative Ergebnis nicht.
  *
  * AS5 (D20–D23, docs/ARCHITECTURE_HISTORY.md Abschnitt 5k) – Serial-Referenzen (SerialReferenceStore):
- * - beforeZoneSync(): Laufprüfung (E83) und Write-ahead intent VOR jedem zone_sync. Scheitert das intent, unterbleibt
- *   der Aufruf (SerialReferenceLost, Ziel serial_intent_failed, sicher nicht gesendet) und der Lauf endet (exception).
+ * - beforeZoneSync(): Laufprüfung (E83), Write-ahead intent und erneute Laufprüfung VOR jedem zone_sync. Scheitert das
+ *   intent, unterbleibt der Aufruf (SerialReferenceLost, Ziel serial_intent_failed, sicher nicht gesendet); geht die
+ *   Laufberechtigung nach dem intent verloren, ebenso (RunLockLost, run_lock_lost). Der Lauf endet (exception).
  * - zoneResult(): schließt das intent ab – gültiger serial_check als Rohwert (agent_check), sonst no_report; ein
  *   vorhandener, aber ungültiger Bericht ist eine Verlustmarke. order_certain nur, wenn der Lauf nach der Antwort noch
  *   beide Sperren hält (verspätete Antwort ⇒ 0, D23). Danach unverändert J4.
@@ -105,6 +106,10 @@ final class PublishJournal
             }
             $this->intents[$attempt['attemptId'] . ':' . $serverId] = true;
             $this->serialRefs['intent']++;
+            // Review AS5 (Punkt 4, E83): Laufberechtigung nach dem Write-ahead erneut prüfen. Ging sie dazwischen verloren,
+            // folgt kein Agent-Aufruf (RunLockLost ⇒ Ziel run_lock_lost, sicher nicht gesendet); das intent wird mit
+            // no_report/not_sent abgeschlossen, soweit die Verbindung das noch zulässt – sonst bleibt es offen (Sperre).
+            $this->ledger->assertRunAlive($this->run);
         }
 
         return $fields;

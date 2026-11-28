@@ -4,6 +4,9 @@
 #        genau eine Schutzregel in einer Kopie der Anwendung; die zugehörigen Tests müssen sie erkennen (rot werden):
 #        Gruppe "pure" ⇒ as5_pure_test.php, sonst die Gruppen von as5_test.php (AS5_ONLY, REPEATABLE READ).
 #        Eine nicht erkannte Mutation ist ein Fehler dieser Suite. Nur auf zuvor grüner Basis ausführen (run.sh).
+#        Review AS5 (Punkt 5): Erkannt ist eine Mutation nur, wenn ein ERWARTETER Testfall mit der erwarteten Ursache
+#        fehlschlägt (EXPECT: regulärer Ausdruck auf die FAIL-Zeile). Ein PHP-Abbruch ohne diese FAIL-Zeile zählt nicht.
+#        Vor den Mutationen muss die unveränderte Basis in beiden Suiten grün sein.
 #
 # Aufruf (als root auf dem Testsystem): bash as5_mutation_test.sh <App-Verzeichnis> <AS4b-App-Verzeichnis>
 
@@ -15,8 +18,21 @@ trap 'rm -rf "$W"' EXIT
 PASS=0; FAIL=0
 ok() { if [ "$1" = 1 ]; then PASS=$((PASS + 1)); echo "  ok   $2"; else FAIL=$((FAIL + 1)); echo "  FAIL $2"; fi; }
 
-# Basis muss grün sein (keine Mutationsprobe auf roter Basis)
+# Basis muss grün sein (keine Mutationsprobe auf roter Basis): reine Tests und alle Datenbankgruppen (RR)
 php "$APP/tests/history/as5_pure_test.php" "$APP" > "$W/base.log" 2>&1 || { echo "ABBRUCH: reine Tests auf der Basis nicht grün"; tail -5 "$W/base.log"; exit 1; }
+php "$APP/tests/history/as5_test.php" "$APP" RR "$BASEAPP" > "$W/base_db.log" 2>&1 || { echo "ABBRUCH: as5_test.php auf der Basis nicht grün"; grep '^  FAIL' "$W/base_db.log" | head -5; exit 1; }
+echo "  ok   Basis grün: $(tail -1 "$W/base.log"); $(tail -1 "$W/base_db.log")"
+
+# Erwartete Fehlschläge je Mutation (regulärer Ausdruck auf "<Fall-ID> <Text>" der FAIL-Zeile)
+declare -A EXPECT=(
+    [C01]='^R01 ' [C02]='^R0[12] ' [C03]='^(V01|B01|B02) ' [C04]='^(V01|V02) .*' [C05]='^V01 .*Invariante'
+    [C06]='^G09 ' [C07]='^(P01|P03|P04) ' [C08]='^(M05|M18|M21|M22|M25) ' [C09]='^L0[12] ' [C10]='^E05 '
+    [C11]='^(W06|W08) ' [C12]='^(W03|W07) ' [C13]='^E08 ' [C14]='^P03b ' [C15]='^(E07|P04) ' [C16]='^E01 '
+    [C17]='^G05 ' [C18]='^G06 ' [C19]='^G07 ' [C20]='^(W02|W03|W07) ' [C21]='^W06 ' [C22]='^(W03|W06) '
+    [C24]='^X07 ' [C25]='^X03 ' [C26]='^N04 ' [C27]='^(A03|W05) ' [C28]='^A02 .*Audit-Ereignis ohne Änderungsmenge'
+    [C29]='^N01 ' [C30]='^C03 .*\[\[\],"exception"\]' [C31]='^(G03|G04|G08) '
+    [C32]='^N06 ' [C33]='^M23 ' [C35]='^G08 ' [C36]='^MM02 ' [C37]='^MM01 ' [C38]='^MM03 '
+)
 
 # mutate <ID> <Datei relativ> <alt> <neu> <Gruppen> <Beschreibung>
 mutate() {
@@ -35,11 +51,15 @@ mutate() {
     if [ -n "$db" ]; then
         AS5_ONLY="$db" php "$m/tests/history/as5_test.php" "$m" RR "$BASEAPP" >> "$W/$id.log" 2>&1 || rc=1
     fi
-    hits=$(grep -c '^  FAIL' "$W/$id.log")
-    if [ "$rc" != 0 ] && { [ "$hits" -gt 0 ] || grep -q 'PHP Fatal' "$W/$id.log"; }; then
-        ok 1 "$id erkannt – $desc ($(grep -m3 '^  FAIL' "$W/$id.log" | sed -E 's/^  FAIL (\[R.\] )?//' | awk '{print $1}' | tr '\n' ' '))"
+    local want="${EXPECT[$id]:-}"
+    [ -n "$want" ] || { ok 0 "$id ohne Erwartung (EXPECT fehlt)"; rm -rf "$m"; return; }
+    hits="$(grep '^  FAIL' "$W/$id.log" | sed -E 's/^  FAIL (\[R.\] )?//' | grep -E "$want" | head -3)"
+    if [ "$rc" != 0 ] && [ -n "$hits" ]; then
+        ok 1 "$id erkannt – $desc ($(echo "$hits" | awk '{print $1}' | tr '\n' ' '))"
+        echo "       Ursache: $(echo "$hits" | head -1 | cut -c1-240)"
     else
-        ok 0 "$id NICHT erkannt – $desc (Exit $rc)"; tail -5 "$W/$id.log" | sed 's/^/       /'
+        ok 0 "$id NICHT erkannt – $desc (Exit $rc, erwartet: $want)"
+        { grep -E '^  FAIL|PHP Fatal' "$W/$id.log" | head -4; tail -2 "$W/$id.log"; } | sed 's/^/       /'
     fi
     rm -rf "$m"
 }
@@ -88,8 +108,35 @@ mutate C26 "$A" '        if ($got === null || $got === false || (int)$got !== 1)
 mutate C27 "$R" '        return $f && $d;' '        return $f || $d;' pure,W 'Sperre schon mit einem Bestandteil aufgelöst'
 mutate C28 "$A" '                $audit->finish();' '' A 'Erfassung ohne Audit-Ereignis'
 mutate C29 "$J" '            $certain = false;   // verspätete Antwort nach Lock-Verlust (D23)' '            $certain = true;' N 'verspätete Antwort als geordnet gespeichert (D23)'
-mutate C30 web/inc/app/SchemaCheck.php "        'zone_serial_references' => [" "        'zone_serial_references_x' => [" C 'SchemaCheck prüft die Tabelle aus 008 nicht'
+mutate C30 web/inc/app/SchemaCheck.php '        foreach (self::HISTORY_TABLES as $table => $expected) {' '        foreach (self::HISTORY_TABLES as $table => $expected) {
+            if ($table === '"'"'zone_serial_references'"'"') {
+                continue;
+            }' C 'SchemaCheck prüft die Tabelle aus 008 nicht (fehlende Tabelle ohne Befund)'
 mutate C31 "$G" "            \$choice = SerialReferenceReader::selectSerial(\$pdo, \$zone, date('Ymd'));" "            \$choice = SerialPolicy::decide([(int)\$zone['soa_serial']], SerialPolicy::calendarCandidate(date('Ymd'))) + ['blocks' => []];" G,P,W 'nur DB-Serial als Referenz (Referenzmenge umgangen)'
+
+MS=web/inc/app/monitoring/MonitoringService.php
+# Review AS5: E83, leere Anker, D5, Monitoring-Persistenz
+mutate C32 "$J" '            $this->ledger->assertRunAlive($this->run);
+        }
+
+        return $fields;' '        }
+
+        return $fields;' N 'keine Laufprüfung nach dem Write-ahead (E83)'
+mutate C33 "$R" '            if (!$later) {
+                continue;
+            }' '            if (!$later) {
+                continue;
+            }
+            if ($a['"'"'values'"'"'] === []) {
+                return true;
+            }' pure 'leerer Anker löscht frühere numerische Referenzen'
+mutate C35 "$R" "        \$serverIds = array_values(array_unique(array_merge(array_map('intval', array_keys(\$targets)), \$this->referencedServers(\$name))));" "        \$serverIds = array_map('intval', array_keys(\$targets));" G 'ehemalige Zielserver nicht bindend (D5)'
+mutate C36 "$MS" '                    $refs->recordLoss($watermark, null, (int)$it['"'"'zoneId'"'"'],' '                    (fn (...$x) => 0)($watermark, null, (int)$it['"'"'zoneId'"'"'],' M 'gescheiterte ungeordnete Monitoring-Speicherung ohne Verlustmarke'
+mutate C37 "$MS" '            if ($locked) {
+                $refs->ensureEpoch($watermark);   // AS5: Epoche vor beiden Zweigen
+            }
+' '' M 'keine Epoche bei verändertem Wasserstand'
+mutate C38 "$MS" "                \$m[] = new ServiceMessage('error', 'monitoring.serial_reference_lost', [" "                \$ignored = new ServiceMessage('error', 'monitoring.serial_reference_lost', [" M 'Verlust ohne Meldung'
 
 echo "ERGEBNIS as5_mutation: $PASS erkannt, $FAIL nicht erkannt"
 exit $([ "$FAIL" = 0 ] && echo 0 || echo 1)

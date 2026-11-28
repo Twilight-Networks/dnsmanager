@@ -62,7 +62,7 @@ try {
             echo "\nZone {$z['name']} (ID {$z['id']}): DB-Serial {$z['db']}" . ($z['changed'] !== 0 ? ', ausstehend' : '')
                 . ($z['latestAttempt'] !== null ? ", zuletzt registriert {$z['latestAttempt']['serial']} (Versuch {$z['latestAttempt']['id']})" : '') . "\n";
             foreach ($z['pairs'] as $sid => $p) {
-                echo "  Ziel {$p['name']} (ID $sid): F {" . implode(', ', $p['F']) . '}, D {' . implode(', ', $p['D']) . '}' . "\n";
+                echo '  ' . ($p['target'] ? 'Ziel' : 'ehemaliges Ziel (bindend, D5)') . " {$p['name']} (ID $sid): F {" . implode(', ', $p['F']) . '}, D {' . implode(', ', $p['D']) . '}' . "\n";
                 foreach ($p['blocks'] as $b) {
                     echo "    SPERRE {$b['reason']}: {$b['detail']}\n";
                 }
@@ -76,7 +76,7 @@ try {
             }
         }
         if ($s['dormant'] !== []) {
-            echo "\nRuhende Paare (kein aktuelles Ziel; binden erst bei erneuter Zuweisung):\n";
+            echo "\nPaare anderer Zonennamen ohne aktuelle Zone:\n";
             foreach ($s['dormant'] as $p) {
                 echo "  {$p['zone']} auf {$p['serverName']} (ID {$p['serverId']}): {$p['rows']} Einträge\n";
             }

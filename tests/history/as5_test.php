@@ -22,6 +22,9 @@
  *      keine Aufhebung von serial_unresolvable, Status
  *   S  Publish-Sperre (D24): fehlende FENCE_DOMAIN unterbindet Publish All, Publish Zone und DynDNS-Publish; Admin bleibt
  *   C  Code × Schema: AS5 nach 008 ohne Befund, ohne 008 fail-closed; AS4b-Code auf Schema 008 ohne Befund
+ *   M  Monitoring-Persistenz (Review Punkt 3): erster AS5-Schreibvorgang bei verändertem Wasserstand mit gleichzeitigem
+ *      AS4b-Lauf (Epoche, ungeordnete Werte, Rückfallerkennung), gescheiterte ungeordnete Speicherung (Verlustmarke),
+ *      gescheiterte Verlustmarke (Meldung monitoring.serial_reference_lost)
  *
  * Aufruf (root, Testsystem): php as5_test.php <App-Verzeichnis> <RR|RC> <AS4b-App-Verzeichnis (Rückfallstand)>
  * Umgebung: AS5_ONLY=G,W,… beschränkt auf Gruppen (Mutationsproben).
@@ -43,6 +46,7 @@ foreach (['FenceContext', 'SerialNumber', 'SerialPolicy', 'SerialReferenceStore'
 require_once "$app/web/inc/deploy/LegacyBindPublishBackend.php";
 require_once "$app/web/inc/deploy/bind_file_generator.php";
 require_once "$app/web/inc/app/monitoring/MonitoringService.php";
+require_once "$app/web/inc/deploy/AgentMonitoringBackend.php";
 require_once "$app/web/inc/app/SchemaCheck.php";
 require_once __DIR__ . '/as5_fake_agent.php';
 
@@ -208,6 +212,44 @@ if ($group('G')) {
     $pdo->query("SELECT RELEASE_LOCK('dnsmanager_publish_all')")->fetchColumn();
     t('G07 D9: Versuch mit nicht neuerer Serial (gleich der DB-Serial) abgewiesen, Rollback', $g['status'] === 'error'
         && str_contains($g['output'], 'D9') && $serial($pdo, 2) === $s2 && $clean($pdo), $g['output']);
+    // D5 (Review Punkt 2): ehemaliger Zielserver ns1 meldet 4.000.000.000; Zone gelöscht und mit ausschließlich ns2 neu angelegt
+    $pdo = H2b::reset(true);
+    $pdo->exec('UPDATE zones SET soa_serial = 1999999999 WHERE id = 4');
+    $publish($pdo, new As5FakeAgent(), 4);
+    $s4 = $serial($pdo, 4);
+    $monitor($pdo, $W($pdo), 4, 'gamma.h2b.test', 1, 'still_served', null, 4000000000);
+    $pdo->exec('DELETE FROM zones WHERE id = 4');
+    $pdo->exec("INSERT INTO zones (id, name, type, ttl, prefix_length, description, soa_ns, soa_mail, soa_refresh, soa_retry, soa_expire, soa_minimum,"
+        . " soa_serial, changed, allow_dyndns) VALUES (8, 'Gamma.h2b.test', 'forward', 3600, NULL, NULL, 'ns2.h2b.test.', 'hostmaster.h2b.test.',"
+        . " 3600, 1800, 1209600, 86400, $K, 1, 0)");
+    $pdo->exec('INSERT INTO zone_servers (zone_id, server_id, is_master) VALUES (8, 2, 1)');
+    $pdo->exec("INSERT INTO records (zone_id, name, type, content, ttl, server_id) VALUES (8, '@', 'NS', 'ns2.h2b.test.', 3600, 2)");
+    $st = $set($pdo, 8);
+    $r = $publish($pdo, new As5FakeAgent(), 8);
+    $n8 = $serial($pdo, 8);
+    t('G08 D5: ehemaliger Zielserver bleibt bindend – neue Zone gleichen Namens nur auf ns2, Serial newer als 4.000.000.000 und als der letzte Publish',
+        abs($s4 - 2000000000) < 100000000 && $r['status'] === 'published' && $n8 === 4000000001 && SerialNumber::newerThanAll($n8, [4000000000, $s4])
+        && ($st['pairs'][1]['target'] ?? true) === false && in_array(4000000000, $pairVals($st, 1, 'D'), true) && $st['blocks'] === [],
+        json_encode([$s4, $r['status'], $n8, $st['pairs'][1] ?? null]));
+    // D19 als einzige Quelle (Review AS5, Mutationsnachweis C06): Versuch registriert, aber nie gesendet (intent nicht
+    // speicherbar ⇒ kein zone_sync, keine Paarreferenz); Zone gelöscht und gleichen Namens neu angelegt
+    $pdo = H2b::reset(true);
+    $pdo->exec('UPDATE zones SET soa_serial = 2999999999 WHERE id = 4');
+    $trigger($pdo, "NEW.source = 'intent'");
+    $a = new As5FakeAgent();
+    $r = $publish($pdo, $a, 4);
+    $noTrigger($pdo);
+    $at = $lastAttempt($pdo, 4);
+    $pdo->exec('DELETE FROM zones WHERE id = 4');
+    $pdo->exec("INSERT INTO zones (id, name, type, ttl, prefix_length, description, soa_ns, soa_mail, soa_refresh, soa_retry, soa_expire, soa_minimum,"
+        . " soa_serial, changed, allow_dyndns) VALUES (9, 'GAMMA.h2b.test.', 'forward', 3600, NULL, NULL, 'ns1.h2b.test.', 'hostmaster.h2b.test.',"
+        . " 3600, 1800, 1209600, 86400, $K, 1, 0)");
+    $pdo->exec('INSERT INTO zone_servers (zone_id, server_id, is_master) VALUES (9, 1, 1)');
+    $pdo->exec("INSERT INTO records (zone_id, name, type, content, ttl, server_id) VALUES (9, '@', 'NS', 'ns1.h2b.test.', 3600, 1)");
+    $d = $decide($pdo, 9);
+    t('G09 D19 einzige Quelle: nie gesendeter Versuch 3.000.000.000 bindet die Neuanlage gleichen Namens (3.000.000.001)',
+        $r['status'] === 'exception' && $a->syncs() === [] && (int)($at['soa_serial'] ?? 0) === 3000000000 && $d['ok'] && $d['serial'] === 3000000001,
+        json_encode([$r['status'], $at['soa_serial'] ?? null, $d]));
 }
 
 // ---------------------------------------------------------------- W: Write-ahead und Persistenz
@@ -326,8 +368,9 @@ if ($group('P')) {
     $n1 = count($refs($pdo, "source = 'monitoring'"));
     $monitor($pdo, $W($pdo), 2, 'beta.h2b.test', 1, 'verified', 100, 100);
     $s = $set($pdo, 2);
-    t('P03 Monitoring 100 → Publish → Monitoring 100: zweite Messung wird gespeichert und bleibt Anker', count($refs($pdo, "source = 'monitoring'")) === $n1 + 1
-        && $pairVals($mid, 1, 'D') === [100, $N] && $pairVals($s, 1, 'D') === [100] && $pairVals($s, 1, 'F') === [100],
+    t('P03 Monitoring 100 → Publish → Monitoring 100: zweite Messung wird gespeichert und bleibt Anker; die neuere Publish-Serial bleibt bindend (RFC)',
+        count($refs($pdo, "source = 'monitoring'")) === $n1 + 1 && $pairVals($mid, 1, 'D') === [100, $N] && $pairVals($s, 1, 'D') === [100, $N]
+        && $pairVals($s, 1, 'F') === [100, $N] && $decide($pdo, 2)['serial'] === $N + 1,
         json_encode([$mid['pairs'][1]['D'] ?? null, $s['pairs'][1] ?? null]));
     // Zwischenereignis ohne Referenzzeile des Paars (Lauf des AS4b-Codes): neuer Wasserstand ⇒ keine Deduplizierung
     $n2 = count($refs($pdo, "source = 'monitoring'"));
@@ -512,7 +555,7 @@ if ($group('N')) {
     $res = $store($W($pdo) + 1, [['zoneId' => 2, 'zoneName' => 'beta.h2b.test', 'serverId' => 1, 'serverName' => 'ns1.h2b.test',
         'obs' => ['state' => 'still_served', 'reason' => null, 'served' => 777, 'fileSerial' => null, 'fileHash' => null]]]);
     $u = $refs($pdo, "source = 'monitoring'");
-    t('N03 verworfener Wasserstand: keine Beobachtung im Store, Messwert ungeordnet festgehalten', $res === null
+    t('N03 verworfener Wasserstand: keine Beobachtung im Store, Messwert ungeordnet festgehalten', ($res['discarded'] ?? null) === true && $res['uncertain'] === 1
         && (int)$one($pdo, 'SELECT COUNT(*) FROM zone_server_verification') === 0 && count($u) === 1 && (int)$u[0]['order_certain'] === 0
         && in_array(777, $pairVals($set($pdo, 2), 1, 'D'), true));
     // Admin bei belegtem Publish-Lock
@@ -544,8 +587,85 @@ if ($group('N')) {
     $b->commit();
     $res = $join($wp);
     @unlink($mark);
+    $n05 = true;
     t('N05 Publish wartet auf die Zonensperre (Lock-Wait) und berücksichtigt den danach festgeschriebenen Referenzwert',
         $waits > 0 && ($res['status'] ?? '') === 'published' && $serial($pdo, 2) === $Y + 1, json_encode([$waits, $res, $serial($pdo, 2)]));
+    // E83 (Review Punkt 4): Lock-Verlust zwischen Write-ahead und HTTP-Aufruf (Trigger gibt den Publish-Lock frei)
+    $pdo = H2b::reset(true);
+    $pdo->exec("CREATE TRIGGER as5_e83 AFTER INSERT ON zone_serial_references FOR EACH ROW DO IF(NEW.source = 'intent', RELEASE_LOCK('dnsmanager_publish_all'), 0)");
+    $a = new As5FakeAgent();
+    $a->modes = [IP1 => 'observe'];
+    $r = $publish($pdo, $a, 2);
+    $pdo->exec('DROP TRIGGER as5_e83');
+    $tg = $all($pdo, 'SELECT * FROM zone_publish_targets WHERE attempt_id = ?', [(int)$lastAttempt($pdo, 2)['id']])[0] ?? [];
+    $nr = $refs($pdo, "source = 'no_report'");
+    $d = $decide($pdo, 2);
+    t('N06 E83: Laufberechtigung nach dem Write-ahead verloren ⇒ kein zone_sync, Ziel run_lock_lost, intent mit not_sent abgeschlossen, keine Sperre',
+        $r['status'] === 'exception' && $a->syncs() === [] && ($tg['zone_sync'] ?? '') === 'failed' && ($tg['zone_error_code'] ?? '') === 'run_lock_lost'
+        && count($refs($pdo, "source = 'intent'")) === 1 && count($nr) === 1 && $nr[0]['reason'] === 'not_sent' && (int)$nr[0]['order_certain'] === 0
+        && $d['ok'] && $clean($pdo), json_encode([$r['status'], count($a->syncs()), $tg['zone_error_code'] ?? null, $nr, $d['reason'] ?? null]));
+}
+
+// ---------------------------------------------------------------- M: Monitoring-Persistenz (Review Punkt 3)
+if ($group('M')) {
+    $mkMon = static function (PDO $p) {
+        return new MonitoringService($p, new class implements MonitoringBackend {
+            public function serverStatus(array $server): array { return []; }
+            public function zoneConfStatus(array $server): array { return []; }
+            public function zoneStatus(string $zoneName, array $server): array { return []; }
+        }, new class implements MonitoringNotifier {
+            public function send(string $subject, string $body): array { return ['status' => 'ok']; }
+        }, false);
+    };
+    $item = static fn (int $served): array => ['zoneId' => 2, 'zoneName' => 'beta.h2b.test', 'serverId' => 1, 'serverName' => 'ns1.h2b.test',
+        'obs' => ['state' => 'still_served', 'reason' => null, 'served' => $served, 'fileSerial' => null, 'fileHash' => null]];
+    $storeVia = static fn (MonitoringService $m, int $w, array $items) => Closure::bind(fn () => $this->storeUnderPublishLock($w, $items), $m, MonitoringService::class)();
+    // MM01: erster AS5-Schreibvorgang bei verändertem Wasserstand; dazwischen ein Lauf des AS4b-Codes (as2)
+    $pdo = H2b::reset(true);
+    $w0 = $W($pdo);
+    $wk = $join($worker($baseApp, 'publish', '2', IP1 . '=observe'));
+    $res = $storeVia($mkMon($pdo), $w0, [$item(777)]);
+    $ep = $refs($pdo, "source = 'epoch'");
+    $s = $set($pdo, 2);
+    t('MM01 verändertem Wasserstand: Epoche (W) vor dem Zweig, Messwert ungeordnet gespeichert, AS4b-Lauf danach als Lücke erkannt',
+        ($wk['status'] ?? '') === 'published' && $res['discarded'] === true && $res['uncertain'] === 1 && count($ep) === 1 && (int)$ep[0]['run_key'] === $w0
+        && in_array(777, $pairVals($s, 1, 'D'), true) && array_filter($s['blocks'], static fn (array $b): bool => str_contains($b['detail'], 'ohne AS5-Laufmarke')) !== [],
+        json_encode([$wk, $res, $ep, $s['blocks']]));
+    // MM02: ungeordnete Speicherung scheitert ⇒ Verlustmarke (Paar gesperrt)
+    $pdo = H2b::reset(true);
+    $trigger($pdo, "NEW.source = 'monitoring'");
+    $res = $storeVia($mkMon($pdo), $W($pdo) + 5, [$item(888)]);
+    $noTrigger($pdo);
+    $d = $decide($pdo, 2);
+    t('MM02 gescheiterte ungeordnete Speicherung ⇒ Verlustmarke monitoring_not_stored, Zone gesperrt (nicht still verworfen)',
+        $res['discarded'] === true && $res['uncertain'] === 0 && $res['lossMarked'] === 1 && $res['lost'] === 0
+        && count($refs($pdo, "source = 'loss' AND reason = 'monitoring_not_stored'")) === 1 && !$d['ok'] && $d['reason'] === 'serial_reference_lost', json_encode([$res, $d]));
+    // MM03: auch die Verlustmarke scheitert ⇒ Meldung monitoring.serial_reference_lost im Monitoring-Lauf
+    $pdo = H2b::reset(true);
+    $ag = new As5FakeAgent();
+    $ag->modes = [IP1 => 'observe'];
+    $ag->status[IP1] = ['status' => 'ok', 'capabilities' => ['fencing' => 1, 'zone_verify' => 1], 'fencing' => ['mode' => 'observe']];
+    $ag->file[IP1 . '|beta.h2b.test'] = ['serial' => 2026111801, 'sha' => str_repeat('a', 64)];
+    $ag->served[IP1 . '|beta.h2b.test'] = 2026111801;
+    $once = false;
+    $ins = H2b::pdo();
+    $ag->hook = static function (string $ep) use (&$once, $ins): void {
+        if ($ep === '/zones/zone_verify.php' && !$once) {
+            $once = true;   // gleichzeitiger Lauf eines anderen Codestands: Wasserstand ändert sich während der Abfragen
+            $ins->exec("INSERT INTO publish_runs (kind, full_rebuild, connection_id, history_watermark, actor_type, channel, correlation_id, status, result, finished_at)"
+                . " VALUES ('all', 0, 1, 0, 'system', 'cli', '11111111-1111-4111-8111-111111111111', 'finished', 'success', NOW(6))");
+        }
+    };
+    $trigger($pdo, "NEW.source IN ('monitoring', 'loss')");
+    $run = (new MonitoringService($pdo, new AgentMonitoringBackend($ag, false), new class implements MonitoringNotifier {
+        public function send(string $subject, string $body): array { return ['status' => 'ok']; }
+    }, false))->run();
+    $noTrigger($pdo);
+    $codes = array_map(static fn (ServiceMessage $m): string => $m->code, $run->messages);
+    $l3 = $run->messages[array_key_last($run->messages)]->context['report']['l3'] ?? ($run->messages[array_key_last($run->messages)]->context['l3'] ?? null);
+    t('MM03 gescheiterte Verlustmarke ⇒ Meldung monitoring.serial_reference_lost (Logzeile im Adapter), Wasserstand verworfen',
+        in_array('monitoring.serial_reference_lost', $codes, true) && count($refs($pdo, "source IN ('monitoring', 'loss')")) === 0, json_encode([$codes, $l3]));
+    $pdo->exec("DELETE FROM publish_runs WHERE correlation_id = '11111111-1111-4111-8111-111111111111'");
 }
 
 // ---------------------------------------------------------------- A: Administrative Erfassung
@@ -583,9 +703,14 @@ if ($group('A')) {
     }
     t('A01 Ablehnungen ohne Änderung (' . count($cases) . ' Fälle: Identität, F/D, Wertebereich, Herkunft)', $bad === []
         && count($refs($pdo)) === 0 && (int)$one($pdo, 'SELECT COUNT(*) FROM audit_events') === $ae0 && $clean($pdo), implode(', ', $bad));
-    $id0 = $admin($pdo)->record(2, 'BETA.h2b.test.', 1, 'ns1.h2b.test', '0', null, 'named-checkzone db.beta.h2b.test');
-    $id1 = $admin($pdo)->record(2, 'beta.h2b.test', 1, 'ns1.h2b.test', null, '0', 'dig +norec @127.0.0.1 beta.h2b.test SOA');
-    $id2 = $admin($pdo)->record(2, 'beta.h2b.test', 1, 'ns1.h2b.test', null, '7', 'zweite Erfassung');
+    try {
+        $id0 = $admin($pdo)->record(2, 'BETA.h2b.test.', 1, 'ns1.h2b.test', '0', null, 'named-checkzone db.beta.h2b.test');
+        $id1 = $admin($pdo)->record(2, 'beta.h2b.test', 1, 'ns1.h2b.test', null, '0', 'dig +norec @127.0.0.1 beta.h2b.test SOA');
+        $id2 = $admin($pdo)->record(2, 'beta.h2b.test', 1, 'ns1.h2b.test', null, '7', 'zweite Erfassung');
+    } catch (Throwable $e) {
+        [$id0, $id1, $id2] = [0, 0, 0];
+        t('A02 Erfassung ohne Ausnahme', false, get_class($e) . ': ' . $e->getMessage());
+    }
     $rows = $refs($pdo, "source = 'admin'");
     $ev = $all($pdo, "SELECT e.*, c.operation, c.channel, c.actor_type FROM audit_events e JOIN history_change_sets c ON c.id = e.change_set_id"
         . " WHERE c.operation = 'serial.reference_record' ORDER BY e.id");
@@ -646,7 +771,8 @@ if ($group('S')) {
 // ---------------------------------------------------------------- C: Code × Schema
 if ($group('C')) {
     $pdo = H2b::reset(true);
-    t('C01 AS5-Code auf Schema 008: SchemaCheck ohne Befund', SchemaCheck::problems($pdo) === []);
+    $pr = SchemaCheck::problems($pdo);
+    t('C01 AS5-Code auf Schema 008: SchemaCheck ohne Befund', $pr === [], implode('; ', $pr));
     $wk = $join($worker($baseApp, 'schemacheck'));
     t('C02 AS4b-Code (Rückfallstand) auf Schema 008: SchemaCheck ohne Befund', ($wk['problems'] ?? null) === [], json_encode($wk));
     $pdo->exec('DROP TABLE zone_serial_references');

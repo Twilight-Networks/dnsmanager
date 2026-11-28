@@ -87,7 +87,8 @@ final class SerialReferenceAdminService
             $decision = SerialPolicy::decide($set['refs'], SerialPolicy::calendarCandidate($ymd), $set['blocks']);
             $pairs = [];
             foreach ($set['pairs'] as $sid => $p) {
-                $pairs[$sid] = ['name' => $targets[$sid], 'F' => $p['F']['values'], 'D' => $p['D']['values'], 'blocks' => $p['blocks']];
+                $pairs[$sid] = ['name' => $targets[$sid] ?? $this->serverName($sid), 'target' => isset($targets[$sid]),
+                    'F' => $p['F']['values'], 'D' => $p['D']['values'], 'blocks' => $p['blocks']];
                 $targetPairs[$set['zoneName'] . '|' . $sid] = true;
             }
             $out[] = ['id' => (int)$z['id'], 'name' => (string)$z['name'], 'db' => $set['db'], 'changed' => (int)$z['changed'],
@@ -193,6 +194,16 @@ final class SerialReferenceAdminService
         } finally {
             $this->pdo->query("SELECT RELEASE_LOCK('" . PublishLedger::MAIN_LOCK . "')")->fetchColumn();
         }
+    }
+
+    private function serverName(int $sid): string
+    {
+        $stmt = $this->pdo->prepare('SELECT name FROM servers WHERE id = ?');
+        $stmt->execute([$sid]);
+        $n = $stmt->fetchColumn();
+        $stmt->closeCursor();
+
+        return $n === false ? "Server $sid (gelöscht)" : (string)$n;
     }
 
     /** @return array<int, string> aktive, zugewiesene Server (Zielmenge wie J2) */

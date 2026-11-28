@@ -303,9 +303,27 @@ werden weiter festgeschrieben und bleiben ausstehend (`publish_pending`). Die Ad
 1. Sicherung: `cp -a /etc/dnsmanager/ui_config.php /root/dnsmanager-backup/ui_config.php.vor-sperre` (Verzeichnis 700).
 2. In `ui_config.php` die Zeile `define('FENCE_DOMAIN', …)` auskommentieren; Rechte danach ausdrücklich `0640 root:www-data`
    setzen und Lesbarkeit prüfen: `sudo -u www-data php -l /etc/dnsmanager/ui_config.php`.
-3. Nachweis: `sudo -u www-data php /usr/share/dnsmanager/web/scripts/serial_admin-cli.php status | head -1` meldet
-   „Publish-Sperre: AKTIV – Fencing: Domäne in der Web-Konfiguration nicht gesetzt (FENCE_DOMAIN)“.
-4. **Laufende Veröffentlichungen:** `mariadb -N -e "SELECT IS_USED_LOCK('dnsmanager_publish_all')"` muss NULL liefern.
+3. **Web-SAPI und OPcache auffrischen:** Die Oberfläche liest `ui_config.php` im tatsächlich genutzten Web-PHP, nicht im
+   CLI. Mit OPcache und `opcache.validate_timestamps=0` (oder großem `opcache.revalidate_freq`) bleibt dort die alte
+   Fassung mit `FENCE_DOMAIN` wirksam, obwohl die CLI die Sperre schon meldet. Deshalb den OPcache des Web-PHP
+   ausdrücklich verwerfen:
+   - `mod_php` (Apache, z. B. ns1/ns2: `apache2ctl -M` zeigt `php_module`): `systemctl reload apache2` (graceful;
+     beendet die Kindprozesse und damit deren OPcache) – bei Zweifel `systemctl restart apache2`.
+   - `php-fpm` (`apache2ctl -M` zeigt `proxy_fcgi_module`, Dienst `php<Version>-fpm`): `systemctl reload php<Version>-fpm`.
+   - Andere SAPI: den dortigen PHP-Prozessverbund neu starten. Ein `opcache_reset()` aus der CLI wirkt **nicht** auf den
+     Web-OPcache.
+4. Nachweis aus der CLI: `sudo -u www-data php /usr/share/dnsmanager/web/scripts/serial_admin-cli.php status | head -1`
+   meldet „Publish-Sperre: AKTIV – Fencing: Domäne in der Web-Konfiguration nicht gesetzt (FENCE_DOMAIN)“. Die CLI
+   beweist nur die Datei, nicht den Zustand des Web-PHP.
+5. **Nachweis aus dem Webkontext** (maßgeblich): `mariadb -N -e "SELECT MAX(id) FROM publish_runs"` notieren, dann in
+   der Oberfläche als Administrator **Publish All** auslösen. Erwartet: Fehlertoast „Veröffentlichung fehlgeschlagen.“
+   mit dem Text `Fencing: Domäne in der Web-Konfiguration nicht gesetzt (FENCE_DOMAIN)` und eine gleichlautende
+   Fehlerzeile im Anwendungslog; `MAX(id)` von `publish_runs` unverändert, kein neuer Eintrag in
+   `zone_serial_references`, Ausstehend-Markierungen unverändert, kein Zugriff im Agent-Log. Der Versuch ist gefahrlos:
+   Der Lauf bricht unter dem Publish-Lock vor J6/J1 ab. Startet stattdessen ein Lauf (neuer `publish_runs`-Eintrag),
+   ist die Sperre im Web-PHP **nicht** wirksam: Schritt 3 wiederholen und den Lauf als normalen Publish behandeln
+   (Ergebnis prüfen). Bei mehreren Webknoten oder getrennter DynDNS-API je Knoten bzw. vhost wiederholen.
+6. **Laufende Veröffentlichungen:** `mariadb -N -e "SELECT IS_USED_LOCK('dnsmanager_publish_all')"` muss NULL liefern.
    Sonst höchstens 10 Minuten warten (ein Lauf endet regulär); hängt er, die gemeldete Verbindung mit `KILL <id>` beenden
    (Lock-Verlust ⇒ kein weiterer Agent-Aufruf, E83) und danach **mindestens 35 s** warten (bereits gesendete Anfragen:
    cURL-Frist 30 s). Erst dann gilt die Sperre als wirksam.
@@ -321,8 +339,8 @@ werden weiter festgeschrieben und bleiben ausstehend (`publish_pending`). Die Ad
    `serial_admin-cli.php record --zone-id=… --zone=… --server-id=… --server=… --file=<n>|--served=<n> --evidence=…`
    erfassen (je Bestandteil ein Aufruf).
 4. `serial_admin-cli.php status` muss Exit 0 liefern (keine Sperre, jede Zone auflösbar). Erst dann `FENCE_DOMAIN`
-   zurückspielen (Rechte wie oben), mit `fence_admin-cli.php status` die Gleichheit der Domänen prüfen und einen ersten
-   Publish kontrolliert ausführen.
+   zurückspielen (Rechte wie oben), den Web-OPcache wie unter „Sperre setzen“, Schritt 3, auffrischen, mit
+   `fence_admin-cli.php status` die Gleichheit der Domänen prüfen und einen ersten Publish kontrolliert ausführen.
 
 **Code-Rückfall auf AS4b (`156f934`)**
 - Technisch ist der AS4b-Code auf Schema 008 lauffähig (die Tabelle bleibt und wird ignoriert). Sein Publish-Betrieb ist

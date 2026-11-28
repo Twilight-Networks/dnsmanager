@@ -262,6 +262,17 @@ final class SerialReferenceStore
         return $rows;
     }
 
+    /** @return list<int> Server mit Referenzzeilen für einen normalisierten Namen (D5) */
+    public function serverIdsForName(string $zoneName): array
+    {
+        $stmt = $this->pdo->prepare('SELECT DISTINCT server_id FROM zone_serial_references WHERE zone_name = ? AND server_id IS NOT NULL');
+        $stmt->execute([$this->name($zoneName)]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $stmt->closeCursor();
+
+        return $ids;
+    }
+
     /** @return list<array<string, mixed>> Paare mit Zeilen (für den Status; ohne epoch/run) */
     public function knownPairs(): array
     {

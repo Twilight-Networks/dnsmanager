@@ -67,7 +67,12 @@ t('R02 Abstand genau 2^31 ist undefiniert (beide Richtungen), 0 ist gültig', Se
 $pv = json_decode((string)file_get_contents("$app/tests/serial_policy_vectors.json"), true);
 $bad = [];
 foreach ($pv['vectors'] as $x) {
-    $d = SerialPolicy::decide($x['refs'], $x['calendar']);
+    try {
+        $d = SerialPolicy::decide($x['refs'], $x['calendar']);
+    } catch (LogicException $e) {
+        $bad[] = $x['id'] . ' Ausnahme: ' . $e->getMessage();
+        continue;
+    }
     $ok = isset($x['reason']) ? (!$d['ok'] && $d['reason'] === $x['reason'])
         : ($d['ok'] && $d['serial'] === $x['serial'] && $d['basis'] === $x['basis'] && SerialNumber::newerThanAll($d['serial'], $x['refs']));
     if (!$ok) {
@@ -196,7 +201,7 @@ t('M01 Fall M1/M2/M3: F {100}, D {300}; unknown ohne Werte löst nichts ab', $va
 // Monitoring 100 (W5) → Publish 200 (Lauf 6, as2 ok, D möglich) → Monitoring 100 (W6)
 $m = [$ev('D', 'anchor', [100], [5, 5, 1]), $ev('F', 'anchor', [200], [6, 2, 10]), $ev('D', 'possible', [200], [6, 2, 10]),
     $ev('D', 'anchor', [100], [6, 5, 2]), $ev('F', 'anchor', [100], [6, 5, 2])];
-t('M02 Monitoring 100 → Publish 200 → Monitoring 100: zweite Messung ist Anker (D {100}, 200 abgelöst)', $vals($m, 'D') === [100] && $vals($m, 'F') === [100]);
+t('M02 Monitoring 100 → Publish 200 → Monitoring 100: zweite Messung bleibt Anker, löst die neuere 200 aber nicht ab (RFC)', $vals($m, 'D') === [100, 200] && $vals($m, 'F') === [100, 200]);
 $m2 = array_slice($m, 0, 3);
 t('M03 ohne zweite Messung bleibt der mögliche Wert 200 neben dem Anker 100', $vals($m2, 'D') === [100, 200]);
 // S2: späterer Anker löst possible/additive ab, früherer nicht
@@ -237,6 +242,30 @@ t('M15 R1 bei gescheitertem Reload: F-Anker {42}, D behält Anker 40 und möglic
 $m = [$ev('D', 'anchor', [10], [1, 5, 1]), $ev('D', 'additive', [77], [2, 5, 1]), $ev('F', 'additive', [76], [2, 5, 1])];
 t('M16 D21: gültige Rohwerte aus unknown bleiben additiv bindend', $vals($m, 'D') === [10, 77] && $vals($m, 'F') === [76]);
 t('M17 leere Ereignismenge ⇒ keine Paarreferenz', SerialReferenceReader::compute([])['F']['values'] === []);
+// Review AS5 Punkt 1: Ablösung nur durch einen späteren Anker mit nach RFC 1982 neuerem Wert, F und D unabhängig
+$m = [$ev('F', 'anchor', [4000000000], [1, 5, 1]), $ev('D', 'anchor', [4000000000], [1, 5, 1]),
+    $ev('F', 'anchor', [3000000000], [2, 5, 2]), $ev('D', 'anchor', [3000000000], [2, 5, 2])];
+t('M18 F/D 4.000.000.000 → späterer Anker 3.000.000.000 (older): beide bleiben bindend', $vals($m, 'F') === [3000000000, 4000000000]
+    && $vals($m, 'D') === [3000000000, 4000000000]);
+$d = SerialPolicy::decide(array_merge($vals($m, 'F'), [3000000000]), null);
+t('M18b Policy: neue Serial gegenüber beiden bindenden Werten newer', $d['ok'] && SerialNumber::newerThanAll($d['serial'], [3000000000, 4000000000]) && $d['serial'] === 4000000001);
+$m = [$ev('D', 'anchor', [4294967295], [1, 5, 1]), $ev('D', 'anchor', [0], [2, 5, 2]), $ev('F', 'anchor', [4294967295], [1, 5, 1])];
+t('M19 RFC-Wrap 4.294.967.295 → späterer Anker 0 (newer): abgelöst; F unabhängig', $vals($m, 'D') === [0] && $vals($m, 'F') === [4294967295]);
+$m = [$ev('D', 'anchor', [0], [1, 5, 1]), $ev('D', 'anchor', [2147483648], [2, 5, 2])];
+$d = SerialPolicy::decide($vals($m, 'D'), null);
+t('M20 Abstand genau 2^31 (undefined): beide bleiben bindend ⇒ serial_unresolvable', $vals($m, 'D') === [0, 2147483648] && !$d['ok'] && $d['reason'] === 'serial_unresolvable');
+$m = [$ev('D', 'possible', [4000000000], [1, 2, 1]), $ev('D', 'anchor', [3000000000], [2, 5, 2])];
+t('M21 possible 4.000.000.000 → späterer Anker 3.000.000.000: beide bleiben', $vals($m, 'D') === [3000000000, 4000000000]);
+$m = [$ev('D', 'additive', [4000000000], [1, 5, 1]), $ev('D', 'anchor', [3000000000], [2, 5, 2])];
+t('M22 unknown-Rohwert 4.000.000.000 → späterer Anker 3.000.000.000: beide bleiben', $vals($m, 'D') === [3000000000, 4000000000]);
+$m = [$ev('D', 'anchor', [300], [1, 5, 1]), $ev('D', 'possible', [301], [2, 2, 1]), $ev('D', 'anchor', [], [3, 4, 2])];
+t('M23 leerer Anker (absent) löscht keine numerischen Referenzen', $vals($m, 'D') === [300, 301]);
+$m = [$ev('D', 'anchor', [100], [1, 5, 1]), $ev('D', 'anchor', [100], [2, 5, 2])];
+t('M24 equal: gleicher Wert bleibt ohne zusätzliche Referenzwirkung', $vals($m, 'D') === [100]);
+$m = [$ev('D', 'assumed', [4000000000], [1, 2, 1]), $ev('D', 'anchor', [3000000000], [2, 5, 2]), $ev('D', 'assumed', [3500000000], [3, 2, 3])];
+t('M25 assumed 4.000.000.000 bleibt gegenüber späterem älterem Anker und älterer Annahme', $vals($m, 'D') === [3000000000, 3500000000, 4000000000]);
+$m = [$ev('D', 'uncertain', [4000000000], [9, 1, 1], '2026-11-27 10:00:00'), $ev('D', 'anchor', [3000000000], [10, 5, 1], '2026-11-27 11:00:00')];
+t('M26 ungeordneter Wert 4.000.000.000 bleibt gegenüber später aufgezeichnetem älterem Anker', $vals($m, 'D') === [3000000000, 4000000000]);
 
 // ---------------------------------------------------------------- E: Ereignisabbildung
 $base = ['id' => 1, 'run_key' => 5, 'order_certain' => 1, 'recorded_at' => 'x', 'file_serial' => null, 'served_serial' => null, 'file_state' => null,

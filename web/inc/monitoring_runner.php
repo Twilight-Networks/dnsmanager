@@ -60,6 +60,11 @@ function runMonitoringWithLog(PDO $pdo, int $lockWaitSeconds): array
                     appLog('error', "Fehler beim Mailversand: $error");
                 }
                 break;
+            case 'monitoring.serial_reference_lost':
+                // AS5 (Review Punkt 3): Messwerte des Monitorings nicht bzw. nur als Verlustmarke gespeichert
+                appLog('error', "Monitoring: Serial-Referenzen nicht gespeichert (Verlustmarken {$ctx['lossMarked']}, ohne Marke {$ctx['lost']})"
+                    . ($ctx['detail'] !== '' ? ": {$ctx['detail']}" : ''));
+                break;
             case 'monitoring.lock_failed':
                 appLog('error', 'Monitoring-Run: Laufsperre nicht verfügbar: ' . $ctx['detail']);
                 break;

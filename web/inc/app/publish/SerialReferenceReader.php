@@ -8,6 +8,9 @@
  * Quellen (nur lesend, nicht sperrend; alle Schreiber halten den Publish-Lock, in der Generator-Transaktion also stabil):
  * - zonenweit (D19): DB-Serial der Zone und die Serial des zuletzt registrierten Versuchs unter demselben normalisierten
  *   Zonennamen (über alle Zonen-IDs; keine weitere Historie);
+ * - D5 (Review AS5, Punkt 2): Die Werte ALLER Server mit Referenzen für den normalisierten Namen sind bindend – aktuelle
+ *   und ehemalige Zielserver (auch nach Löschung und Neuanlage der Zone). Paarbezogene Sperren (Verlust, Lücke) gelten nur
+ *   für aktuelle Zielserver (N5.2); die ruhende Sperre eines ehemaligen Ziels wird bei erneuter Zuweisung wirksam.
  * - je Paar (normalisierter Name × Zielserver, D1): Journal (zone_publish_targets), zone_serial_references und – nur
  *   soweit nicht gespiegelt – der Verification Store (gelesen ausschließlich über ServerVerificationStore::rowsForName(),
  *   E87).
@@ -21,14 +24,14 @@
  *   conflict   Konfliktreferenz aus serial_check (reject/would_reject mit Serial-Code), je Bestandteil getrennt
  *   admin      administrativ erfasste Serial (D17)
  *   uncertain  Wert ohne sicher bestimmbaren Messzeitpunkt (D16/D23)
- * Ablöseregeln:
- *   S1 Ref_c = Werte des letzten Ankers ∪ spätere possible/additive ∪ letzter späterer assumed ∪ nicht abgelöste
- *      conflict/admin/uncertain.
- *   S2 Ein Anker löst frühere Anker, possible und additive ab (nur nach der Ordnung).
- *   S3 conflict/admin werden nur durch einen späteren Anker desselben Bestandteils mit einem Wert abgelöst, der newer
- *      ist; uncertain ebenso, „später“ dort nach dem Aufzeichnungszeitpunkt (Ordnung nicht bestimmbar, D16).
+ * Ablöseregeln (Review AS5, Punkt 1 – RFC-konforme Ablösung):
+ *   S1 Ref_c = alle Werte des Bestandteils, die nicht abgelöst sind.
+ *   S2/S3 Ein Wert v wird nur abgelöst, wenn ein späterer gemessener Anker desselben Bestandteils einen Wert enthält, der
+ *      gegenüber v nach RFC 1982 newer ist (equal: gleicher Wert bleibt; older und undefined: beide bleiben bindend).
+ *      Das gilt für frühere Anker, possible, additive, assumed, conflict und admin gleichermaßen; für uncertain gilt
+ *      „später“ nach dem Aufzeichnungszeitpunkt (Ordnung nicht bestimmbar, D16). Ein leerer Anker (∅) löscht nichts.
  *   S4 Nicht sicher geordnete Ereignisse lösen nie ab.
- *   D18 assumed löst nur frühere assumed ab; gemessene D-Anker lösen frühere assumed ab.
+ *   D18 assumed wird zusätzlich durch eine spätere, neuere Annahme abgelöst; nie ist eine Annahme selbst ein Anker.
  * Sperren (D22): Verlustmarke, intent ohne Abschluss, AS5-fremder Lauf mit as2-zone_sync nach der Epoche (Rückfall),
  *   nicht gespiegelte Beobachtung nach der Epoche. Aufgelöst nur durch administrative Erfassung BEIDER Bestandteile nach
  *   dem sperrenden Ereignis – nie durch eine automatische Messung (Ergänzung 3.1: verlorene Werte gelten nie als
@@ -77,7 +80,7 @@ final class SerialReferenceReader
      * Referenzmenge einer Zone für die gegebenen Zielserver.
      *
      * @param array<string, mixed> $zoneRow Zonenzeile (id, name, soa_serial)
-     * @param array<int, string>   $targets server_id => Name (aktuelle Zielmenge; ruhende Paare binden nicht, D5)
+     * @param array<int, string>   $targets server_id => Name (aktuelle Zielmenge; Werte ehemaliger Ziele desselben Namens binden zusätzlich, ihre Blöcke nicht, D5)
      * @return array{zoneName: string, db: int, latestAttempt: ?array{id: int, zoneId: int, serial: int},
      *               pairs: array<int, array{F: array, D: array, blocks: list<array>}>, refs: list<int>, blocks: list<array>,
      *               contributors: array{references: list<int>, attempts: list<int>}}
@@ -99,7 +102,9 @@ final class SerialReferenceReader
         $stmt->closeCursor();
         $latest = $la === null ? null : ['id' => (int)$la['id'], 'zoneId' => (int)$la['zone_id'], 'serial' => (int)$la['soa_serial']];
 
-        $serverIds = array_map('intval', array_keys($targets));
+        // D5: aktuelle Zielserver und alle Server mit Referenzen für diesen Namen
+        $serverIds = array_values(array_unique(array_merge(array_map('intval', array_keys($targets)), $this->referencedServers($name))));
+        sort($serverIds);
         $pairs = $this->pairs($name, $serverIds);
 
         $refs = [$db];
@@ -122,6 +127,10 @@ final class SerialReferenceReader
                     }
                 }
             }
+            $pairs[$sid]['target'] = isset($targets[$sid]);
+            if (!isset($targets[$sid])) {
+                continue;   // Sperren nur für aktuelle Zielserver (N5.2); Werte binden trotzdem (D5)
+            }
             foreach ($p['blocks'] as $b) {
                 $blocks[] = $b + ['serverId' => $sid, 'serverName' => $targets[$sid] ?? ''];
             }
@@ -130,6 +139,26 @@ final class SerialReferenceReader
         return ['zoneName' => $name, 'db' => $db, 'latestAttempt' => $latest, 'pairs' => $pairs,
             'refs' => array_values(array_unique($refs)), 'blocks' => $blocks,
             'contributors' => ['references' => array_keys($contribRefs), 'attempts' => array_values(array_unique($contribAttempts))]];
+    }
+
+    /**
+     * D5: Server mit Referenzen für einen normalisierten Zonennamen (Journal-Zielzeilen, Serial-Referenzen,
+     * Verification Store), unabhängig von der aktuellen Zuweisung und vom Fortbestehen der Zone.
+     *
+     * @return list<int>
+     */
+    public function referencedServers(string $name): array
+    {
+        $stmt = $this->pdo->prepare('SELECT DISTINCT t.server_id FROM zone_publish_attempts a JOIN zone_publish_targets t ON t.attempt_id = a.id WHERE '
+            . SerialReferenceStore::normSql('a.zone_name') . ' = ?');
+        $stmt->execute([$name]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $stmt->closeCursor();
+        $ids = array_merge($ids, $this->store->serverIdsForName($name), (new ServerVerificationStore($this->pdo))->serverIdsForName($name));
+        $ids = array_values(array_unique($ids));
+        sort($ids);
+
+        return $ids;
     }
 
     /**
@@ -244,58 +273,30 @@ final class SerialReferenceReader
         $out = [];
         foreach (['F', 'D'] as $c) {
             $ev = array_values(array_filter($events, static fn (array $e): bool => $e['comp'] === $c));
-            $anchors = array_values(array_filter($ev, static fn (array $e): bool => $e['kind'] === 'anchor'));
-            $last = null;
-            foreach ($anchors as $a) {
-                if ($last === null || self::cmpKey($a['key'], $last['key']) > 0) {
-                    $last = $a;
-                }
-            }
+            $anchors = array_values(array_filter($ev, static fn (array $e): bool => $e['kind'] === 'anchor'));   // leere Anker lösen nichts ab (keine Werte)
+            $assumed = array_values(array_filter($ev, static fn (array $e): bool => $e['kind'] === 'assumed'));
             $vals = [];
             $contrib = [];
-            $take = static function (array $e, ?array $only = null) use (&$vals, &$contrib): void {
-                foreach ($only ?? $e['values'] as $v) {
+            foreach ($ev as $e) {
+                // Review AS5 (Punkt 1): Jeder Wert bleibt bindend, solange ihn kein späterer gemessener Anker desselben
+                // Bestandteils mit einem nach RFC 1982 neueren Wert ablöst (equal: gleicher Wert bleibt; older/undefined:
+                // beide bleiben). Leere Anker (nachweislich keine Datei bzw. nicht ausgeliefert) löschen keine Werte.
+                $by = $e['kind'] === 'assumed' ? array_merge($anchors, $assumed) : $anchors;   // D18: Annahme auch durch spätere, neuere Annahme
+                $keep = [];
+                foreach ($e['values'] as $v) {
+                    if (!self::supersededByNewer($e, $v, $by)) {
+                        $keep[] = $v;
+                    }
+                }
+                if ($keep === []) {
+                    continue;
+                }
+                foreach ($keep as $v) {
                     $vals[$v] = true;
                 }
                 if (isset($e['ref'])) {
                     $contrib[] = $e['ref'];
                 }
-            };
-            if ($last !== null) {
-                $take($last);
-            }
-            $after = static fn (array $e): bool => $last === null || self::cmpKey($e['key'], $last['key']) > 0;
-            $assumed = null;
-            foreach ($ev as $e) {
-                switch ($e['kind']) {
-                    case 'possible':
-                    case 'additive':
-                        if ($after($e)) {
-                            $take($e);
-                        }
-                        break;
-                    case 'assumed':
-                        if ($after($e) && ($assumed === null || self::cmpKey($e['key'], $assumed['key']) > 0)) {
-                            $assumed = $e;
-                        }
-                        break;
-                    case 'conflict':
-                    case 'admin':
-                    case 'uncertain':
-                        $keep = [];
-                        foreach ($e['values'] as $v) {
-                            if (!self::supersededByNewer($e, $v, $anchors)) {
-                                $keep[] = $v;
-                            }
-                        }
-                        if ($keep !== []) {
-                            $take($e, $keep);
-                        }
-                        break;
-                }
-            }
-            if ($assumed !== null) {
-                $take($assumed);
             }
             $out[$c] = ['values' => array_keys($vals), 'contrib' => $contrib];
         }
@@ -303,10 +304,16 @@ final class SerialReferenceReader
         return $out;
     }
 
-    /** S3: späterer Anker desselben Bestandteils mit einem Wert, der newer als $v ist */
-    private static function supersededByNewer(array $e, int $v, array $anchors): bool
+    /**
+     * Ablösung (S2/S3 nach Review AS5): ein späteres Ereignis aus $by mit einem Wert, der gegenüber $v nach RFC 1982
+     * newer ist. „Später“ nach dem Ordnungsschlüssel; für ungeordnete Ereignisse (D16) nach dem Aufzeichnungszeitpunkt.
+     */
+    private static function supersededByNewer(array $e, int $v, array $by): bool
     {
-        foreach ($anchors as $a) {
+        foreach ($by as $a) {
+            if ($a === $e) {
+                continue;
+            }
             $later = $e['kind'] === 'uncertain'
                 ? (isset($a['at'], $e['at']) && $a['at'] !== '' && $e['at'] !== '' && $a['at'] > $e['at'])
                 : self::cmpKey($a['key'], $e['key']) > 0;

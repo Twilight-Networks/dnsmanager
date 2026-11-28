@@ -134,6 +134,17 @@ final class ServerVerificationStore
         return $rows;
     }
 
+    /** AS5 (D5, E87): Server mit Zeilen für einen normalisierten Zonennamen */
+    public function serverIdsForName(string $normName): array
+    {
+        $stmt = $this->pdo->prepare("SELECT DISTINCT server_id FROM zone_server_verification WHERE LOWER(TRIM(TRAILING '.' FROM zone_name)) = ?");
+        $stmt->execute([$normName]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $stmt->closeCursor();
+
+        return $ids;
+    }
+
     /**
      * Eindeutige Zuordnung eines Cleanup-Ergebnisses (O5): genau eine bestehende Zeile mit diesem Server und Zonennamen,
      * deren Zone dem Server nicht (mehr) zugewiesen ist. Keine Ableitung aus dem Namen allein, keine Neuanlage.
